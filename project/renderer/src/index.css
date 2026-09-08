@@ -1,0 +1,62 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  @apply bg-paper text-stone-800 antialiased;
+  font-family:
+    -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC',
+    'Helvetica Neue', 'Microsoft YaHei', sans-serif;
+  overflow: hidden;
+  user-select: none;
+}
+
+.dark body {
+  @apply bg-stone-900 text-stone-200;
+}
+
+/* 可选取内容（消息文本等） */
+.selectable {
+  user-select: text;
+}
+
+/* 细滚动条 */
+.scroll-thin::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.scroll-thin::-webkit-scrollbar-thumb {
+  @apply rounded-full bg-stone-300;
+}
+.dark .scroll-thin::-webkit-scrollbar-thumb {
+  @apply bg-stone-600;
+}
+.scroll-thin::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* 流式光标 */
+.stream-cursor::after {
+  content: '▍';
+  @apply ml-0.5 inline-block animate-blink text-stone-400;
+}
+
+/* 滑杆样式 */
+input[type='range'] {
+  @apply h-1 w-full cursor-pointer appearance-none rounded-full bg-stone-300 accent-stone-600;
+}
+.dark input[type='range'] {
+  @apply bg-stone-600 accent-stone-300;
+}
+
+/* 消息流式文本的换行 */
+.msg-content {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
