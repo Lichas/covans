@@ -52,7 +52,7 @@ shared/
 CREATE TABLE providers (
   id TEXT PRIMARY KEY,            -- uuid
   name TEXT NOT NULL,             -- 显示名 "OpenAI 主账号"
-  kind TEXT NOT NULL,             -- 'openai'|'anthropic'|'google'|'openrouter'|'kimi'|'zhipu'|'deepseek'|'openai-compatible'
+  kind TEXT NOT NULL,             -- ProviderKind，含 lm-studio/openai-compatible/mock
   api_key TEXT NOT NULL DEFAULT '',
   base_url TEXT NOT NULL DEFAULT '', -- 可空，openai-compatible 必填
   default_model TEXT NOT NULL DEFAULT '',
@@ -69,9 +69,10 @@ CREATE TABLE bots (
   model TEXT NOT NULL DEFAULT '',    -- 空 = 用 provider 默认
   temperature REAL NOT NULL DEFAULT 0.7,
   max_tokens INTEGER NOT NULL DEFAULT 4096,
+  reasoning_effort TEXT NOT NULL DEFAULT 'off', -- off|low|medium|high|xhigh
   workspace_dir TEXT NOT NULL DEFAULT '',  -- 相对 workspaces/ 的目录名
   notify INTEGER NOT NULL DEFAULT 1,
-  is_coordinator INTEGER NOT NULL DEFAULT 0, -- 可作为群聊协调者
+  is_coordinator INTEGER NOT NULL DEFAULT 0, -- legacy：仅兼容旧库，现行调度不读取
   pinned INTEGER NOT NULL DEFAULT 0,
   sort_order INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL
@@ -81,7 +82,7 @@ CREATE TABLE chats (
   type TEXT NOT NULL,               -- 'dm' | 'group'
   name TEXT NOT NULL DEFAULT '',    -- group 必填；dm 空
   bot_id TEXT REFERENCES bots(id),  -- dm 专用
-  coordinator_bot_id TEXT REFERENCES bots(id), -- group 专用，可空
+  coordinator_bot_id TEXT REFERENCES bots(id), -- legacy：仅兼容旧库
   last_message_at INTEGER NOT NULL DEFAULT 0,
   unread INTEGER NOT NULL DEFAULT 0,
   hidden INTEGER NOT NULL DEFAULT 0,
@@ -92,7 +93,7 @@ CREATE TABLE chats (
 CREATE TABLE chat_members (
   chat_id TEXT NOT NULL REFERENCES chats(id),
   bot_id TEXT NOT NULL REFERENCES bots(id),
-  role TEXT NOT NULL DEFAULT 'member',  -- 'member'|'coordinator'
+  role TEXT NOT NULL DEFAULT 'member',  -- legacy 可含 coordinator；现行统一按 member
   PRIMARY KEY (chat_id, bot_id)
 );
 CREATE TABLE messages (
@@ -120,9 +121,23 @@ CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 
 ## 4. IPC 接口契约（preload 暴露 `window.covan`）
 
+`shared/types.ts` 是可编译的完整接口，`shared/ipcChannels.ts` 是通道白名单；本节记录行为分组与关键签名。任何 IPC 变更必须在同一提交同步 main、preload、shared 和 renderer。
+
 ```ts
 // shared/types.ts 中定义全部类型；以下为签名（全部 async，主进程实现）
 interface CovanApi {
+  // images / user context / agent private chat
+  importChatImage(name: string, bytes: Uint8Array): Promise<Attachment>;
+  getUserProfile(): Promise<UserProfile>;
+  saveUserProfile(profile: UserProfile): Promise<UserProfile>;
+  listUserMemories(): Promise<UserMemory[]>;
+  saveUserMemory(content: string, kind?: MemoryKind, id?: string): Promise<UserMemory>;
+  deleteUserMemory(id: string): Promise<void>;
+  listAgentThreads(chatId: string): Promise<AgentThread[]>;
+  getAgentThread(id: string): Promise<{ thread: AgentThread; messages: AgentPrivateMessage[] }>;
+  startAgentConversation(chatId: string, fromBotId: string, toBotId: string, message: string): Promise<string>;
+  stopAgentConversation(threadId: string): Promise<void>;
+
   // providers
   listProviders(): Promise<Provider[]>;
   saveProvider(p: ProviderInput): Promise<Provider>;
@@ -142,17 +157,20 @@ interface CovanApi {
   // chats
   listChats(): Promise<ChatSummary[]>;                 // 含最后一条消息预览、未读、成员头像
   createDm(botId: string): Promise<Chat>;
-  createGroup(name: string, memberBotIds: string[], coordinatorBotId?: string): Promise<Chat>;
-  updateChat(id: string, patch: { name?: string; coordinatorBotId?: string; replyMode?: 'active'|'sequential' }): Promise<void>;
+  createGroup(name: string, memberBotIds: string[], coordinatorBotId?: string): Promise<Chat>; // coordinatorBotId 仅兼容旧调用
+  updateChat(id: string, patch: { name?: string; coordinatorBotId?: string; replyMode?: 'active'|'sequential' }): Promise<void>; // coordinatorBotId 已弃用
+  addChatMembers(chatId: string, botIds: string[]): Promise<void>;
+  hideChat(chatId: string): Promise<void>;
+  clearChatMessages(chatId: string): Promise<void>;
   deleteChat(id: string): Promise<void>;
   markRead(chatId: string): Promise<void>;
-  exportChat(chatId: string): Promise<string | null>;  -- 原生保存对话框，导出完整 Markdown 历史
-  writeClipboard(text: string): Promise<void>;        -- 原生剪贴板写入，不暴露读取接口
+  exportChat(chatId: string): Promise<string | null>; // 原生保存对话框，导出完整 Markdown 历史
+  writeClipboard(text: string): Promise<void>;        // 原生剪贴板写入，不暴露读取接口
 
   // messages
   listMessages(chatId: string, before?: number, limit?: number): Promise<Message[]>;
-  sendUserMessage(chatId: string, content: string, mentions: string[]): Promise<void>;
-  stopChat(chatId: string): Promise<void>;             -- 停止该会话所有进行中的生成
+  sendUserMessage(chatId: string, content: string, mentions: string[], attachments?: Attachment[]): Promise<void>;
+  stopChat(chatId: string): Promise<void>;             // 停止该会话所有进行中的生成
 
   // memory
   listMemories(botId: string): Promise<Memory[]>;
@@ -161,7 +179,7 @@ interface CovanApi {
 
   // workspace
   listWorkspaceFiles(botId: string): Promise<WorkspaceFile[]>;
-  openWorkspace(botId: string): Promise<void>;         -- shell.openPath
+  openWorkspace(botId: string): Promise<void>;         // shell.openPath
   readWorkspaceFile(botId: string, relPath: string): Promise<string>;
 
   // settings
@@ -284,8 +302,8 @@ await agent.prompt(userText)   // agent.abort() 用于 stopChat
 - 跟随系统浅色/深色主题；暖白/炭灰背景、低饱和绿点缀；用户消息为紧凑浅灰气泡，Bot 回复使用宽阅读区域；代码和表格独立滚动。
 - Sidebar：搜索框；单聊列表项右键「置顶 / 取消置顶」，最多3个 Bot，数据库层同样校验；顶部仅在有置顶时显示横排圆形头像，不显示空槽位或添加入口。会话列表项=头像(群聊显示叠头像+N角标)/名称/最后消息预览/时间/未读蓝点；底部为「关于我」「我的 Bot」「新建群聊」「设置」；顶部「+」菜单新建 Bot(⌘1) / 创建群聊(⌘2)。
 - ChatView：顶部 Bot/群名、完整会话导出和设置入口；群聊齿轮打开回复机制设置。消息显示作者、时间、跨日分隔；支持 Markdown、多图、代码复制、原文复制、引用回复和错误重试。Composer 支持群聊 @ 提及、独立持久草稿与中文输入法保护；上方以动画小头像显示正在思考/回复的成员。主动回复中可继续发送新消息。
-- BotSettingsPanel（右栏，单聊选中时显示）：头像、名称输入、标签、描述、通知开关、人设 system prompt 编辑、模型选择（provider + model + temperature）、记忆标签页、工作区标签页。
-- SettingsModal（通用）：账户占位、外观（主题跟随系统/浅色/深色、语言）、Bot（时区自动检测、自动审核开关 + 规则文本——审核规则作为自然语言注入 coordinator 决策前的检查）、Provider 管理（列表 + 新增/编辑表单 + 测试连接按钮）。
+- BotSettingsPanel（右栏，单聊选中时显示）：头像与身份信息；设定、记忆、工作区、模型四个标签页。模型页独立管理 provider、model、temperature、reasoning effort 与 max tokens。
+- SettingsModal（通用）：账户占位、外观（主题跟随系统/浅色/深色、语言）、Bot（时区自动检测、自动审核开关 + 规则文本——审核规则作为自然语言注入各成员的判断与回复）、Provider 管理（列表 + 新增/编辑表单 + 测试连接按钮）。
 - 新建 Bot 对话框：名称/人设模板下拉（开发分队四人、产品经理、设计师、虚拟女友「小美女」、空白自定义）/描述/provider/模型。
 - 中文 UI。
 
@@ -303,7 +321,7 @@ await agent.prompt(userText)   // agent.abort() 用于 stopChat
 
 ## 12. 交付清单
 
-- 完整源码（含本 SPEC.md、PRD.md、ARCHITECTURE.md、README.md）
+- 根目录可直接安装、构建和运行的完整源码，以及 `docs/` 中的 PRD、SPEC、Architecture、Design、Roadmap 与 Bugfix 文档
 - 冒烟脚本：`npm run smoke`（用 mock provider 验证：建 bot→建群→发消息→收到 mock 回复→记忆写入）
 
 ## 13. 用户背景、头像与 Agent 私聊（2026-09-08）

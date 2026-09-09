@@ -218,6 +218,7 @@ try {
 
   await item('开发伙伴').click()
   await page.getByRole('button', { name: '展开设置' }).click()
+  await page.getByRole('button', { name: '模型', exact: true }).click()
   await page.getByLabel('推理强度').selectOption('low')
   await page.getByLabel('最大输出 Token').fill('512')
   await page.getByLabel('最大输出 Token').press('Tab')
@@ -371,10 +372,18 @@ try {
     '✓ Real tool loop: rename, avatar, shared memory, peer consultation; anchored card and persisted transcript',
   )
 
-  await page.getByRole('button', { name: '发起 Agent 私聊' }).click()
-  await page.getByLabel('向谁请教').selectOption(fixture.slow.id)
-  await page.getByLabel('讨论什么').fill('请慢慢分析如何打磨交互')
-  await page.getByRole('button', { name: '发起私聊', exact: true }).click()
+  await page.evaluate(
+    (f) =>
+      window.covan.startAgentConversation(
+        f.chats[0].id,
+        f.bots[0].id,
+        f.slow.id,
+        '请慢慢分析如何打磨交互',
+      ),
+    fixture,
+  )
+  await expect(page.locator('.agent-conversation-card')).toHaveCount(2)
+  await page.locator('.agent-conversation-card').last().click()
   await expect(page.locator('.peer-message').last()).toContainText('我是')
   await page.getByRole('button', { name: '停止私聊' }).click()
   await expect(page.getByRole('dialog')).toContainText('已停止')
@@ -423,7 +432,7 @@ try {
   await expect(page.locator('.user-memory-row')).toHaveCount(1)
   assert.deepEqual(errors, [])
   console.log(
-    '✓ Private-chat launcher, cancellation with partial content, error handling, no self-chat, memory deletion',
+    '✓ Private-chat card cancellation with partial content, error handling, no self-chat, memory deletion',
   )
   console.log('Context UI regression passed. Screenshots: ' + artifacts)
 } catch (e) {

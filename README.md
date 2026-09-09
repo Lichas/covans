@@ -17,7 +17,7 @@
 - **Agent 私聊**：Bot 向另一位 Bot 咨询，消息流中插入私聊卡片，点击浮窗查看真实记录、状态与时间；支持停止，不递归发起私聊
 - **最多 3 个置顶 Bot**：在左侧单聊列表项右键 → 置顶/取消置顶；顶部只显示已置顶头像，没有空槽位
 
-本轮改进、验证与后续优先项见 [体验迭代记录](UX-NOTES.md)。
+产品、规格、架构与设计文档见 [文档导航](docs/README.md)；版本变化见 [CHANGELOG](CHANGELOG.md)。
 
 ## 运行
 
@@ -45,7 +45,7 @@ npm run test:local-llm # 可选：连接 localhost:1234 的真实 LM Studio 模�
 npm run pack     # electron-builder --mac --dir（产物在 release/）
 ```
 
-打包注意：pi 包为 **ESM only**，若单文件构建出现 `Dynamic require of "child_process" is not supported`，需在 esbuild 加 banner 注入 `createRequire` shim（详见 `../ARCHITECTURE.md` §10）。
+打包注意：pi 包为 **ESM only**，若单文件构建出现 `Dynamic require of "child_process" is not supported`，需在 esbuild 加 banner 注入 `createRequire` shim（详见 [架构文档](docs/ARCHITECTURE.md#10-打包与分发)）。
 
 ## 快速上手
 
@@ -76,19 +76,19 @@ LM Studio：Provider 类型选 **LM Studio**，无需 API Key，点 **拉取模�
 ## 目录结构
 
 ```
-main/       Electron 主进程（db / agentRuntime / orchestrator / memory / workspace / ipc / mockProvider）
+main/       Electron 主进程（db / agentRuntime / orchestrator / memory / workspace / ipc）
 preload/    contextBridge 安全桥（window.covan）
 renderer/   React 三栏 UI（stores / components / lib）
 shared/     主↔渲染共享类型与 IPC 通道常量（接口契约）
-scripts/    原生运行时冒烟 + Electron UI 回归测试
-../SPEC.md  单一事实来源（数据模型/契约/协议/UI 规范）
-../PRD.md   产品需求文档（另有 .docx）
-../ARCHITECTURE.md  技术方案（另有 .docx）
+scripts/    冒烟测试与真实 Electron UI 回归
+docs/       PRD / SPEC / 架构 / 设计 / 路线图 / Bugfix 记录
+AGENTS.md   AI 开发入口、文档权威顺序与工作流
+CHANGELOG.md  面向用户的版本变化
 ```
 
 ## 隐私与安全
 
 - SQLite 库、头像、工作区保存在本机 `userData` 目录，无遥测；聊天内容、使用到的工作区内容、个人资料与共同记忆会发送给对应模型服务，头像提示词会发送给所选生图服务
-- ⚠️ API Key 当前以**明文**存于本地 SQLite，请勿与他人共享该目录；safeStorage 加密已列入路线图（见 PRD §9 M3）
+- ⚠️ API Key 当前以**明文**存于本地 SQLite，请勿与他人共享该目录；safeStorage 加密已列入 [ROADMAP](docs/ROADMAP.md#provider-密钥保护)
 - 工作区文件工具被限制在对应 Bot 的目录内（resolve + 前缀校验防逃逸）；应用工具仅暴露 Bot 设定、用户记忆及私聊，不向模型返回 Provider 密钥
 - 私聊仅转发咨询问题，不自动转发主会话；接收方只开放工作区读取/列表工具，禁止修改资料和递归私聊。每轮最多 3 次咨询，每个主会话最多同时运行 3 个

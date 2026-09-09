@@ -1,6 +1,6 @@
 # ARCHITECTURE — Covan 技术方案
 
-> 版本：v1.0 · 与 SPEC.md 保持一致；本文档展开 SPEC 的技术决策与内部设计，不引入与其冲突的接口或边界。
+> 活文档 · 与 [SPEC](SPEC.md) 保持一致；本文档解释已实现能力的技术决策与内部设计，不另行定义产品需求。
 
 ## 1. 总览
 
@@ -67,25 +67,27 @@ providers 1───n bots（provider_id，可空）
 bots      1───n memories
 bots      1───n workspaces（文件系统目录，键为 bot.id）
 chats     1───n messages
-chats     n───n bots   通过 chat_members（role: member|coordinator）
+chats     n───n bots   通过 chat_members
 chats     1───1 bots   dm：chats.bot_id
-chats     n───1 bots   group：chats.coordinator_bot_id（可空）
+chats.reply_mode       group：active|sequential
+chats.context_summary  group：滚动前文总结
 settings  键值表（主题/语言/时区/审核规则等）
 ```
 
 关键设计点：
 
-- **messages.sender_type** 区分 `user|bot|system`；群聊中 bot 消息用 `sender_bot_id` 归属，system 消息承载协调者 note 等元信息。`status` 机（streaming/done/error/stopped）支撑断点续显与错误内联。
+- **messages.sender_type** 区分 `user|bot|system`；群聊中 bot 消息用 `sender_bot_id` 归属。`system` 只用于真实系统提示与兼容旧数据，群聊调度过程不写入聊天区。`status` 状态机（streaming/done/error/stopped）支撑断点续显与错误内联。
 - **mentions / attachments 以 JSON 字符串列存储**：结构简单、无查询需求，避免额外表。
 - **引用完整性**：messages 不级联删除——删除 Bot 时只清 bots/memories/chat_members 与外键引用，messages 保留（FR-BOT-04），渲染层对悬空 sender_bot_id 降级为占位头像。
 - **settings 键值表**承载所有非结构化配置，避免 schema 膨胀。
+- `bots.is_coordinator`、`chats.coordinator_bot_id` 与 `chat_members.role='coordinator'` 是早期版本遗留字段，仅用于无损迁移旧数据库；现行 UI 不写入、群聊调度器不读取。后续 schema 清理须通过 migration 完成，不能直接破坏用户库。
 
 ## 4. IPC 安全边界
 
 - `contextIsolation: true`，`nodeIntegration: false`，渲染进程无任何 Node 能力。
 - preload 仅通过 `contextBridge.exposeInMainWorld('covan', api)` 暴露 SPEC.md §4 定义的 `CovanApi`；通道名集中在 `shared/ipcChannels.ts` 常量，主进程 `ipcMain.handle` 逐一注册，**无泛化转发、无 `ipcRenderer.send` 裸暴露**。
 - 所有通道参数在主进程侧做类型与非空校验（id 必须为已存在的 uuid 等），渲染传入的路径一律不允许——文件路径只由主进程根据 botId 推导。
-- 主 → 渲染为单向事件广播：`webContents.send('covan:event', ev)`，渲染通过 `onEvent(cb)` 订阅并返回取消订阅函数。事件类型为 SPEC §4 的 `CovanEvent` 联合（message-delta / message-done / message-error / chat-updated / bot-updated / system-message）。
+- 主 → 渲染为单向事件广播：`webContents.send('covan:event', ev)`，渲染通过 `onEvent(cb)` 订阅并返回取消订阅函数。事件类型为 SPEC §4 的 `CovanEvent` 联合（message-delta / message-done / message-error / chat-updated / bot-updated / system-message / agent-activity）。
 - api_key 从不流向渲染进程的通道响应之外的任何地方；渲染仅在 provider 编辑表单中读写，列表展示默认掩码。
 
 ## 5. pi 集成层设计（agentRuntime.ts）
@@ -103,6 +105,7 @@ providers.kind → pi 内置 provider 的映射表：
 | kimi | `createProvider({...})`（Kimi Coding Plan 动态模型） |
 | zhipu | `createProvider({...})`（智谱 OpenAI 兼容国内端点） |
 | deepseek | `deepseekProvider()` |
+| lm-studio | `createProvider({...})`（本机 OpenAI-compatible 端点） |
 | openai-compatible | `createProvider({...})` 动态构造 |
 | mock | 不进 pi，走 main/mockProvider.ts |
 
@@ -120,7 +123,7 @@ pi 的 Context 为可 JSON 序列化的 `{ role, content, timestamp }[]`。每�
 
 - `user` → `{ role: 'user' }`；`bot` → `{ role: 'assistant' }`；`system` 跳过（不进上下文，仅 UI 展示）。
 - 群聊中其他 bot 的发言对当前发言 bot 而言是「用户侧」输入：以 `[名字]: 内容` 文本前缀保留归属，折叠进 user/assistant 交替序列（SPEC §8）。
-- 窗口取最近 30 条，与 transcript 构建规则一致；超长按 max_tokens 预留截断。
+- 单聊取最近 30 条；群聊回复使用持久化前文总结 + 最新 5 条消息，群内其他 Bot 的发言保留名字归属。超长内容按 max_tokens 预留从最早侧截断。
 
 ### 5.4 Agent 会话与流式转发
 
@@ -135,64 +138,38 @@ pi 的 Context 为可 JSON 序列化的 `{ role, content, timestamp }[]`。每�
 
 ## 6. 群聊编排协议详细设计（orchestrator.ts）
 
-### 6.1 状态机
+### 6.1 共同输入与轮次控制
+
+每次群消息落库后，编排器为每位成员构造相同基础上下文：`context_summary`（前文总结）+ 最新 5 条消息 + 当前 Bot 的人设和记忆。被 `@` 的成员强制回复；其他成员先做一次仅允许输出 `REPLY` 或 `SKIP` 的轻量判断。
+
+每个群维护轮次级 `AbortController`、活动成员集合和判断修订号。用户在主动回复进行中继续发送消息时，新消息先正常落库，再递增修订号并取消尚未完成的旧判断；下一批判断使用包含新消息的最新上下文。正在流式发言的消息不被新消息粗暴截断，用户仍可用停止按钮取消整个群的判断与生成。
+
+### 6.2 主动回复（active）
 
 ```
-        sendUserMessage(group)
-                │
-                ▼
-        ┌─────────────┐   无 coordinator   ┌──────────────┐
-        │    idle     │ ─────────────────▶ │  fallback    │
-        └─────┬───────┘                    │ (mention 或  │
-              │ 有 coordinator             │  全员≤5)     │
-              ▼                            └──────┬───────┘
-        ┌─────────────┐  JSON 解析失败            │
-        │  planning   │ ──────────────┐           │
-        │(coordinator │               ▼           │
-        │  输出决策)  │        ┌──────────────┐   │
-        └─────┬───────┘        │ parse-fallback│  │
-              │ JSON ok        │(@bots+coord) │   │
-              ▼                └──────┬───────┘   │
-        ┌─────────────┐               │           │
-        │  speaking₁  │ ◀─────────────┴───────────┘
-        │ speaking₂ … │  串行 n 次（受最大发言数截断）
-        └─────┬───────┘
-              ▼
-        ┌─────────────┐
-        │    done     │ → 触发后台记忆提取 → idle
-        └─────────────┘
+新群消息 → 全体成员并发判断 → 愿意回复的成员并发生成 → 本轮完成
+    ↑              │
+    └── 新消息到达 ─┘  取消旧判断，基于最新 5 条消息重新判断
 ```
 
-### 6.2 决策协议（JSON）
+- 判断和生成都以成员为粒度并发，避免一位慢模型阻塞其他成员。
+- `@mention` 跳过是否回复判断，直接进入生成。
+- 判断请求失败时不伪装为 `SKIP`：该成员进入正式回复尝试，让用户在消息区看到真实的成功或错误结果。
+- 新消息到达后，过期修订的判断结果即使稍后返回也会被丢弃，不能触发幽灵回复。
 
-协调者调用的 system prompt 要求**只输出 JSON**（SPEC §5）：
+### 6.3 顺序回复（sequential）
 
-```json
-{
-  "speak": [{ "botId": "uuid", "hint": "要说什么的简短指令" }],
-  "note": "系统条文本，如：已发消息给 3 个 Bot"
-}
-```
+成员按群成员顺序逐个执行“判断 → 可选发言”。后续成员会看到本轮前序成员刚产生的消息，因此能补充、反驳或选择沉默。被 `@` 的成员仍强制回复；单个成员失败只影响自己的消息，不中断后续成员。
 
-处理规则：
-1. 构建 transcript：最近 30 条消息，格式 `[名字]: 内容`。
-2. 用户消息中的 @mention 强制并入 speak 列表首位（去重）。
-3. JSON 提取容错：截取首个 `{` 到末个 `}` 尝试 parse；speak 项中 botId 必须是本群成员，非法项丢弃。
-4. 全部失败 → 兜底：所有被 @ 的 bot + coordinator 自己发言。
-5. note 写入一条 sender_type='system' 的消息并广播 `system-message` 事件。
-6. 设置中开启「自动审核」时，审核规则文本作为自然语言追加进协调者决策前的检查环节。
+### 6.4 决策、审核与活动反馈
 
-### 6.3 发言执行
+- 决策输出在归一化后只接受 `REPLY` / `SKIP`，不把内部判断文本写入聊天记录。
+- 开启自动审核时，审核规则作为自然语言约束并入每位成员的判断和正式回复提示，而不是交给一个中心协调者。
+- 编排器通过 `agent-activity` 事件广播成员的 `preparing|speaking|idle` 状态；聊天输入框上方只显示正在准备或回复的头像动画。
+- 聊天区只展示用户与成员的真实消息，不展示“正在顺序发言”“全体成员依次发言”等调度说明。
+- 全轮完成后异步刷新 `context_summary` 并触发记忆提取；总结写入前校验最新消息游标，避免较慢的旧总结覆盖新内容。
 
-对每个 speak 项串行执行（保证群内消息顺序自然、便于用户阅读）：
-
-- system prompt = `bot.system_prompt` + 记忆注入 + 群聊上下文指令（「你在群聊 X 中，其他成员：…，请用口语化中文简短回复，不要复述别人」）。
-- hint 作为用户消息前缀：`(协调者提示: hint)`。
-- 流式 delta 实时广播；单条失败不中断后续发言（该条落 error，继续下一个）。
-- 每轮最大发言数硬上限（默认 5，settings 可调）：超出截断，截断动作写入 note。这是成本失控的主要防线（见 §11）。
-- 全部完成后置 done，触发 memory.ts 后台提取。
-
-单聊复用同一执行路径：跳过 planning/fallback，直接 speaking₁。
+单聊复用成员生成路径，但不执行群聊判断与总结逻辑。
 
 ## 7. 记忆系统详细设计（memory.ts）
 
@@ -221,9 +198,9 @@ pi 的 Context 为可 JSON 序列化的 `{ role, content, timestamp }[]`。每�
 
 v1 采用保守的**包含关系去重**：新条目与现有记忆任一存在子串包含关系（双向，去空白与标点归一化后比较）即跳过。该策略零依赖、可预测，误杀率可接受；手动添加（source='manual'）的记忆不参与被去重（新自动条目若被手动记忆包含则跳过，反之不删手动条目）。
 
-### 7.4 未来向量检索路线
+### 7.4 检索扩展点
 
-v2 规划：memories 表增加 `embedding BLOB` 列，提取后异步算向量（用 provider 的 embedding 端点或本地小模型）；注入时以当前会话最近若干消息为 query 做余弦相似度 Top-K 检索，替代「最近 30 条」的朴素窗口。schema 上仅需加列，不破坏 v1 数据。触发器、去重、手动管理逻辑保持不变。
+当前实现按时间窗口注入记忆。若未来采用向量检索，应把检索策略封装在 memory.ts 内，并通过 additive migration 扩展 memories 表，保持触发、去重与手动管理接口不变；该候选项只在 [ROADMAP](ROADMAP.md) 跟踪，未实现前不写成当前能力。
 
 ## 8. 工作区与自研工具（workspace.ts + agentRuntime.ts）
 
@@ -241,7 +218,7 @@ v2 规划：memories 表增加 `embedding BLOB` 列，提取后异步算向量�
 - `main/mockProvider.ts`：providers.kind='mock' 时 agentRuntime 短路进入 mock 路径，按 bot 名字模板生成确定性的流式假回复（分片 setTimeout 推送 text_delta，模拟真实节奏），支持 abort。
 - 价值：
   1. `npm run smoke` 在无网络、无 key 环境完成端到端验证：建 bot → 建群 → 发消息 → 收 mock 回复 → 记忆写入（SPEC §12）。
-  2. 群聊编排、记忆提取、停止/重试等逻辑可用 mock 做确定性集成测试（协调者 mock 返回固定 JSON / 非法 JSON 以覆盖兜底分支）。
+  2. 群聊编排、记忆提取、停止/重试等逻辑可用 mock 做确定性集成测试（覆盖主动模式的新消息修订、顺序模式次序、`REPLY|SKIP` 与判断失败分支）。
   3. UI 开发不消耗真实 token。
 - 测试分层：DAO 单测（内存 SQLite）、orchestrator 状态机单测（注入假 agentRuntime）、冒烟脚本端到端。质量门禁：`tsc --noEmit` 与 `electron-vite build` 必须通过。
 
@@ -260,8 +237,8 @@ v2 规划：memories 表增加 `embedding BLOB` 列，提取后异步算向量�
 | pi 包（@earendil-works/*）版本变动 / API 漂移 | 编译或运行时破坏 | package-lock 锁定版本；agentRuntime.ts 是唯一直接依赖 pi 的模块（适配层），其余代码只面向内部抽象；升级前跑 smoke + 编排单测；禁止引用废弃的 @mariozechner/* scope |
 | Electron 原生模块（better-sqlite3）重建失败 | 打包后崩溃 | 锁定 Electron 38 与 better-sqlite3 ^11 组合并验证；electron-builder rebuild；`--ignore-scripts` 后显式执行 rebuild 步骤写进 README |
 | API key 明文存储于 SQLite | 本机被入侵时密钥泄露 | v1 明确取舍并文档化：README 显著风险提示；后续迁移 Electron safeStorage（key 加密落库，内存解密）；渲染层列表默认掩码展示 |
-| 群聊成本失控（协调者安排大量发言、循环讨论） | 用户账单激增 | 每轮最大发言数硬上限（默认 5）+ 超出截断并写入 note；一切生成可 stopChat 一键中断；无「bot 主动追问」机制，一轮用户消息只触发一轮调度 |
-| 协调者输出不稳定（非 JSON、幻觉 botId） | 群聊失序 | §6.2 的多级容错：JSON 截取 parse → 成员校验过滤 → mention+coordinator 兜底；兜底分支有 mock 集成测试覆盖 |
-| 长会话上下文超限 | 生成报错 | transcript 与历史重建均限最近 30 条；注入记忆限 30 条；超长时按 token 预算从 oldest 侧截断 |
+| 主动群并发导致成本增长 | 用户账单激增 | 每位成员先做轻量 `REPLY|SKIP` 判断；`@` 才强制回复；stopChat 一键中断。成员/轮次预算上限列入 ROADMAP，在实现前 UI 不宣称已有硬限制 |
+| 成员判断输出不稳定 | 漏回或意外回复 | 严格归一化 `REPLY|SKIP`；`@` 强制；判断失败转正式回复并将真实错误展示给用户；修订号丢弃过期结果 |
+| 长会话上下文超限 | 生成报错 | 群聊使用前文总结 + 最新 5 条消息，单聊历史限最近 30 条，记忆限 30 条；超长时按 token 预算从 oldest 侧截断 |
 | 记忆提取误记/隐私顾虑 | 用户信任受损 | Memory 面板全量可见、可删；自动提取失败静默且不阻塞主流程；手动记忆不被自动去重误删 |
 | 单写者阻塞（大消息流式落库 + UI 读取） | UI 卡顿 | WAL 模式读写并发；落库合并小事务；渲染端 delta 渲染做 rAF 节流 |

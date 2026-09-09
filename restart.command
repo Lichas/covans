@@ -4,9 +4,8 @@ set -e
 # Restart only Covan's local development process. This intentionally does not
 # match other Electron applications running on the machine.
 SCRIPT_DIR="${0:A:h}"
-PROJECT_DIR="$SCRIPT_DIR/project"
-VITE_PROCESS="$PROJECT_DIR/node_modules/.bin/electron-vite dev"
-ELECTRON_PROCESS="$PROJECT_DIR/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron \."
+VITE_PROCESS="$SCRIPT_DIR/node_modules/.bin/electron-vite dev"
+ELECTRON_PROCESS="$SCRIPT_DIR/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron \."
 
 if pgrep -f "$VITE_PROCESS" >/dev/null 2>&1; then
   print "正在关闭已有的 Covan…"
