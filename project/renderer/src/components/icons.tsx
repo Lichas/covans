@@ -4,6 +4,33 @@ import type { ProviderKind } from '@shared/types'
 
 type P = SVGProps<SVGSVGElement>
 
+export const CopyIcon = (p: P) => (
+  <svg {...base(p)}>
+    <rect x="8" y="8" width="12" height="13" rx="2" />
+    <path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3" />
+  </svg>
+)
+export const ArrowDownIcon = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M12 4v16m-6-6 6 6 6-6" />
+  </svg>
+)
+export const QuoteIcon = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M4 6h6v6H5c0 3 1 4 3 5M14 6h6v6h-5c0 3 1 4 3 5" />
+  </svg>
+)
+export const DownloadIcon = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M12 3v12m-4-4 4 4 4-4M4 15v5h16v-5" />
+  </svg>
+)
+export const SparkIcon = (p: P) => (
+  <svg {...base(p)}>
+    <path d="m12 3 2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5L12 3z" />
+  </svg>
+)
+
 function base(props: P) {
   return {
     width: 20,
@@ -77,7 +104,15 @@ export const SendIcon = (p: P) => (
 
 export const StopIcon = (p: P) => (
   <svg {...base(p)}>
-    <rect x="7" y="7" width="10" height="10" rx="2" fill="currentColor" stroke="none" />
+    <rect
+      x="7"
+      y="7"
+      width="10"
+      height="10"
+      rx="2"
+      fill="currentColor"
+      stroke="none"
+    />
   </svg>
 )
 
@@ -167,7 +202,10 @@ export const PencilIcon = (p: P) => (
   </svg>
 )
 
-const PROVIDER_ICON_META: Record<ProviderKind, { color: string; glyph: string }> = {
+const PROVIDER_ICON_META: Record<
+  ProviderKind,
+  { color: string; glyph: string }
+> = {
   openai: { color: '#18181b', glyph: 'O' },
   anthropic: { color: '#c2410c', glyph: 'A' },
   google: { color: '#4285f4', glyph: 'G' },

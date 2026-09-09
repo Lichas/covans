@@ -1,5 +1,15 @@
 // shared/ipcChannels.ts — IPC 通道名常量（主/preload 共用）
 export const CH = {
+  getUserProfile: 'user:profile',
+  saveUserProfile: 'user:saveProfile',
+  listUserMemories: 'user:memories',
+  saveUserMemory: 'user:saveMemory',
+  deleteUserMemory: 'user:deleteMemory',
+  listAgentThreads: 'agentChats:list',
+  getAgentThread: 'agentChats:get',
+  startAgentConversation: 'agentChats:start',
+  stopAgentConversation: 'agentChats:stop',
+  expandAvatarPrompt: 'bots:expandAvatarPrompt',
   listProviders: 'providers:list',
   saveProvider: 'providers:save',
   deleteProvider: 'providers:delete',
@@ -19,6 +29,8 @@ export const CH = {
   updateChat: 'chats:update',
   deleteChat: 'chats:delete',
   markRead: 'chats:markRead',
+  exportChat: 'chats:export',
+  writeClipboard: 'clipboard:write',
 
   listMessages: 'messages:list',
   sendUserMessage: 'messages:sendUser',
@@ -35,5 +47,5 @@ export const CH = {
   getSetting: 'settings:get',
   setSetting: 'settings:set',
 
-  event: 'covan:event' // main → renderer 推送通道
+  event: 'covan:event', // main → renderer 推送通道
 } as const

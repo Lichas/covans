@@ -1,5 +1,5 @@
 // components/Avatar.tsx — Bot 头像：emoji / covan-avatar 协议图 / 首字彩色占位
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { avatarColor, avatarSrc, botInitial } from '../lib/format'
 
 interface Props {
@@ -12,6 +12,7 @@ interface Props {
 
 export function Avatar({ name, avatar, size = 40, online, className = '' }: Props) {
   const [imgError, setImgError] = useState(false)
+  useEffect(() => setImgError(false), [avatar])
   const src = avatarSrc(avatar)
   const dim = { width: size, height: size }
 

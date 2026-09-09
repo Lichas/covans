@@ -6,6 +6,8 @@ interface UiState {
   /** 群聊中当前查看的成员 botId（单聊时为空，直接用会话 bot） */
   inspectedBotId: string | null
   settingsOpen: boolean
+  profileOpen: boolean
+  setProfileOpen: (v: boolean) => void
   newBotOpen: boolean
   newGroupOpen: boolean
   toggleRightPanel: () => void
@@ -17,9 +19,11 @@ interface UiState {
 }
 
 export const useUiStore = create<UiState>((set, get) => ({
-  rightPanelOpen: true,
+  rightPanelOpen: false,
   inspectedBotId: null,
   settingsOpen: false,
+  profileOpen: false,
+  setProfileOpen: (v) => set({ profileOpen: v }),
   newBotOpen: false,
   newGroupOpen: false,
   toggleRightPanel: () => set({ rightPanelOpen: !get().rightPanelOpen }),

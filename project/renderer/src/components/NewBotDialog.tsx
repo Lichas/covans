@@ -1,5 +1,5 @@
 // components/NewBotDialog.tsx — 新建 Bot 对话框
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { PERSONA_TEMPLATES } from '../lib/personaTemplates'
 import { useBotsStore } from '../stores/botsStore'
 import { useChatsStore } from '../stores/chatsStore'
@@ -25,6 +25,10 @@ export function NewBotDialog() {
   const [model, setModel] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+
+  useEffect(() => {
+    if (open && !providerId && providers.length) setProviderId(providers[0].id)
+  }, [open, providers])
 
   const reset = () => {
     setName('')
@@ -88,7 +92,11 @@ export function NewBotDialog() {
         </Field>
 
         <Field label="人设模板">
-          <select className={inputCls} value={templateId} onChange={(e) => pickTemplate(e.target.value)}>
+          <select
+            className={inputCls}
+            value={templateId}
+            onChange={(e) => pickTemplate(e.target.value)}
+          >
             {PERSONA_TEMPLATES.map((t) => (
               <option key={t.id} value={t.id}>
                 {t.label}
@@ -97,9 +105,10 @@ export function NewBotDialog() {
           </select>
         </Field>
 
-        {templateId !== 'blank' && (
+        {
           <Field label="人设预览（可编辑）">
             <textarea
+              placeholder="描述这个 Bot 的身份、能力与说话方式…"
               className={`${inputCls} scroll-thin max-h-44 min-h-[96px] resize-y leading-relaxed`}
               value={prompt}
               onChange={(e) => {
@@ -108,7 +117,7 @@ export function NewBotDialog() {
               }}
             />
           </Field>
-        )}
+        }
 
         <Field label="描述（可选）">
           <input
@@ -123,11 +132,25 @@ export function NewBotDialog() {
           <Field label="Provider">
             <div className="flex items-center gap-2">
               {providerId ? (
-                <ProviderIcon kind={providers.find((p) => p.id === providerId)?.kind ?? 'openai'} width={22} height={22} className="shrink-0" />
+                <ProviderIcon
+                  kind={
+                    providers.find((p) => p.id === providerId)?.kind ?? 'openai'
+                  }
+                  width={22}
+                  height={22}
+                  className="shrink-0"
+                />
               ) : (
                 <span className="h-[22px] w-[22px] shrink-0 rounded-md border border-dashed border-stone-300 dark:border-stone-600" />
               )}
-              <select className={`${inputCls} min-w-0 flex-1`} value={providerId} onChange={(e) => setProviderId(e.target.value)}>
+              <select
+                className={`${inputCls} min-w-0 flex-1`}
+                value={providerId}
+                onChange={(e) => {
+                  setProviderId(e.target.value)
+                  setModel('')
+                }}
+              >
                 <option value="">稍后配置</option>
                 {providers.map((p) => (
                   <option key={p.id} value={p.id}>
@@ -147,13 +170,21 @@ export function NewBotDialog() {
           </Field>
         </div>
 
-        {error && <div className="rounded-lg bg-red-50 px-3 py-2 text-[12.5px] text-red-600 dark:bg-red-950/50 dark:text-red-300">{error}</div>}
+        {error && (
+          <div className="rounded-lg bg-red-50 px-3 py-2 text-[12.5px] text-red-600 dark:bg-red-950/50 dark:text-red-300">
+            {error}
+          </div>
+        )}
 
         <div className="flex justify-end gap-2 pt-1">
           <button className={btnGhostCls} onClick={close}>
             取消
           </button>
-          <button className={btnPrimaryCls} disabled={!name.trim() || busy} onClick={() => void submit()}>
+          <button
+            className={btnPrimaryCls}
+            disabled={!name.trim() || busy}
+            onClick={() => void submit()}
+          >
             {busy ? '创建中…' : '创建并开始聊天'}
           </button>
         </div>

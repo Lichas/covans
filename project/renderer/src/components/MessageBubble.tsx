@@ -1,94 +1,126 @@
-// components/MessageBubble.tsx — 消息气泡（用户右黑 / bot 左灰 / system 居中胶囊）
+import { memo } from 'react'
 import type { Bot, Message } from '@shared/types'
 import { Avatar } from './Avatar'
-import { RefreshIcon, WarnIcon } from './icons'
+import { QuoteIcon, RefreshIcon, WarnIcon } from './icons'
+import { CopyButton } from './CopyButton'
+import { MarkdownContent } from './MarkdownContent'
+import { formatFullTime, formatMessageTime } from '../lib/format'
 
 interface Props {
   message: Message
   bot: Bot | null
   isGroup: boolean
   streaming?: boolean
+  busy?: boolean
   onInspectBot?: (botId: string) => void
   onRetry?: (message: Message) => void
+  onQuote?: (message: Message) => void
 }
 
-export function MessageBubble({ message, bot, isGroup, streaming, onInspectBot, onRetry }: Props) {
-  // 系统消息：居中灰色小胶囊
+export const MessageBubble = memo(function MessageBubble({
+  message,
+  bot,
+  streaming,
+  busy,
+  onInspectBot,
+  onRetry,
+  onQuote,
+}: Props) {
   if (message.sender_type === 'system') {
     if (!message.content) return null
     return (
-      <div className="my-2 flex justify-center">
-        <span className="selectable max-w-[70%] rounded-full bg-stone-200/80 px-3.5 py-1 text-center text-[12px] text-stone-500 dark:bg-stone-700/60 dark:text-stone-400">
-          {message.content}
-        </span>
-      </div>
-    )
-  }
-
-  // 用户消息：右侧近黑白字
-  if (message.sender_type === 'user') {
-    return (
-      <div className="my-1.5 flex justify-end px-4">
-        <div className="max-w-[72%]">
-          <div className="selectable msg-content rounded-bubble rounded-tr-md bg-ink px-4 py-2.5 text-[14px] leading-relaxed text-white dark:bg-stone-100 dark:text-stone-900">
-            {message.content}
-          </div>
-          {message.status === 'error' && (
-            <div className="mt-1 flex items-center justify-end gap-1.5 text-[12px] text-red-500">
-              <WarnIcon width={13} height={13} />
-              发送失败：{message.error || '未知错误'}
-            </div>
-          )}
-        </div>
-      </div>
-    )
-  }
-
-  // Bot 消息：左侧带头像浅灰气泡
-  const name = bot?.name ?? 'Bot'
-  const isError = message.status === 'error'
-  return (
-    <div className="my-1.5 flex gap-2.5 px-4">
-      <button
-        className="mt-0.5 shrink-0 self-start"
-        onClick={() => bot && onInspectBot?.(bot.id)}
-        title={bot ? `查看 ${name} 的设置` : undefined}
+      <div
+        className="system-message selectable"
+        title={formatFullTime(message.created_at)}
       >
-        <Avatar name={name} avatar={bot?.avatar ?? ''} size={34} />
-      </button>
-      <div className="max-w-[72%]">
-        {isGroup && (
-          <div className="mb-1 pl-1 text-[12px] text-stone-400">{name}</div>
-        )}
-        <div
-          className={`selectable msg-content rounded-bubble rounded-tl-md px-4 py-2.5 text-[14px] leading-relaxed ${
-            isError
-              ? 'border border-red-200 bg-red-50 text-stone-700 dark:border-red-900/50 dark:bg-red-950/40 dark:text-stone-300'
-              : 'bg-bubbleBot text-stone-800 dark:bg-stone-700/70 dark:text-stone-100'
-          } ${streaming ? 'stream-cursor' : ''}`}
+        {message.content}
+      </div>
+    )
+  }
+  const isUser = message.sender_type === 'user'
+  const isError = message.status === 'error'
+  const name = isUser ? '你' : (bot?.name ?? 'Bot')
+  return (
+    <article
+      className={`message-row ${isUser ? 'message-user' : 'message-bot'}`}
+      data-message-id={message.id}
+      data-status={message.status}
+      aria-label={`${name}的消息`}
+    >
+      {!isUser && (
+        <button
+          className="message-avatar"
+          onClick={() => bot && onInspectBot?.(bot.id)}
+          title={`查看 ${name} 的设置`}
+          disabled={!bot}
         >
-          {message.content}
-          {streaming && !message.content && <span className="text-stone-400">正在输入…</span>}
+          <Avatar name={name} avatar={bot?.avatar ?? ''} size={30} />
+        </button>
+      )}
+      <div className="message-body">
+        <div className="message-meta">
+          <span className="message-author">{name}</span>
+          <time
+            dateTime={new Date(message.created_at).toISOString()}
+            title={formatFullTime(message.created_at)}
+          >
+            {formatMessageTime(message.created_at)}
+          </time>
+          {streaming && <span className="generation-label">正在回复</span>}
+        </div>
+        <div className={`message-surface ${isError ? 'message-error' : ''}`}>
+          {isUser ? (
+            <div className="selectable msg-content">{message.content}</div>
+          ) : message.content ? (
+            <MarkdownContent content={message.content} />
+          ) : streaming ? (
+            <div className="thinking-indicator" role="status">
+              <span />
+              <span />
+              <span />
+              <span className="sr-only">正在思考</span>
+            </div>
+          ) : isError ? (
+            <span className="text-stone-500">未能完成这次回复</span>
+          ) : null}
         </div>
         {isError && (
-          <div className="mt-1.5 flex items-center gap-2 pl-1">
-            <span className="flex items-center gap-1 text-[12px] text-red-500">
-              <WarnIcon width={13} height={13} />
-              {message.error || '生成失败'}
-            </span>
-            <button
-              onClick={() => onRetry?.(message)}
-              className="flex items-center gap-1 rounded-full border border-stone-300 px-2.5 py-0.5 text-[12px] text-stone-600 transition hover:bg-stone-100 dark:border-stone-600 dark:text-stone-300 dark:hover:bg-stone-700"
-            >
-              <RefreshIcon width={12} height={12} />
-              重试
-            </button>
+          <div className="message-error-info" role="alert">
+            <WarnIcon width={14} height={14} />
+            <span>{message.error || '生成失败，请重试'}</span>
           </div>
         )}
         {message.status === 'stopped' && (
-          <div className="mt-1 pl-1 text-[11.5px] text-stone-400">已停止生成</div>
+          <div className="message-stopped">已停止生成 · 已保留现有内容</div>
+        )}
+        {!streaming && (
+          <div className="message-actions">
+            {message.content && (
+              <>
+                <CopyButton text={message.content} compact />
+                <button
+                  className="message-action"
+                  onClick={() => onQuote?.(message)}
+                  title="引用回复"
+                  aria-label="引用回复"
+                >
+                  <QuoteIcon width={14} height={14} />
+                </button>
+              </>
+            )}
+            {isError && (
+              <button
+                className="message-action"
+                disabled={busy}
+                onClick={() => onRetry?.(message)}
+              >
+                <RefreshIcon width={14} height={14} />
+                重试
+              </button>
+            )}
+          </div>
         )}
       </div>
-    </div>
+    </article>
   )
-}
+})

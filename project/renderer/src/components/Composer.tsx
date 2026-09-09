@@ -2,8 +2,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ChatSummary } from '@shared/types'
 import { useMessagesStore } from '../stores/messagesStore'
+import { useDraftsStore } from '../stores/draftsStore'
 import { Avatar } from './Avatar'
-import { AtIcon, AttachIcon, SendIcon, StopIcon } from './icons'
+import { AtIcon, SendIcon, StopIcon } from './icons'
 
 interface MemberLite {
   id: string
@@ -20,11 +21,18 @@ export function Composer({ chat }: Props) {
   const stop = useMessagesStore((s) => s.stop)
   const generating = useMessagesStore((s) => !!s.generating[chat.id])
 
-  const [text, setText] = useState('')
+  const draft = useDraftsStore((s) => s.drafts[chat.id])
+  const text = draft?.text ?? ''
+  const setDraft = useDraftsStore((s) => s.setDraft)
+  const clearDraft = useDraftsStore((s) => s.clearDraft)
+  const setText = (value: string) => setDraft(chat.id, { text: value })
   /** 输入期间记录的 @提及（botId -> 名字），发送时按文本实际内容提取 */
-  const [mentionNames, setMentionNames] = useState<Record<string, string>>({})
+  const mentionNames = draft?.mentionNames ?? {}
   /** @ 浮层：打开时的触发位置（@ 字符下标）与过滤词 */
-  const [mentionPopup, setMentionPopup] = useState<{ anchor: number; filter: string } | null>(null)
+  const [mentionPopup, setMentionPopup] = useState<{
+    anchor: number
+    filter: string
+  } | null>(null)
   const [popupIndex, setPopupIndex] = useState(0)
   const taRef = useRef<HTMLTextAreaElement>(null)
 
@@ -71,7 +79,7 @@ export function Composer({ chat }: Props) {
   const pickMember = (m: MemberLite) => {
     const ta = taRef.current
     const caret = ta?.selectionStart ?? text.length
-    setMentionNames((prev) => ({ ...prev, [m.id]: m.name }))
+    setDraft(chat.id, { mentionNames: { ...mentionNames, [m.id]: m.name } })
     if (mentionPopup) {
       const next = `${text.slice(0, mentionPopup.anchor)}@${m.name} ${text.slice(caret)}`
       setText(next)
@@ -91,13 +99,14 @@ export function Composer({ chat }: Props) {
     const mentions = Object.entries(mentionNames)
       .filter(([, name]) => content.includes(`@${name}`))
       .map(([botId]) => botId)
-    setText('')
-    setMentionNames({})
+    clearDraft(chat.id)
     closePopup()
     void send(chat.id, content, mentions)
+    taRef.current?.focus()
   }
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.nativeEvent.isComposing || e.keyCode === 229) return
     if (mentionPopup && filteredMembers.length > 0) {
       if (e.key === 'ArrowDown') {
         e.preventDefault()
@@ -106,7 +115,9 @@ export function Composer({ chat }: Props) {
       }
       if (e.key === 'ArrowUp') {
         e.preventDefault()
-        setPopupIndex((i) => (i - 1 + filteredMembers.length) % filteredMembers.length)
+        setPopupIndex(
+          (i) => (i - 1 + filteredMembers.length) % filteredMembers.length,
+        )
         return
       }
       if (e.key === 'Enter' || e.key === 'Tab') {
@@ -138,7 +149,7 @@ export function Composer({ chat }: Props) {
   }
 
   return (
-    <div className="relative border-t border-stone-200 bg-white/60 px-4 py-3 dark:border-stone-800 dark:bg-stone-900/40">
+    <div className="composer-shell">
       {/* @ 成员浮层 */}
       {mentionPopup && filteredMembers.length > 0 && (
         <div className="absolute bottom-full left-4 z-30 mb-2 w-60 animate-fadeIn overflow-hidden rounded-xl border border-stone-200 bg-white shadow-lg dark:border-stone-700 dark:bg-stone-800">
@@ -160,23 +171,16 @@ export function Composer({ chat }: Props) {
                 }`}
               >
                 <Avatar name={m.name} avatar={m.avatar} size={26} />
-                <span className="truncate text-stone-700 dark:text-stone-200">{m.name}</span>
+                <span className="truncate text-stone-700 dark:text-stone-200">
+                  {m.name}
+                </span>
               </button>
             ))}
           </div>
         </div>
       )}
 
-      <div className="flex items-end gap-2 rounded-2xl border border-stone-200 bg-white px-2.5 py-2 shadow-sm dark:border-stone-700 dark:bg-stone-800">
-        {/* 附件按钮（预留：当前 IPC 未提供消息附件通道） */}
-        <button
-          className="rounded-lg p-1.5 text-stone-400 transition hover:bg-stone-100 hover:text-stone-600 dark:hover:bg-stone-700 dark:hover:text-stone-300"
-          title="添加附件（即将支持）"
-          aria-label="添加附件"
-          onClick={() => undefined}
-        >
-          <AttachIcon width={18} height={18} />
-        </button>
+      <div className="composer-box">
         {/* @ 提及按钮（群聊） */}
         {isGroup && (
           <button
@@ -190,18 +194,25 @@ export function Composer({ chat }: Props) {
         )}
         <textarea
           ref={taRef}
+          id="message-composer"
+          aria-label="输入消息"
           rows={1}
           value={text}
           onChange={(e) => {
             setText(e.target.value)
-            updateMentionPopup(e.target.value, e.target.selectionStart ?? e.target.value.length)
+            updateMentionPopup(
+              e.target.value,
+              e.target.selectionStart ?? e.target.value.length,
+            )
           }}
           onKeyDown={onKeyDown}
           onClick={(e) => {
             const ta = e.currentTarget
             updateMentionPopup(ta.value, ta.selectionStart ?? ta.value.length)
           }}
-          placeholder={isGroup ? '发消息，输入 @ 提及成员' : '发消息…'}
+          placeholder={
+            isGroup ? '一起讨论点什么？输入 @ 提及成员' : '有什么新想法？'
+          }
           className="selectable max-h-40 flex-1 resize-none bg-transparent py-1.5 text-[14px] leading-relaxed text-stone-800 outline-none placeholder:text-stone-400 dark:text-stone-100"
         />
         {generating ? (
@@ -209,6 +220,7 @@ export function Composer({ chat }: Props) {
             onClick={() => void stop(chat.id)}
             className="flex items-center gap-1.5 rounded-full bg-stone-700 px-3.5 py-1.5 text-[13px] text-white transition hover:bg-stone-800 dark:bg-stone-200 dark:text-stone-800 dark:hover:bg-stone-300"
             title="停止生成"
+            aria-label="停止生成"
           >
             <StopIcon width={14} height={14} />
             停止
@@ -225,7 +237,16 @@ export function Composer({ chat }: Props) {
           </button>
         )}
       </div>
-      <div className="mt-1.5 text-center text-[10.5px] text-stone-400">Enter 发送 · Shift+Enter 换行</div>
+      <div className="composer-footer">
+        <span>
+          {generating
+            ? '正在回复，你可以先写下一条消息'
+            : text
+              ? '草稿已在本地保存'
+              : '支持 Markdown'}
+        </span>
+        <span>Enter 发送 · Shift + Enter 换行</span>
+      </div>
     </div>
   )
 }

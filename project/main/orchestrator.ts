@@ -1,27 +1,22 @@
 // main/orchestrator.ts — 群聊编排协议（SPEC §5）+ 单聊直调
 // 事件推送通过注入的 emit(CovanEvent) 完成，本模块不 import electron。
-import type { AssistantMessage, Message as PiMessage, Usage } from '@earendil-works/pi-ai'
+import type {
+  AssistantMessage,
+  Message as PiMessage,
+  Usage,
+} from '@earendil-works/pi-ai'
 import type { Bot, CovanEvent, Message } from '../shared/types'
 import * as db from './db'
-import { completeOnce, runAgent } from './agentRuntime'
+import { abortChat, completeOnce, runAgent } from './agentRuntime'
 import { buildSystemPrompt, noteNewMessages, type GroupContext } from './memory'
 import { COORDINATOR_MARKER, ROSTER_PREFIX } from './mockProvider'
+import { emitEvent as emit, setEventEmitter } from './events'
 
 export type EmitFn = (ev: CovanEvent) => void
 
-let emitFn: EmitFn = () => {}
-
 /** 注入事件推送函数（index.ts 注入 webContents 广播；冒烟脚本注入收集器） */
 export function initOrchestrator(deps: { emit: EmitFn }): void {
-  emitFn = deps.emit
-}
-
-function emit(ev: CovanEvent): void {
-  try {
-    emitFn(ev)
-  } catch {
-    /* 推送失败不影响主流程 */
-  }
+  setEventEmitter(deps.emit)
 }
 
 // ---------- 历史重建 ----------
@@ -59,10 +54,19 @@ function toPiHistory(messages: Message[], self: Bot): PiMessage[] {
       }
       out.push(assistant)
     } else if (m.sender_type === 'bot') {
-      const name = (m.sender_bot_id && db.getBot(m.sender_bot_id)?.name) || 'Bot'
-      out.push({ role: 'user', content: `[${name}]: ${m.content}`, timestamp: m.created_at })
+      const name =
+        (m.sender_bot_id && db.getBot(m.sender_bot_id)?.name) || 'Bot'
+      out.push({
+        role: 'user',
+        content: `[${name}]: ${m.content}`,
+        timestamp: m.created_at,
+      })
     } else {
-      out.push({ role: 'user', content: `[系统]: ${m.content}`, timestamp: m.created_at })
+      out.push({
+        role: 'user',
+        content: `[系统]: ${m.content}`,
+        timestamp: m.created_at,
+      })
     }
   }
   return out
@@ -91,11 +95,19 @@ interface SpeakItem {
   hint: string
 }
 
-function buildCoordinatorSystemPrompt(coordinator: Bot, members: Bot[]): string {
+function buildCoordinatorSystemPrompt(
+  coordinator: Bot,
+  members: Bot[],
+): string {
   const roster = members
     .map((m) => `${ROSTER_PREFIX}${m.id}:${m.name}`)
     .join('\n')
-  const memberDesc = members.map((m) => `- ${m.name}（id: ${m.id}）${m.description ? `：${m.description}` : ''}`).join('\n')
+  const memberDesc = members
+    .map(
+      (m) =>
+        `- ${m.name}（id: ${m.id}）${m.description ? `：${m.description}` : ''}`,
+    )
+    .join('\n')
   return [
     COORDINATOR_MARKER,
     `你是群聊协调者「${coordinator.name}」。根据群聊记录，决定接下来由哪些成员发言。`,
@@ -106,7 +118,10 @@ function buildCoordinatorSystemPrompt(coordinator: Bot, members: Bot[]): string 
   ].join('\n')
 }
 
-function parseCoordinatorDecision(raw: string, validIds: Set<string>): SpeakItem[] | null {
+function parseCoordinatorDecision(
+  raw: string,
+  validIds: Set<string>,
+): SpeakItem[] | null {
   try {
     const start = raw.indexOf('{')
     const end = raw.lastIndexOf('}')
@@ -119,7 +134,10 @@ function parseCoordinatorDecision(raw: string, validIds: Set<string>): SpeakItem
     const items: SpeakItem[] = []
     for (const s of obj.speak) {
       if (s && typeof s.botId === 'string' && validIds.has(s.botId)) {
-        items.push({ botId: s.botId, hint: typeof s.hint === 'string' ? s.hint : '' })
+        items.push({
+          botId: s.botId,
+          hint: typeof s.hint === 'string' ? s.hint : '',
+        })
       }
     }
     if (items.length === 0) return null
@@ -147,26 +165,76 @@ function parseCoordinatorNote(raw: string): string {
  * 处理用户消息（dm / group 统一入口，SPEC §5）。
  * 立即返回；bot 生成在后台异步推进，通过事件推送进度。
  */
-export async function sendUserMessage(chatId: string, content: string, mentions: string[] = []): Promise<void> {
+export async function sendUserMessage(
+  chatId: string,
+  content: string,
+  mentions: string[] = [],
+): Promise<void> {
+  if (turns.has(chatId)) throw new Error('当前会话正在回复，请稍后再发送')
+  const controller = new AbortController()
+  turns.set(chatId, controller)
+  emit({ type: 'generation-state', chatId, generating: true })
+  try {
+    await runTurn(chatId, content, mentions, controller.signal)
+  } catch (e) {
+    if (!controller.signal.aborted && db.getChat(chatId)) {
+      const message = db.insertMessage({
+        chat_id: chatId,
+        sender_type: 'system',
+        content: `出错了：${e instanceof Error ? e.message : String(e)}`,
+      })
+      emit({ type: 'system-message', chatId, message })
+    }
+    throw e
+  } finally {
+    turns.delete(chatId)
+    emit({ type: 'generation-state', chatId, generating: false })
+    emit({ type: 'chat-updated', chatId })
+  }
+}
+
+const turns = new Map<string, AbortController>()
+
+export function isTurnRunning(chatId: string): boolean {
+  return turns.has(chatId)
+}
+
+export function stopTurn(chatId: string): void {
+  turns.get(chatId)?.abort()
+  abortChat(chatId)
+}
+
+async function runTurn(
+  chatId: string,
+  content: string,
+  mentions: string[],
+  signal: AbortSignal,
+): Promise<void> {
   const chat = db.getChat(chatId)
   if (!chat) throw new Error('会话不存在')
   const text = content.trim()
   if (!text) throw new Error('消息内容不能为空')
 
-  // 1. 落库用户消息；发 chat-updated
-  db.insertMessage({ chat_id: chatId, sender_type: 'user', content: text, mentions })
-  db.touchChat(chatId, Date.now())
-  emit({ type: 'chat-updated', chatId })
-
   const members = db.listMemberBots(chatId)
   if (members.length === 0) throw new Error('会话内没有 Bot 成员')
+
+  // 1. 落库用户消息；发 chat-updated
+  db.insertMessage({
+    chat_id: chatId,
+    sender_type: 'user',
+    content: text,
+    mentions,
+  })
+  db.touchChat(chatId, Date.now())
+  emit({ type: 'chat-updated', chatId })
 
   let speakList: SpeakItem[]
   let note = ''
 
   if (chat.type === 'dm') {
     // 单聊：直接调用该 bot agent
-    const bot = (chat.bot_id && members.find((b) => b.id === chat.bot_id)) || members[0]
+    const bot =
+      (chat.bot_id && members.find((b) => b.id === chat.bot_id)) || members[0]
     speakList = [{ botId: bot.id, hint: '' }]
   } else {
     // 群聊
@@ -183,12 +251,13 @@ export async function sendUserMessage(chatId: string, content: string, mentions:
       let decision: SpeakItem[] | null = null
       let raw = ''
       try {
-        raw = await completeOnce(coordinator, sysPrompt, transcript)
+        raw = await completeOnce(coordinator, sysPrompt, transcript, signal)
         decision = parseCoordinatorDecision(raw, validIds)
         note = parseCoordinatorNote(raw)
       } catch {
         decision = null
       }
+      if (signal.aborted) return
       if (!decision) {
         // 解析失败兜底：所有被 @mention 的 bot + coordinator 自己发言
         decision = [
@@ -199,18 +268,30 @@ export async function sendUserMessage(chatId: string, content: string, mentions:
       }
       // 用户 @mention 的 bot 强制加入 speak 列表首位
       const rest = decision.filter((s) => !forced.includes(s.botId))
-      speakList = [...forced.map((botId) => ({ botId, hint: '' })), ...rest].slice(0, 5)
+      speakList = [
+        ...forced.map((botId) => ({ botId, hint: '' })),
+        ...rest,
+      ].slice(0, 5)
     } else {
       // 4. 无 coordinator：被 mention 的发言；无 mention 则全体成员按 sort_order（最多 5 人）
-      speakList = (forced.length > 0 ? forced : members.slice(0, 5).map((m) => m.id)).map((botId) => ({
+      speakList = (
+        forced.length > 0 ? forced : members.slice(0, 5).map((m) => m.id)
+      ).map((botId) => ({
         botId,
         hint: '',
       }))
-      note = forced.length > 0 ? `已发消息给 ${speakList.length} 个 Bot` : '全体成员依次发言'
+      note =
+        forced.length > 0
+          ? `已发消息给 ${speakList.length} 个 Bot`
+          : '全体成员依次发言'
     }
 
     // 5. 写入一条 system 消息（note）
-    const sysMsg = db.insertMessage({ chat_id: chatId, sender_type: 'system', content: note || '协调中' })
+    const sysMsg = db.insertMessage({
+      chat_id: chatId,
+      sender_type: 'system',
+      content: note || '协调中',
+    })
     db.touchChat(chatId, Date.now())
     emit({ type: 'system-message', chatId, message: sysMsg })
     emit({ type: 'chat-updated', chatId })
@@ -226,13 +307,19 @@ export async function sendUserMessage(chatId: string, content: string, mentions:
       : undefined
 
   for (const item of speakList) {
+    if (signal.aborted) break
     const bot = db.getBot(item.botId)
     if (!bot) continue
-    await speakOne(chat.id, bot, text, item.hint, groupContext)
+    await speakOne(chat.id, bot, text, item.hint, groupContext, signal)
   }
 
   // 7. 全部完成后触发后台记忆提取
-  noteNewMessages(chatId, members.map((m) => m.id), 1 + speakList.length)
+  if (!signal.aborted)
+    noteNewMessages(
+      chatId,
+      members.map((m) => m.id),
+      1 + speakList.length,
+    )
 }
 
 async function speakOne(
@@ -241,10 +328,14 @@ async function speakOne(
   userText: string,
   hint: string,
   groupContext?: GroupContext,
+  signal?: AbortSignal,
 ): Promise<void> {
   const memories = db.listMemories(bot.id, 30)
   const ctx: GroupContext | undefined = groupContext
-    ? { ...groupContext, otherMembers: groupContext.otherMembers.filter((m) => m.id !== bot.id) }
+    ? {
+        ...groupContext,
+        otherMembers: groupContext.otherMembers.filter((m) => m.id !== bot.id),
+      }
     : undefined
   const systemPrompt = buildSystemPrompt(bot, memories, ctx)
 
@@ -274,24 +365,50 @@ async function speakOne(
     content: '',
     status: 'streaming',
   })
+  emit({ type: 'message-start', chatId, message: placeholder })
 
   let acc = ''
-  await runAgent(chatId, bot, history, {
-    onDelta: (delta) => {
-      acc += delta
-      emit({ type: 'message-delta', chatId, messageId: placeholder.id, delta })
+  await runAgent(
+    chatId,
+    bot,
+    history,
+    {
+      onDelta: (delta) => {
+        acc += delta
+        emit({
+          type: 'message-delta',
+          chatId,
+          messageId: placeholder.id,
+          delta,
+        })
+      },
+      onDone: (full) => {
+        const finalContent = full || acc
+        const msg = db.updateMessage(placeholder.id, {
+          content: finalContent,
+          status: 'done',
+        })
+        db.touchChat(chatId, Date.now(), true)
+        emit({ type: 'message-done', chatId, message: msg })
+        emit({ type: 'chat-updated', chatId })
+      },
+      onError: (error) => {
+        const msg = db.updateMessage(placeholder.id, {
+          content: acc,
+          status: 'error',
+          error,
+        })
+        emit({ type: 'message-done', chatId, message: msg })
+        emit({ type: 'chat-updated', chatId })
+      },
     },
-    onDone: (full) => {
-      const finalContent = full || acc
-      const msg = db.updateMessage(placeholder.id, { content: finalContent, status: 'done' })
-      db.touchChat(chatId, Date.now(), true)
-      emit({ type: 'message-done', chatId, message: msg })
-      emit({ type: 'chat-updated', chatId })
-    },
-    onError: (error) => {
-      db.updateMessage(placeholder.id, { content: acc, status: 'error', error })
-      emit({ type: 'message-error', chatId, messageId: placeholder.id, error })
-      emit({ type: 'chat-updated', chatId })
-    },
-  })
+    { systemPrompt, signal },
+  )
+  if (signal?.aborted && db.getChat(chatId)) {
+    const msg = db.updateMessage(placeholder.id, {
+      content: acc,
+      status: 'stopped',
+    })
+    emit({ type: 'message-done', chatId, message: msg })
+  }
 }

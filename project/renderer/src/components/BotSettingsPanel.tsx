@@ -1,12 +1,12 @@
 // components/BotSettingsPanel.tsx — 右栏：Bot 设定 / 记忆 / 工作区
 import { useEffect, useRef, useState } from 'react'
 import type { Bot } from '@shared/types'
-import { api } from '../lib/api'
 import { useBotsStore } from '../stores/botsStore'
 import { useActiveChat } from '../stores/chatsStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useUiStore } from '../stores/uiStore'
 import { Avatar } from './Avatar'
+import { AvatarDialog } from './AvatarSettings'
 import { MemoryPanel } from './MemoryPanel'
 import { WorkspacePanel } from './WorkspacePanel'
 import { Field, Toggle, inputCls } from './controls'
@@ -79,7 +79,9 @@ function SettingsTab({ bot }: { bot: Bot }) {
   return (
     <div className="space-y-4 p-4">
       <div className="flex items-center justify-between">
-        <span className="text-[13px] text-stone-600 dark:text-stone-300">新消息通知</span>
+        <span className="text-[13px] text-stone-600 dark:text-stone-300">
+          新消息通知
+        </span>
         <Toggle checked={!!bot.notify} onChange={(v) => save({ notify: v })} />
       </div>
 
@@ -104,11 +106,21 @@ function SettingsTab({ bot }: { bot: Bot }) {
       />
 
       <div className="space-y-3 rounded-xl border border-stone-200 bg-stone-50 p-3.5 dark:border-stone-700 dark:bg-stone-800/50">
-        <div className="text-[12.5px] font-medium text-stone-600 dark:text-stone-300">模型配置</div>
+        <div className="text-[12.5px] font-medium text-stone-600 dark:text-stone-300">
+          模型配置
+        </div>
         <Field label="Provider">
           <div className="flex items-center gap-2">
             {bot.provider_id ? (
-              <ProviderIcon kind={providers.find((p) => p.id === bot.provider_id)?.kind ?? 'openai'} width={22} height={22} className="shrink-0" />
+              <ProviderIcon
+                kind={
+                  providers.find((p) => p.id === bot.provider_id)?.kind ??
+                  'openai'
+                }
+                width={22}
+                height={22}
+                className="shrink-0"
+              />
             ) : (
               <span className="h-[22px] w-[22px] shrink-0 rounded-md border border-dashed border-stone-300 dark:border-stone-600" />
             )}
@@ -129,13 +141,20 @@ function SettingsTab({ bot }: { bot: Bot }) {
         <BotField
           label="模型（留空用 Provider 默认）"
           value={bot.model}
-          placeholder={providers.find((p) => p.id === bot.provider_id)?.default_model || '如 gpt-4o'}
+          placeholder={
+            providers.find((p) => p.id === bot.provider_id)?.default_model ||
+            '如 gpt-4o'
+          }
           onSave={(v) => save({ model: v })}
         />
         <div>
           <div className="mb-1 flex items-center justify-between">
-            <span className="text-[12px] font-medium text-stone-500 dark:text-stone-400">Temperature</span>
-            <span className="text-[12px] tabular-nums text-stone-500 dark:text-stone-400">{temp.toFixed(1)}</span>
+            <span className="text-[12px] font-medium text-stone-500 dark:text-stone-400">
+              Temperature
+            </span>
+            <span className="text-[12px] tabular-nums text-stone-500 dark:text-stone-400">
+              {temp.toFixed(1)}
+            </span>
           </div>
           <input
             type="range"
@@ -157,9 +176,9 @@ export function BotSettingsPanel() {
   const rightPanelOpen = useUiStore((s) => s.rightPanelOpen)
   const bots = useBotsStore((s) => s.bots)
   const updateBot = useBotsStore((s) => s.updateBot)
-  const loadBots = useBotsStore((s) => s.loadBots)
   const [tab, setTab] = useState<Tab>('settings')
-  const [avatarBusy, setAvatarBusy] = useState(false)
+  const [avatarOpen, setAvatarOpen] = useState(false)
+  const [error, setError] = useState('')
 
   // 确定当前展示的 bot：单聊 = 会话 bot；群聊 = 被选中的成员
   const botId = chat?.type === 'dm' ? chat.bot_id : inspectedBotId
@@ -172,22 +191,12 @@ export function BotSettingsPanel() {
     return (
       <aside className="flex w-[320px] shrink-0 flex-col items-center justify-center gap-2 border-l border-stone-200 bg-stone-50/60 text-stone-400 dark:border-stone-800 dark:bg-stone-900/40">
         <p className="px-8 text-center text-[13px] leading-relaxed">
-          {chat.type === 'group' ? '点击群聊中某位成员的头像，即可查看与编辑它的设置' : '该会话没有关联 Bot'}
+          {chat.type === 'group'
+            ? '点击群聊中某位成员的头像，即可查看与编辑它的设置'
+            : '该会话没有关联 Bot'}
         </p>
       </aside>
     )
-  }
-
-  const pickAvatar = async () => {
-    setAvatarBusy(true)
-    try {
-      const path = await api.pickAvatar(bot.id)
-      if (path) await loadBots()
-    } catch {
-      /* 取消或失败 */
-    } finally {
-      setAvatarBusy(false)
-    }
   }
 
   const tabs: { id: Tab; label: string }[] = [
@@ -201,10 +210,10 @@ export function BotSettingsPanel() {
       {/* 头部：头像 + 名称 */}
       <div className="flex items-center gap-3 border-b border-stone-200 px-4 py-4 dark:border-stone-800">
         <button
-          onClick={() => void pickAvatar()}
-          disabled={avatarBusy}
+          onClick={() => setAvatarOpen(true)}
           className="group relative shrink-0"
-          title="更换头像"
+          title="设计头像"
+          aria-label="设计头像"
         >
           <Avatar name={bot.name} avatar={bot.avatar} size={52} />
           <span className="absolute inset-0 flex items-center justify-center rounded-full bg-black/35 text-white opacity-0 transition group-hover:opacity-100">
@@ -213,11 +222,15 @@ export function BotSettingsPanel() {
         </button>
         <div className="min-w-0 flex-1">
           <input
-            key={bot.id}
+            key={bot.id + bot.name}
+            aria-label="Bot 名称"
             defaultValue={bot.name}
             onBlur={(e) => {
               const v = e.target.value.trim()
-              if (v && v !== bot.name) void updateBot(bot.id, { name: v })
+              if (v && v !== bot.name)
+                void updateBot(bot.id, { name: v }).catch((e) =>
+                  setError(String(e)),
+                )
             }}
             onKeyDown={(e) => {
               if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
@@ -229,6 +242,20 @@ export function BotSettingsPanel() {
           </div>
         </div>
       </div>
+
+      <div className="px-5 py-3 text-[12px] text-stone-500">
+        <button onClick={() => setAvatarOpen(true)}>生成 / 更换头像 ↗</button>
+      </div>
+      {error && (
+        <p role="alert" className="px-5 pb-2 text-[12px] text-red-500">
+          {error}
+        </p>
+      )}
+      <AvatarDialog
+        bot={bot}
+        open={avatarOpen}
+        onClose={() => setAvatarOpen(false)}
+      />
 
       {/* Tabs */}
       <div className="flex border-b border-stone-200 px-3 dark:border-stone-800">

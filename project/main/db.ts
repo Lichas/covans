@@ -20,7 +20,12 @@ import type {
   Provider,
   ProviderInput,
   SenderType,
+  UserProfile,
+  UserMemory,
+  AgentThread,
+  AgentPrivateMessage,
 } from '../shared/types'
+import { emitEvent } from './events'
 
 export type Db = Database.Database
 
@@ -93,6 +98,35 @@ CREATE TABLE IF NOT EXISTS memories (
 );
 CREATE INDEX IF NOT EXISTS idx_memories_bot ON memories(bot_id, created_at);
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS user_memories (
+  id TEXT PRIMARY KEY,
+  content TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'fact',
+  source TEXT NOT NULL DEFAULT 'manual',
+  source_bot_id TEXT,
+  created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS agent_threads (
+  id TEXT PRIMARY KEY,
+  parent_chat_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+  origin_message_id TEXT NOT NULL,
+  from_bot_id TEXT NOT NULL,
+  to_bot_id TEXT NOT NULL,
+  subject TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'running',
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_agent_threads_chat ON agent_threads(parent_chat_id, created_at);
+CREATE TABLE IF NOT EXISTS agent_private_messages (
+  id TEXT PRIMARY KEY,
+  thread_id TEXT NOT NULL REFERENCES agent_threads(id) ON DELETE CASCADE,
+  sender_bot_id TEXT NOT NULL,
+  content TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'done',
+  error TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL
+);
 `
 
 /** 打开（必要时创建）数据库并执行 migration。dir 为 userData 目录。 */
@@ -116,28 +150,257 @@ export function newId(): string {
   return randomUUID()
 }
 
+export function getUserProfile(): UserProfile {
+  const empty: UserProfile = {
+    name: '',
+    role: '',
+    bio: '',
+    preferences: '',
+    goals: '',
+    boundaries: '',
+  }
+  try {
+    const saved = JSON.parse(getSetting('user_profile') || '{}')
+    for (const key of Object.keys(empty) as (keyof UserProfile)[])
+      if (typeof saved?.[key] === 'string')
+        empty[key] = saved[key].slice(0, 5000)
+    return empty
+  } catch {
+    return empty
+  }
+}
+
+export function saveUserProfile(value: UserProfile): UserProfile {
+  const profile = getUserProfile()
+  for (const key of Object.keys(profile) as (keyof UserProfile)[]) {
+    if (typeof value[key] !== 'string' || value[key].length > 5000)
+      throw new Error('用户资料字段须为不超过 5000 字的文本')
+    profile[key] = value[key].trim()
+  }
+  setSetting('user_profile', JSON.stringify(profile))
+  emitEvent({ type: 'user-context-updated' })
+  return profile
+}
+
+export function listUserMemories(limit = 200): UserMemory[] {
+  return getDb()
+    .prepare('SELECT * FROM user_memories ORDER BY created_at DESC LIMIT ?')
+    .all(limit) as UserMemory[]
+}
+
+export function saveUserMemory(
+  content: string,
+  kind: MemoryKind = 'fact',
+  source: UserMemory['source'] = 'manual',
+  sourceBotId: string | null = null,
+  id?: string,
+): UserMemory {
+  const text = content.trim()
+  if (!text || text.length > 1000) throw new Error('记忆需要 1–1000 字')
+  if (!['fact', 'preference', 'summary'].includes(kind))
+    throw new Error('未知记忆类型')
+  const existing = listUserMemories(10000).find(
+    (m) =>
+      m.id !== id &&
+      m.content.replace(/\s/g, '').toLowerCase() ===
+        text.replace(/\s/g, '').toLowerCase(),
+  )
+  if (existing) {
+    if (id) throw new Error('已有相同内容的记忆，请修改内容或删除重复条目')
+    return existing
+  }
+  const memory: UserMemory = {
+    id: id || newId(),
+    content: text,
+    kind,
+    source,
+    source_bot_id: sourceBotId,
+    created_at: Date.now(),
+  }
+  if (id) {
+    const result = getDb()
+      .prepare(
+        "UPDATE user_memories SET content=?, kind=?, source='manual', source_bot_id=NULL WHERE id=?",
+      )
+      .run(text, kind, id)
+    if (!result.changes) throw new Error('记忆不存在')
+  } else
+    getDb()
+      .prepare(
+        'INSERT INTO user_memories(id, content, kind, source, source_bot_id, created_at) VALUES(?,?,?,?,?,?)',
+      )
+      .run(memory.id, text, kind, source, sourceBotId, memory.created_at)
+  emitEvent({ type: 'user-context-updated' })
+  return getDb()
+    .prepare('SELECT * FROM user_memories WHERE id=?')
+    .get(memory.id) as UserMemory
+}
+
+export function deleteUserMemory(id: string): void {
+  getDb().prepare('DELETE FROM user_memories WHERE id=?').run(id)
+  emitEvent({ type: 'user-context-updated' })
+}
+
+export function listAgentThreads(chatId: string): AgentThread[] {
+  return getDb()
+    .prepare(
+      'SELECT * FROM agent_threads WHERE parent_chat_id=? ORDER BY created_at',
+    )
+    .all(chatId) as AgentThread[]
+}
+
+export function getAgentThread(id: string): {
+  thread: AgentThread
+  messages: AgentPrivateMessage[]
+} {
+  const thread = getDb()
+    .prepare('SELECT * FROM agent_threads WHERE id=?')
+    .get(id) as AgentThread | undefined
+  if (!thread) throw new Error('私聊记录不存在')
+  const messages = getDb()
+    .prepare(
+      'SELECT * FROM agent_private_messages WHERE thread_id=? ORDER BY created_at, rowid',
+    )
+    .all(id) as AgentPrivateMessage[]
+  return { thread, messages }
+}
+
+export function createAgentThread(
+  parentChatId: string,
+  originMessageId: string,
+  fromBotId: string,
+  toBotId: string,
+  subject: string,
+): AgentThread {
+  const now = Date.now()
+  const thread: AgentThread = {
+    id: newId(),
+    parent_chat_id: parentChatId,
+    origin_message_id: originMessageId,
+    from_bot_id: fromBotId,
+    to_bot_id: toBotId,
+    subject,
+    status: 'running',
+    created_at: now,
+    updated_at: now,
+  }
+  getDb()
+    .prepare('INSERT INTO agent_threads VALUES(?,?,?,?,?,?,?,?,?)')
+    .run(
+      thread.id,
+      parentChatId,
+      originMessageId,
+      fromBotId,
+      toBotId,
+      subject,
+      'running',
+      now,
+      now,
+    )
+  return thread
+}
+
+export function addAgentPrivateMessage(
+  threadId: string,
+  botId: string,
+  content: string,
+  status: MessageStatus = 'done',
+): AgentPrivateMessage {
+  const message: AgentPrivateMessage = {
+    id: newId(),
+    thread_id: threadId,
+    sender_bot_id: botId,
+    content,
+    status,
+    error: '',
+    created_at: Date.now(),
+  }
+  getDb()
+    .prepare('INSERT INTO agent_private_messages VALUES(?,?,?,?,?,?,?)')
+    .run(message.id, threadId, botId, content, status, '', message.created_at)
+  return message
+}
+
+export function updateAgentPrivateMessage(
+  id: string,
+  content: string,
+  status: MessageStatus,
+  error = '',
+): void {
+  getDb()
+    .prepare(
+      'UPDATE agent_private_messages SET content=?, status=?, error=? WHERE id=?',
+    )
+    .run(content, status, error, id)
+}
+
+export function finishAgentThread(
+  id: string,
+  status: AgentThread['status'],
+): void {
+  getDb()
+    .prepare('UPDATE agent_threads SET status=?, updated_at=? WHERE id=?')
+    .run(status, Date.now(), id)
+}
+
 // ---------- row 映射 ----------
 
 interface ProviderRow {
-  id: string; name: string; kind: string; api_key: string; base_url: string
-  default_model: string; created_at: number
+  id: string
+  name: string
+  kind: string
+  api_key: string
+  base_url: string
+  default_model: string
+  created_at: number
 }
 interface BotRow {
-  id: string; name: string; avatar: string; description: string; tags: string
-  system_prompt: string; provider_id: string | null; model: string
-  temperature: number; max_tokens: number; workspace_dir: string
-  notify: number; is_coordinator: number; pinned: number; sort_order: number; created_at: number
+  id: string
+  name: string
+  avatar: string
+  description: string
+  tags: string
+  system_prompt: string
+  provider_id: string | null
+  model: string
+  temperature: number
+  max_tokens: number
+  workspace_dir: string
+  notify: number
+  is_coordinator: number
+  pinned: number
+  sort_order: number
+  created_at: number
 }
 interface ChatRow {
-  id: string; type: string; name: string; bot_id: string | null
-  coordinator_bot_id: string | null; last_message_at: number; unread: number; created_at: number
+  id: string
+  type: string
+  name: string
+  bot_id: string | null
+  coordinator_bot_id: string | null
+  last_message_at: number
+  unread: number
+  created_at: number
 }
 interface MessageRow {
-  id: string; chat_id: string; sender_type: string; sender_bot_id: string | null
-  content: string; attachments: string; mentions: string; status: string; error: string; created_at: number
+  id: string
+  chat_id: string
+  sender_type: string
+  sender_bot_id: string | null
+  content: string
+  attachments: string
+  mentions: string
+  status: string
+  error: string
+  created_at: number
 }
 interface MemoryRow {
-  id: string; bot_id: string; kind: string; content: string; source: string; created_at: number
+  id: string
+  bot_id: string
+  kind: string
+  content: string
+  source: string
+  created_at: number
 }
 
 function toProvider(r: ProviderRow): Provider {
@@ -172,33 +435,46 @@ function toMessage(r: MessageRow): Message {
   }
 }
 function toMemory(r: MemoryRow): Memory {
-  return { ...r, kind: r.kind as MemoryKind, source: r.source as Memory['source'] }
+  return {
+    ...r,
+    kind: r.kind as MemoryKind,
+    source: r.source as Memory['source'],
+  }
 }
 
 // ---------- providers ----------
 
 export function listProviders(): Provider[] {
-  const rows = getDb().prepare('SELECT * FROM providers ORDER BY created_at ASC').all() as ProviderRow[]
+  const rows = getDb()
+    .prepare('SELECT * FROM providers ORDER BY created_at ASC')
+    .all() as ProviderRow[]
   return rows.map(toProvider)
 }
 
 export function getProvider(id: string): Provider | null {
-  const r = getDb().prepare('SELECT * FROM providers WHERE id = ?').get(id) as ProviderRow | undefined
+  const r = getDb().prepare('SELECT * FROM providers WHERE id = ?').get(id) as
+    | ProviderRow
+    | undefined
   return r ? toProvider(r) : null
 }
 
 export function saveProvider(input: ProviderInput): Provider {
   const now = Date.now()
+  const baseUrl = normalizeProviderBaseUrl(input.kind, input.base_url ?? '')
   if (input.id) {
     const existing = getProvider(input.id)
     if (!existing) throw new Error('Provider 不存在')
     getDb()
-      .prepare('UPDATE providers SET name=?, kind=?, api_key=?, base_url=?, default_model=? WHERE id=?')
+      .prepare(
+        'UPDATE providers SET name=?, kind=?, api_key=?, base_url=?, default_model=? WHERE id=?',
+      )
       .run(
         input.name,
         input.kind,
         input.api_key ?? existing.api_key,
-        input.base_url ?? existing.base_url,
+        input.base_url === undefined
+          ? existing.base_url
+          : normalizeProviderBaseUrl(input.kind, input.base_url),
         input.default_model ?? existing.default_model,
         input.id,
       )
@@ -206,13 +482,41 @@ export function saveProvider(input: ProviderInput): Provider {
   }
   const id = newId()
   getDb()
-    .prepare('INSERT INTO providers (id,name,kind,api_key,base_url,default_model,created_at) VALUES (?,?,?,?,?,?,?)')
-    .run(id, input.name, input.kind, input.api_key ?? '', input.base_url ?? '', input.default_model ?? '', now)
+    .prepare(
+      'INSERT INTO providers (id,name,kind,api_key,base_url,default_model,created_at) VALUES (?,?,?,?,?,?,?)',
+    )
+    .run(
+      id,
+      input.name,
+      input.kind,
+      input.api_key ?? '',
+      baseUrl,
+      input.default_model ?? '',
+      now,
+    )
   return getProvider(id)!
 }
 
+function normalizeProviderBaseUrl(
+  kind: ProviderInput['kind'],
+  value: string,
+): string {
+  let base = value.trim().replace(/\/+$/, '')
+  if (!base) return ''
+  if (!/^https?:\/\//i.test(base))
+    throw new Error('Base URL 必须以 http:// 或 https:// 开头')
+  if (kind === 'openai-compatible') {
+    base = base.replace(/\/v1\/chat\/completions$/i, '/v1')
+    // LM Studio 原生 /api/v1/chat 不是 OpenAI 消息协议；切换到同服务的兼容入口。
+    base = base.replace(/\/api\/v1\/chat$/i, '/v1')
+  }
+  return base
+}
+
 export function deleteProvider(id: string): void {
-  getDb().prepare('UPDATE bots SET provider_id = NULL WHERE provider_id = ?').run(id)
+  getDb()
+    .prepare('UPDATE bots SET provider_id = NULL WHERE provider_id = ?')
+    .run(id)
   getDb().prepare('DELETE FROM providers WHERE id = ?').run(id)
 }
 
@@ -220,21 +524,29 @@ export function deleteProvider(id: string): void {
 
 export function listBots(): Bot[] {
   const rows = getDb()
-    .prepare('SELECT * FROM bots ORDER BY pinned DESC, sort_order ASC, created_at ASC')
+    .prepare(
+      'SELECT * FROM bots ORDER BY pinned DESC, sort_order ASC, created_at ASC',
+    )
     .all() as BotRow[]
   return rows.map(toBot)
 }
 
 export function getBot(id: string): Bot | null {
-  const r = getDb().prepare('SELECT * FROM bots WHERE id = ?').get(id) as BotRow | undefined
+  const r = getDb().prepare('SELECT * FROM bots WHERE id = ?').get(id) as
+    | BotRow
+    | undefined
   return r ? toBot(r) : null
 }
 
 export function createBot(input: BotInput): Bot {
+  if (input.pinned && listBots().filter((b) => b.pinned).length >= 3)
+    throw new Error('最多置顶 3 个 Bot，请先取消一个置顶')
   const id = newId()
   const now = Date.now()
   const maxSort = (
-    getDb().prepare('SELECT COALESCE(MAX(sort_order), 0) AS m FROM bots').get() as { m: number }
+    getDb()
+      .prepare('SELECT COALESCE(MAX(sort_order), 0) AS m FROM bots')
+      .get() as { m: number }
   ).m
   getDb()
     .prepare(
@@ -263,9 +575,23 @@ export function createBot(input: BotInput): Bot {
   return getBot(id)!
 }
 
-export function updateBot(id: string, patch: Partial<BotInput> & { avatar?: string }): Bot {
+export function updateBot(
+  id: string,
+  patch: Partial<BotInput> & { avatar?: string },
+): Bot {
   const existing = getBot(id)
   if (!existing) throw new Error('Bot 不存在')
+  if (
+    patch.pinned &&
+    !existing.pinned &&
+    listBots().filter((b) => b.pinned).length >= 3
+  )
+    throw new Error('最多置顶 3 个 Bot，请先取消一个置顶')
+  if (
+    patch.name !== undefined &&
+    (!patch.name.trim() || patch.name.length > 80)
+  )
+    throw new Error('Bot 名称需要 1–80 字')
   const merged: Bot = {
     ...existing,
     name: patch.name ?? existing.name,
@@ -273,13 +599,20 @@ export function updateBot(id: string, patch: Partial<BotInput> & { avatar?: stri
     description: patch.description ?? existing.description,
     tags: patch.tags ?? existing.tags,
     system_prompt: patch.system_prompt ?? existing.system_prompt,
-    provider_id: patch.provider_id === undefined ? existing.provider_id : patch.provider_id,
+    provider_id:
+      patch.provider_id === undefined
+        ? existing.provider_id
+        : patch.provider_id,
     model: patch.model ?? existing.model,
     temperature: patch.temperature ?? existing.temperature,
     max_tokens: patch.max_tokens ?? existing.max_tokens,
     notify: patch.notify === undefined ? existing.notify : patch.notify ? 1 : 0,
     is_coordinator:
-      patch.is_coordinator === undefined ? existing.is_coordinator : patch.is_coordinator ? 1 : 0,
+      patch.is_coordinator === undefined
+        ? existing.is_coordinator
+        : patch.is_coordinator
+          ? 1
+          : 0,
     pinned: patch.pinned === undefined ? existing.pinned : patch.pinned ? 1 : 0,
   }
   getDb()
@@ -288,10 +621,21 @@ export function updateBot(id: string, patch: Partial<BotInput> & { avatar?: stri
        model=?, temperature=?, max_tokens=?, notify=?, is_coordinator=?, pinned=? WHERE id=?`,
     )
     .run(
-      merged.name, merged.avatar, merged.description, merged.tags, merged.system_prompt,
-      merged.provider_id, merged.model, merged.temperature, merged.max_tokens,
-      merged.notify, merged.is_coordinator, merged.pinned, id,
+      merged.name,
+      merged.avatar,
+      merged.description,
+      merged.tags,
+      merged.system_prompt,
+      merged.provider_id,
+      merged.model,
+      merged.temperature,
+      merged.max_tokens,
+      merged.notify,
+      merged.is_coordinator,
+      merged.pinned,
+      id,
     )
+  emitEvent({ type: 'bot-updated', botId: id })
   return getBot(id)!
 }
 
@@ -300,10 +644,14 @@ export function deleteBot(id: string): void {
   const tx = d.transaction(() => {
     d.prepare('DELETE FROM chat_members WHERE bot_id = ?').run(id)
     d.prepare('DELETE FROM memories WHERE bot_id = ?').run(id)
-    d.prepare('UPDATE chats SET coordinator_bot_id = NULL WHERE coordinator_bot_id = ?').run(id)
-    const dmIds = (d.prepare("SELECT id FROM chats WHERE type='dm' AND bot_id=?").all(id) as { id: string }[]).map(
-      (r) => r.id,
-    )
+    d.prepare(
+      'UPDATE chats SET coordinator_bot_id = NULL WHERE coordinator_bot_id = ?',
+    ).run(id)
+    const dmIds = (
+      d
+        .prepare("SELECT id FROM chats WHERE type='dm' AND bot_id=?")
+        .all(id) as { id: string }[]
+    ).map((r) => r.id)
     for (const cid of dmIds) {
       d.prepare('DELETE FROM messages WHERE chat_id = ?').run(cid)
       d.prepare('DELETE FROM chat_members WHERE chat_id = ?').run(cid)
@@ -317,7 +665,9 @@ export function deleteBot(id: string): void {
 // ---------- chats ----------
 
 export function getChat(id: string): Chat | null {
-  const r = getDb().prepare('SELECT * FROM chats WHERE id = ?').get(id) as ChatRow | undefined
+  const r = getDb().prepare('SELECT * FROM chats WHERE id = ?').get(id) as
+    | ChatRow
+    | undefined
   return r ? toChat(r) : null
 }
 
@@ -339,15 +689,23 @@ export function listMemberBots(chatId: string): Bot[] {
 
 export function listChats(): ChatSummary[] {
   const rows = getDb()
-    .prepare('SELECT * FROM chats ORDER BY last_message_at DESC, created_at DESC')
+    .prepare(
+      'SELECT * FROM chats ORDER BY last_message_at DESC, created_at DESC',
+    )
     .all() as ChatRow[]
   const previewStmt = getDb().prepare(
     'SELECT content FROM messages WHERE chat_id = ? ORDER BY created_at DESC LIMIT 1',
   )
   return rows.map((r) => {
     const chat = toChat(r)
-    const preview = (previewStmt.get(chat.id) as { content: string } | undefined)?.content ?? ''
-    const member_bots = listMemberBots(chat.id).map((b) => ({ id: b.id, name: b.name, avatar: b.avatar }))
+    const preview =
+      (previewStmt.get(chat.id) as { content: string } | undefined)?.content ??
+      ''
+    const member_bots = listMemberBots(chat.id).map((b) => ({
+      id: b.id,
+      name: b.name,
+      avatar: b.avatar,
+    }))
     return { ...chat, preview, member_bots }
   })
 }
@@ -355,19 +713,29 @@ export function listChats(): ChatSummary[] {
 export function createDm(botId: string): Chat {
   // 同一 bot 的 dm 复用已有会话
   const existing = getDb()
-    .prepare("SELECT * FROM chats WHERE type='dm' AND bot_id = ? ORDER BY created_at ASC LIMIT 1")
+    .prepare(
+      "SELECT * FROM chats WHERE type='dm' AND bot_id = ? ORDER BY created_at ASC LIMIT 1",
+    )
     .get(botId) as ChatRow | undefined
   if (existing) return toChat(existing)
   const id = newId()
   const now = Date.now()
   getDb()
-    .prepare("INSERT INTO chats (id,type,name,bot_id,coordinator_bot_id,last_message_at,unread,created_at) VALUES (?,'dm','',?,NULL,0,0,?)")
+    .prepare(
+      "INSERT INTO chats (id,type,name,bot_id,coordinator_bot_id,last_message_at,unread,created_at) VALUES (?,'dm','',?,NULL,0,0,?)",
+    )
     .run(id, botId, now)
-  getDb().prepare('INSERT INTO chat_members (chat_id,bot_id,role) VALUES (?,?,?)').run(id, botId, 'member')
+  getDb()
+    .prepare('INSERT INTO chat_members (chat_id,bot_id,role) VALUES (?,?,?)')
+    .run(id, botId, 'member')
   return getChat(id)!
 }
 
-export function createGroup(name: string, memberBotIds: string[], coordinatorBotId?: string): Chat {
+export function createGroup(
+  name: string,
+  memberBotIds: string[],
+  coordinatorBotId?: string,
+): Chat {
   const id = newId()
   const now = Date.now()
   const d = getDb()
@@ -375,7 +743,9 @@ export function createGroup(name: string, memberBotIds: string[], coordinatorBot
     d.prepare(
       "INSERT INTO chats (id,type,name,bot_id,coordinator_bot_id,last_message_at,unread,created_at) VALUES (?,'group',?,NULL,?,0,0,?)",
     ).run(id, name, coordinatorBotId ?? null, now)
-    const ins = d.prepare('INSERT OR IGNORE INTO chat_members (chat_id,bot_id,role) VALUES (?,?,?)')
+    const ins = d.prepare(
+      'INSERT OR IGNORE INTO chat_members (chat_id,bot_id,role) VALUES (?,?,?)',
+    )
     for (const bid of memberBotIds) {
       ins.run(id, bid, bid === coordinatorBotId ? 'coordinator' : 'member')
     }
@@ -387,14 +757,19 @@ export function createGroup(name: string, memberBotIds: string[], coordinatorBot
   return getChat(id)!
 }
 
-export function updateChat(id: string, patch: { name?: string; coordinatorBotId?: string | null }): void {
+export function updateChat(
+  id: string,
+  patch: { name?: string; coordinatorBotId?: string | null },
+): void {
   const existing = getChat(id)
   if (!existing) throw new Error('会话不存在')
   getDb()
     .prepare('UPDATE chats SET name=?, coordinator_bot_id=? WHERE id=?')
     .run(
       patch.name ?? existing.name,
-      patch.coordinatorBotId === undefined ? existing.coordinator_bot_id : patch.coordinatorBotId,
+      patch.coordinatorBotId === undefined
+        ? existing.coordinator_bot_id
+        : patch.coordinatorBotId,
       id,
     )
 }
@@ -413,9 +788,15 @@ export function markRead(chatId: string): void {
   getDb().prepare('UPDATE chats SET unread = 0 WHERE id = ?').run(chatId)
 }
 
-export function touchChat(chatId: string, at: number, bumpUnread = false): void {
+export function touchChat(
+  chatId: string,
+  at: number,
+  bumpUnread = false,
+): void {
   getDb()
-    .prepare('UPDATE chats SET last_message_at = ?, unread = unread + ? WHERE id = ?')
+    .prepare(
+      'UPDATE chats SET last_message_at = ?, unread = unread + ? WHERE id = ?',
+    )
     .run(at, bumpUnread ? 1 : 0, chatId)
 }
 
@@ -456,7 +837,9 @@ export function insertMessage(input: InsertMessageInput): Message {
 }
 
 export function getMessage(id: string): Message | null {
-  const r = getDb().prepare('SELECT * FROM messages WHERE id = ?').get(id) as MessageRow | undefined
+  const r = getDb().prepare('SELECT * FROM messages WHERE id = ?').get(id) as
+    | MessageRow
+    | undefined
   return r ? toMessage(r) : null
 }
 
@@ -468,26 +851,56 @@ export function updateMessage(
   if (!existing) throw new Error('消息不存在')
   getDb()
     .prepare('UPDATE messages SET content=?, status=?, error=? WHERE id=?')
-    .run(patch.content ?? existing.content, patch.status ?? existing.status, patch.error ?? existing.error, id)
+    .run(
+      patch.content ?? existing.content,
+      patch.status ?? existing.status,
+      patch.error ?? existing.error,
+      id,
+    )
   return getMessage(id)!
 }
 
-export function listMessages(chatId: string, before?: number, limit = 50): Message[] {
+export function listMessages(
+  chatId: string,
+  before?: number,
+  limit = 50,
+): Message[] {
   const rows = (
     before !== undefined
       ? getDb()
-          .prepare('SELECT * FROM messages WHERE chat_id = ? AND created_at < ? ORDER BY created_at DESC LIMIT ?')
+          .prepare(
+            'SELECT * FROM messages WHERE chat_id = ? AND created_at < ? ORDER BY created_at DESC, rowid DESC LIMIT ?',
+          )
           .all(chatId, before, limit)
       : getDb()
-          .prepare('SELECT * FROM messages WHERE chat_id = ? ORDER BY created_at DESC LIMIT ?')
+          .prepare(
+            'SELECT * FROM messages WHERE chat_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?',
+          )
           .all(chatId, limit)
   ) as MessageRow[]
+  // Include every row at the boundary timestamp so timestamp pagination cannot skip ties.
+  const boundary = rows.at(-1)?.created_at
+  if (boundary !== undefined && rows.length === limit) {
+    const boundaryRows = getDb()
+      .prepare(
+        'SELECT * FROM messages WHERE chat_id = ? AND created_at = ? ORDER BY rowid DESC',
+      )
+      .all(chatId, boundary) as MessageRow[]
+    return [
+      ...rows.filter((row) => row.created_at !== boundary),
+      ...boundaryRows,
+    ]
+      .map(toMessage)
+      .reverse()
+  }
   return rows.map(toMessage).reverse()
 }
 
 export function listRecentMessages(chatId: string, limit: number): Message[] {
   const rows = getDb()
-    .prepare('SELECT * FROM messages WHERE chat_id = ? ORDER BY created_at DESC LIMIT ?')
+    .prepare(
+      'SELECT * FROM messages WHERE chat_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?',
+    )
     .all(chatId, limit) as MessageRow[]
   return rows.map(toMessage).reverse()
 }
@@ -495,7 +908,9 @@ export function listRecentMessages(chatId: string, limit: number): Message[] {
 /** 把 chat 里仍处在 streaming 状态的消息标记为 stopped（stopChat 用） */
 export function stopStreamingMessages(chatId: string): void {
   getDb()
-    .prepare("UPDATE messages SET status='stopped' WHERE chat_id = ? AND status = 'streaming'")
+    .prepare(
+      "UPDATE messages SET status='stopped' WHERE chat_id = ? AND status = 'streaming'",
+    )
     .run(chatId)
 }
 
@@ -503,17 +918,28 @@ export function stopStreamingMessages(chatId: string): void {
 
 export function listMemories(botId: string, limit = 100): Memory[] {
   const rows = getDb()
-    .prepare('SELECT * FROM memories WHERE bot_id = ? ORDER BY created_at DESC LIMIT ?')
+    .prepare(
+      'SELECT * FROM memories WHERE bot_id = ? ORDER BY created_at DESC LIMIT ?',
+    )
     .all(botId, limit) as MemoryRow[]
   return rows.map(toMemory)
 }
 
-export function addMemory(botId: string, content: string, kind: MemoryKind = 'fact', source: 'auto' | 'manual' = 'manual'): Memory {
+export function addMemory(
+  botId: string,
+  content: string,
+  kind: MemoryKind = 'fact',
+  source: 'auto' | 'manual' = 'manual',
+): Memory {
   const id = newId()
   getDb()
-    .prepare('INSERT INTO memories (id,bot_id,kind,content,source,created_at) VALUES (?,?,?,?,?,?)')
+    .prepare(
+      'INSERT INTO memories (id,bot_id,kind,content,source,created_at) VALUES (?,?,?,?,?,?)',
+    )
     .run(id, botId, kind, content, source, Date.now())
-  const r = getDb().prepare('SELECT * FROM memories WHERE id = ?').get(id) as MemoryRow
+  const r = getDb()
+    .prepare('SELECT * FROM memories WHERE id = ?')
+    .get(id) as MemoryRow
   return toMemory(r)
 }
 
@@ -524,12 +950,16 @@ export function deleteMemory(id: string): void {
 // ---------- settings ----------
 
 export function getSetting(key: string): string {
-  const r = getDb().prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined
+  const r = getDb()
+    .prepare('SELECT value FROM settings WHERE key = ?')
+    .get(key) as { value: string } | undefined
   return r?.value ?? ''
 }
 
 export function setSetting(key: string, value: string): void {
   getDb()
-    .prepare('INSERT INTO settings (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value')
+    .prepare(
+      'INSERT INTO settings (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+    )
     .run(key, value)
 }

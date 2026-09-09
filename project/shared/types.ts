@@ -91,7 +91,11 @@ export interface ChatSummary extends Chat {
 export type SenderType = 'user' | 'bot' | 'system'
 export type MessageStatus = 'streaming' | 'done' | 'error' | 'stopped'
 
-export interface Attachment { path: string; name: string; mime: string }
+export interface Attachment {
+  path: string
+  name: string
+  mime: string
+}
 
 export interface Message {
   id: string
@@ -125,7 +129,57 @@ export interface WorkspaceFile {
   mtime: number
 }
 
+export interface UserProfile {
+  name: string
+  role: string
+  bio: string
+  preferences: string
+  goals: string
+  boundaries: string
+}
+
+export interface UserMemory {
+  id: string
+  content: string
+  kind: MemoryKind
+  source: 'manual' | 'agent' | 'auto'
+  source_bot_id: string | null
+  created_at: number
+}
+
+export interface AgentThread {
+  id: string
+  parent_chat_id: string
+  origin_message_id: string
+  from_bot_id: string
+  to_bot_id: string
+  subject: string
+  status: 'running' | 'done' | 'error' | 'stopped'
+  created_at: number
+  updated_at: number
+}
+
+export interface AgentPrivateMessage {
+  id: string
+  thread_id: string
+  sender_bot_id: string
+  content: string
+  status: MessageStatus
+  error: string
+  created_at: number
+}
+
+export interface AvatarDesign {
+  prompt: string
+  style: 'portrait' | 'robot' | 'cat' | 'abstract'
+  palette: 'sage' | 'sand' | 'lavender' | 'ocean' | 'rose'
+}
+
 export type CovanEvent =
+  | { type: 'user-context-updated' }
+  | { type: 'agent-thread-updated'; chatId: string; threadId: string }
+  | { type: 'message-start'; chatId: string; message: Message }
+  | { type: 'generation-state'; chatId: string; generating: boolean }
   | { type: 'message-delta'; chatId: string; messageId: string; delta: string }
   | { type: 'message-done'; chatId: string; message: Message }
   | { type: 'message-error'; chatId: string; messageId: string; error: string }
@@ -140,6 +194,27 @@ export interface TestProviderResult {
 }
 
 export interface CovanApi {
+  getUserProfile(): Promise<UserProfile>
+  saveUserProfile(profile: UserProfile): Promise<UserProfile>
+  listUserMemories(): Promise<UserMemory[]>
+  saveUserMemory(
+    content: string,
+    kind?: MemoryKind,
+    id?: string,
+  ): Promise<UserMemory>
+  deleteUserMemory(id: string): Promise<void>
+  listAgentThreads(chatId: string): Promise<AgentThread[]>
+  getAgentThread(
+    id: string,
+  ): Promise<{ thread: AgentThread; messages: AgentPrivateMessage[] }>
+  startAgentConversation(
+    chatId: string,
+    fromBotId: string,
+    toBotId: string,
+    message: string,
+  ): Promise<string>
+  stopAgentConversation(threadId: string): Promise<void>
+  expandAvatarPrompt(botId: string, direction?: string): Promise<AvatarDesign>
   listProviders(): Promise<Provider[]>
   saveProvider(p: ProviderInput): Promise<Provider>
   deleteProvider(id: string): Promise<void>
@@ -151,17 +226,38 @@ export interface CovanApi {
   updateBot(id: string, patch: Partial<BotInput>): Promise<Bot>
   deleteBot(id: string): Promise<void>
   pickAvatar(botId: string): Promise<string>
-  generateAvatar(botId: string, prompt: string): Promise<string>
+  generateAvatar(
+    botId: string,
+    prompt: string,
+    mode?: 'local' | 'image' | 'auto',
+  ): Promise<string>
 
   listChats(): Promise<ChatSummary[]>
   createDm(botId: string): Promise<Chat>
-  createGroup(name: string, memberBotIds: string[], coordinatorBotId?: string): Promise<Chat>
-  updateChat(id: string, patch: { name?: string; coordinatorBotId?: string | null }): Promise<void>
+  createGroup(
+    name: string,
+    memberBotIds: string[],
+    coordinatorBotId?: string,
+  ): Promise<Chat>
+  updateChat(
+    id: string,
+    patch: { name?: string; coordinatorBotId?: string | null },
+  ): Promise<void>
   deleteChat(id: string): Promise<void>
   markRead(chatId: string): Promise<void>
+  exportChat(chatId: string): Promise<string | null>
+  writeClipboard(text: string): Promise<void>
 
-  listMessages(chatId: string, before?: number, limit?: number): Promise<Message[]>
-  sendUserMessage(chatId: string, content: string, mentions: string[]): Promise<void>
+  listMessages(
+    chatId: string,
+    before?: number,
+    limit?: number,
+  ): Promise<Message[]>
+  sendUserMessage(
+    chatId: string,
+    content: string,
+    mentions: string[],
+  ): Promise<void>
   stopChat(chatId: string): Promise<void>
 
   listMemories(botId: string): Promise<Memory[]>
@@ -179,5 +275,7 @@ export interface CovanApi {
 }
 
 declare global {
-  interface Window { covan: CovanApi }
+  interface Window {
+    covan: CovanApi
+  }
 }

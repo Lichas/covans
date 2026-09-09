@@ -1,147 +1,392 @@
-// components/ChatView.tsx — 中栏：会话头部 + 消息流 + Composer
-import { useEffect, useMemo, useRef } from 'react'
+import {
+  Fragment,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import type { Message } from '@shared/types'
 import { useBotMap } from '../stores/botsStore'
 import { useActiveChat } from '../stores/chatsStore'
 import { useMessagesStore } from '../stores/messagesStore'
 import { useUiStore } from '../stores/uiStore'
+import { useSettingsStore } from '../stores/settingsStore'
+import { useDraftsStore } from '../stores/draftsStore'
+import { api } from '../lib/api'
+import { formatMessageDay, messageDay } from '../lib/format'
 import { Composer } from './Composer'
 import { MessageBubble } from './MessageBubble'
 import { chatDisplayName } from './Sidebar'
-import { ChatIcon, ExpandIcon, UsersIcon } from './icons'
+import { Avatar } from './Avatar'
+import { WelcomeView } from './WelcomeView'
+import {
+  AgentConversationCard,
+  AgentConversationDialog,
+  StartAgentConversation,
+  useAgentThreads,
+} from './AgentConversations'
+import {
+  ArrowDownIcon,
+  DownloadIcon,
+  ExpandIcon,
+  ProviderIcon,
+  SparkIcon,
+  UsersIcon,
+} from './icons'
 
 export function ChatView() {
   const chat = useActiveChat()
   const botMap = useBotMap()
   const messagesByChat = useMessagesStore((s) => s.messages)
   const streaming = useMessagesStore((s) => s.streaming)
+  const generating = useMessagesStore((s) =>
+    chat ? !!s.generating[chat.id] : false,
+  )
+  const hasOlder = useMessagesStore((s) =>
+    chat ? !!s.hasOlder[chat.id] : false,
+  )
+  const loadingOlder = useMessagesStore((s) =>
+    chat ? !!s.loadingOlder[chat.id] : false,
+  )
+  const loadError = useMessagesStore((s) => (chat ? s.errors[chat.id] : ''))
+  const loaded = useMessagesStore((s) =>
+    chat ? !!s.loadedChats[chat.id] : false,
+  )
   const loadOlder = useMessagesStore((s) => s.loadOlder)
   const retry = useMessagesStore((s) => s.retry)
   const rightPanelOpen = useUiStore((s) => s.rightPanelOpen)
   const toggleRightPanel = useUiStore((s) => s.toggleRightPanel)
   const inspectBot = useUiStore((s) => s.inspectBot)
-
+  const providers = useSettingsStore((s) => s.providers)
   const scrollRef = useRef<HTMLDivElement>(null)
   const stickToBottom = useRef(true)
+  const historyAnchor = useRef<{
+    height: number
+    top: number
+    chatId: string
+  } | null>(null)
+  const [showJump, setShowJump] = useState(false)
+  const [exportState, setExportState] = useState('')
+  const [exporting, setExporting] = useState(false)
+  const [privateId, setPrivateId] = useState<string | null>(null)
+  const [startPrivate, setStartPrivate] = useState(false)
+  const privateThreads = useAgentThreads(chat?.id)
+  const messages = useMemo(() => {
+    if (!chat) return []
+    const final = messagesByChat[chat.id] ?? []
+    const ids = new Set(final.map((m) => m.id))
+    return [
+      ...final,
+      ...Object.values(streaming).filter(
+        (m) => m.chat_id === chat.id && !ids.has(m.id),
+      ),
+    ].sort((a, b) => a.created_at - b.created_at)
+  }, [chat, messagesByChat, streaming])
+  const lastContent = messages.at(-1)?.content
+  const bot = chat?.bot_id ? botMap.get(chat.bot_id) : undefined
+  const provider = providers.find((p) => p.id === bot?.provider_id)
 
-  const messages: Message[] = useMemo(
-    () => (chat ? messagesByChat[chat.id] ?? [] : []),
-    [chat, messagesByChat],
-  )
-  const streamingList = useMemo(
-    () =>
-      chat
-        ? Object.entries(streaming)
-            .filter(([, s]) => s.chatId === chat.id)
-            .map(([id, s]) => ({ id, content: s.content }))
-        : [],
-    [chat, streaming],
-  )
-  const streamSignature = streamingList.map((s) => s.content.length).join(',')
-
-  // 新消息 / 流式增量时贴底滚动
-  useEffect(() => {
-    const el = scrollRef.current
-    if (el && stickToBottom.current) el.scrollTop = el.scrollHeight
-  }, [messages.length, streamSignature, chat?.id])
-
-  // 切换会话后滚到底
-  useEffect(() => {
+  useLayoutEffect(() => {
     stickToBottom.current = true
-    const el = scrollRef.current
-    if (el) el.scrollTop = el.scrollHeight
+    historyAnchor.current = null
+    setShowJump(false)
+    setExportState('')
+    setPrivateId(null)
+    setStartPrivate(false)
   }, [chat?.id])
 
-  const onScroll = () => {
+  useLayoutEffect(() => {
     const el = scrollRef.current
     if (!el) return
-    stickToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 60
-    if (el.scrollTop < 40 && chat) void loadOlder(chat.id)
-  }
+    const anchor = historyAnchor.current
+    if (anchor && anchor.chatId === chat?.id) {
+      el.scrollTop = anchor.top + el.scrollHeight - anchor.height
+      historyAnchor.current = null
+    } else if (stickToBottom.current) el.scrollTop = el.scrollHeight
+  }, [
+    messages.length,
+    lastContent,
+    chat?.id,
+    generating,
+    privateThreads.length,
+  ])
 
-  if (!chat) {
-    return (
-      <section className="flex flex-1 flex-col items-center justify-center gap-3 text-stone-400">
-        <ChatIcon width={44} height={44} className="text-stone-300 dark:text-stone-600" />
-        <p className="text-[14px]">选择一个会话，或点击左上角 + 新建 Bot / 创建群聊</p>
-      </section>
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (
+        (e.metaKey || e.ctrlKey) &&
+        e.key === '.' &&
+        !document.querySelector('[role="dialog"]')
+      ) {
+        e.preventDefault()
+        toggleRightPanel()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [toggleRightPanel])
+
+  const quote = (message: Message) => {
+    if (!chat) return
+    const existing = useDraftsStore.getState().drafts[chat.id]?.text ?? ''
+    const quoted = message.content
+      .split('\n')
+      .map((line) => '> ' + line)
+      .join('\n')
+    useDraftsStore.getState().setDraft(chat.id, {
+      text: existing + (existing ? '\n\n' : '') + quoted + '\n\n',
+    })
+    requestAnimationFrame(() =>
+      document.getElementById('message-composer')?.focus(),
     )
   }
 
+  const older = async () => {
+    if (!chat || !scrollRef.current || loadingOlder) return
+    stickToBottom.current = false
+    historyAnchor.current = {
+      chatId: chat.id,
+      height: scrollRef.current.scrollHeight,
+      top: scrollRef.current.scrollTop,
+    }
+    const count = await loadOlder(chat.id)
+    if (!count) historyAnchor.current = null
+  }
+
+  if (!chat) return <WelcomeView />
   const isGroup = chat.type === 'group'
   const title = chatDisplayName(chat)
 
   return (
-    <section className="flex h-full min-w-0 flex-1 flex-col bg-white/40 dark:bg-stone-900/20">
-      {/* 头部 */}
+    <section className="chat-view">
       <header
-        className="flex items-center justify-between border-b border-stone-200 px-5 py-3 dark:border-stone-800"
+        className="chat-header"
         style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
       >
-        <div className="flex min-w-0 items-center gap-2.5">
-          <h1 className="truncate text-[15.5px] font-semibold text-stone-800 dark:text-stone-100">{title}</h1>
-          {isGroup && (
-            <span className="flex shrink-0 items-center gap-1 rounded-full bg-stone-200/70 px-2 py-0.5 text-[11px] text-stone-500 dark:bg-stone-700/70 dark:text-stone-300">
-              <UsersIcon width={12} height={12} />
-              {chat.member_bots.length} 个成员
+        <div className="flex min-w-0 items-center gap-3">
+          {isGroup ? (
+            <span className="header-group-icon">
+              <UsersIcon width={19} height={19} />
             </span>
+          ) : (
+            <Avatar name={title} avatar={bot?.avatar ?? ''} size={34} />
           )}
-        </div>
-        <button
-          onClick={toggleRightPanel}
-          style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
-          className={`flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[12.5px] transition ${
-            rightPanelOpen
-              ? 'bg-stone-200 text-stone-700 dark:bg-stone-700 dark:text-stone-200'
-              : 'text-stone-500 hover:bg-stone-100 dark:text-stone-400 dark:hover:bg-stone-800'
-          }`}
-          title={rightPanelOpen ? '收起设置' : '展开设置'}
-        >
-          <ExpandIcon width={15} height={15} />
-          {rightPanelOpen ? '收起设置' : '展开设置'}
-        </button>
-      </header>
-
-      {/* 消息流 */}
-      <div ref={scrollRef} onScroll={onScroll} className="scroll-thin flex-1 overflow-y-auto py-3">
-        {messages.map((m) => (
-          <MessageBubble
-            key={m.id}
-            message={m}
-            bot={m.sender_bot_id ? botMap.get(m.sender_bot_id) ?? null : null}
-            isGroup={isGroup}
-            onInspectBot={(botId) => inspectBot(botId)}
-            onRetry={(msg) => chat && void retry(chat.id, msg)}
-          />
-        ))}
-        {streamingList.map((s) => (
-          <MessageBubble
-            key={s.id}
-            streaming
-            isGroup={isGroup}
-            message={{
-              id: s.id,
-              chat_id: chat.id,
-              sender_type: 'bot',
-              sender_bot_id: null,
-              content: s.content,
-              attachments: [],
-              mentions: [],
-              status: 'streaming',
-              error: '',
-              created_at: Date.now(),
-            }}
-            bot={null}
-          />
-        ))}
-        {messages.length === 0 && streamingList.length === 0 && (
-          <div className="mt-24 text-center text-[13px] text-stone-400">
-            还没有消息，来说点什么吧
+          <div className="min-w-0">
+            <h1 className="truncate text-[14px] font-semibold">{title}</h1>
+            <div className="chat-subtitle">
+              {provider && (
+                <ProviderIcon kind={provider.kind} width={12} height={12} />
+              )}
+              {generating
+                ? isGroup
+                  ? '成员正在依次回复'
+                  : '正在回复…'
+                : isGroup
+                  ? `${chat.member_bots.length} 位成员 · 共享上下文`
+                  : bot?.model || provider?.default_model || '尚未配置模型'}
+            </div>
           </div>
+        </div>
+        <div
+          className="flex shrink-0 items-center gap-1"
+          style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+        >
+          <button
+            className="icon-button"
+            aria-label="发起 Agent 私聊"
+            title="让 Bot 们聊一聊"
+            onClick={() => setStartPrivate(true)}
+          >
+            <UsersIcon width={17} height={17} />
+          </button>
+          <button
+            className="icon-button"
+            aria-label="导出会话"
+            title="导出完整会话为 Markdown"
+            disabled={!messages.length || generating || exporting}
+            onClick={async () => {
+              setExporting(true)
+              try {
+                const path = await api.exportChat(chat.id)
+                setExportState(path ? '会话已导出' : '')
+              } catch (e) {
+                setExportState(String(e))
+              } finally {
+                setExporting(false)
+              }
+            }}
+          >
+            <DownloadIcon width={17} height={17} />
+          </button>
+          <button
+            className={`icon-button ${rightPanelOpen ? 'active' : ''}`}
+            onClick={toggleRightPanel}
+            aria-label={rightPanelOpen ? '收起设置' : '展开设置'}
+            title="Bot 设置 · ⌘."
+          >
+            <ExpandIcon width={17} height={17} />
+          </button>
+        </div>
+      </header>
+      {exportState && (
+        <div className="chat-notice" role="status">
+          {exportState}
+          <button onClick={() => setExportState('')}>关闭</button>
+        </div>
+      )}
+      <div className="message-scroll-wrap">
+        <div
+          ref={scrollRef}
+          className="message-scroll scroll-thin"
+          aria-label="聊天消息"
+          onScroll={() => {
+            const el = scrollRef.current
+            if (!el) return
+            const nearBottom =
+              el.scrollHeight - el.scrollTop - el.clientHeight < 100
+            stickToBottom.current = nearBottom
+            setShowJump(!nearBottom)
+          }}
+        >
+          <div className="message-column">
+            {hasOlder && (
+              <div className="history-button">
+                <button disabled={loadingOlder} onClick={() => void older()}>
+                  {loadingOlder ? '正在加载…' : '加载更早的消息'}
+                </button>
+              </div>
+            )}
+            {loadError && (
+              <div role="alert" className="chat-notice">
+                {loadError}
+                <button
+                  onClick={() =>
+                    void useMessagesStore.getState().loadMessages(chat.id)
+                  }
+                >
+                  重试
+                </button>
+              </div>
+            )}
+            {!loaded && !messages.length && !loadError && (
+              <div className="empty-chat">
+                <p>正在加载会话…</p>
+              </div>
+            )}
+            {loaded && messages.length === 0 && (
+              <div className="empty-chat">
+                <SparkIcon width={28} height={28} />
+                <h2>和{title}聊点什么？</h2>
+                <p>
+                  {bot?.description ||
+                    (isGroup
+                      ? '把不同视角聚在一起，让想法更进一步。'
+                      : '一个问题、一个灵感，都可以是开始。')}
+                </p>
+                <div className="suggestion-list">
+                  {[
+                    '介绍一下你自己',
+                    '帮我梳理一个想法',
+                    '我们一起制定一个计划',
+                  ].map((prompt) => (
+                    <button
+                      key={prompt}
+                      onClick={() => {
+                        useDraftsStore
+                          .getState()
+                          .setDraft(chat.id, { text: prompt })
+                        document.getElementById('message-composer')?.focus()
+                      }}
+                    >
+                      {prompt}
+                      <span>↗</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+            {privateThreads
+              .filter(
+                (t) => !messages.some((m) => m.id === t.origin_message_id),
+              )
+              .map((t) => (
+                <AgentConversationCard
+                  key={t.id}
+                  thread={t}
+                  onOpen={() => setPrivateId(t.id)}
+                />
+              ))}
+            {messages.map((m, i) => (
+              <Fragment key={m.id}>
+                {(i === 0 ||
+                  messageDay(messages[i - 1].created_at) !==
+                    messageDay(m.created_at)) && (
+                  <div className="date-divider">
+                    <span>{formatMessageDay(m.created_at)}</span>
+                  </div>
+                )}
+                <MessageBubble
+                  message={m}
+                  bot={
+                    m.sender_bot_id
+                      ? (botMap.get(m.sender_bot_id) ?? null)
+                      : null
+                  }
+                  isGroup={isGroup}
+                  streaming={m.status === 'streaming'}
+                  busy={generating}
+                  onInspectBot={inspectBot}
+                  onRetry={(msg) => void retry(chat.id, msg)}
+                  onQuote={quote}
+                />
+                {privateThreads
+                  .filter((t) => t.origin_message_id === m.id)
+                  .map((t) => (
+                    <AgentConversationCard
+                      key={t.id}
+                      thread={t}
+                      onOpen={() => setPrivateId(t.id)}
+                    />
+                  ))}
+              </Fragment>
+            ))}
+            {generating && !messages.some((m) => m.status === 'streaming') && (
+              <div className="waiting-turn" role="status">
+                <span className="status-dot" />
+                {isGroup ? '正在安排成员发言…' : '正在准备回复…'}
+              </div>
+            )}
+          </div>
+        </div>
+        {showJump && (
+          <button
+            className="jump-button"
+            aria-label="回到最新消息"
+            onClick={() => {
+              stickToBottom.current = true
+              scrollRef.current?.scrollTo({
+                top: scrollRef.current.scrollHeight,
+                behavior: 'smooth',
+              })
+            }}
+          >
+            <ArrowDownIcon width={16} height={16} />
+            回到最新
+          </button>
         )}
       </div>
-
-      <Composer chat={chat} />
+      <Composer key={chat.id} chat={chat} />
+      <StartAgentConversation
+        chat={chat}
+        open={startPrivate}
+        onClose={() => setStartPrivate(false)}
+        onStarted={setPrivateId}
+      />
+      <AgentConversationDialog
+        threadId={privateId}
+        onClose={() => setPrivateId(null)}
+      />
     </section>
   )
 }

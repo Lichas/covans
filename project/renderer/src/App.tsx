@@ -12,6 +12,7 @@ import { useMessagesStore } from './stores/messagesStore'
 import { useSettingsStore } from './stores/settingsStore'
 import { useUiStore } from './stores/uiStore'
 import { api } from './lib/api'
+import { UserProfileDialog } from './components/UserProfileDialog'
 
 export default function App() {
   const setNewBotOpen = useUiStore((s) => s.setNewBotOpen)
@@ -33,7 +34,8 @@ export default function App() {
           void useChatsStore.getState().loadChats()
           // 当前会话的已落库消息（如用户消息回写）同步刷新
           const { activeChatId } = useChatsStore.getState()
-          if (activeChatId === ev.chatId) void useMessagesStore.getState().loadMessages(ev.chatId)
+          if (activeChatId === ev.chatId)
+            void useMessagesStore.getState().loadMessages(ev.chatId)
           break
         }
         case 'message-done':
@@ -44,6 +46,7 @@ export default function App() {
         }
         case 'bot-updated': {
           void useBotsStore.getState().refreshBot(ev.botId)
+          void useChatsStore.getState().loadChats()
           break
         }
         default:
@@ -58,12 +61,16 @@ export default function App() {
     const onKey = (e: KeyboardEvent) => {
       const mod = e.metaKey || e.ctrlKey
       if (!mod) return
+      if (document.querySelector('[role="dialog"]')) return
       if (e.key === '1') {
         e.preventDefault()
         setNewBotOpen(true)
       } else if (e.key === '2') {
         e.preventDefault()
         setNewGroupOpen(true)
+      } else if (e.key === ',') {
+        e.preventDefault()
+        useUiStore.getState().setSettingsOpen(true)
       }
     }
     window.addEventListener('keydown', onKey)
@@ -78,6 +85,7 @@ export default function App() {
       <SettingsModal />
       <NewBotDialog />
       <NewGroupDialog />
+      <UserProfileDialog />
     </div>
   )
 }

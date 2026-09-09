@@ -3,6 +3,9 @@ import { create } from 'zustand'
 import type { Chat, ChatSummary } from '@shared/types'
 import { api } from '../lib/api'
 import { useMessagesStore } from './messagesStore'
+import { useDraftsStore } from './draftsStore'
+
+let restored = false
 
 interface ChatsState {
   chats: ChatSummary[]
@@ -10,8 +13,15 @@ interface ChatsState {
   loadChats: () => Promise<void>
   selectChat: (id: string | null) => Promise<void>
   createDm: (botId: string) => Promise<Chat>
-  createGroup: (name: string, memberBotIds: string[], coordinatorBotId?: string) => Promise<Chat>
-  updateChat: (id: string, patch: { name?: string; coordinatorBotId?: string | null }) => Promise<void>
+  createGroup: (
+    name: string,
+    memberBotIds: string[],
+    coordinatorBotId?: string,
+  ) => Promise<Chat>
+  updateChat: (
+    id: string,
+    patch: { name?: string; coordinatorBotId?: string | null },
+  ) => Promise<void>
   deleteChat: (id: string) => Promise<void>
 }
 
@@ -21,7 +31,19 @@ export const useChatsStore = create<ChatsState>((set, get) => ({
 
   loadChats: async () => {
     try {
-      set({ chats: await api.listChats() })
+      const chats = await api.listChats()
+      const active = get().activeChatId
+      if (active && chats.some((c) => c.id === active && c.unread > 0))
+        void api.markRead(active).catch(() => undefined)
+      set({
+        chats: chats.map((c) => (c.id === active ? { ...c, unread: 0 } : c)),
+      })
+      if (!restored) {
+        restored = true
+        const last = localStorage.getItem('covan-active-chat')
+        if (last && chats.some((c) => c.id === last))
+          await get().selectChat(last)
+      }
     } catch {
       /* 主进程未就绪时静默 */
     }
@@ -29,9 +51,13 @@ export const useChatsStore = create<ChatsState>((set, get) => ({
 
   selectChat: async (id) => {
     set({ activeChatId: id })
+    if (id) localStorage.setItem('covan-active-chat', id)
+    else localStorage.removeItem('covan-active-chat')
     if (!id) return
     // 乐观清除未读
-    set({ chats: get().chats.map((c) => (c.id === id ? { ...c, unread: 0 } : c)) })
+    set({
+      chats: get().chats.map((c) => (c.id === id ? { ...c, unread: 0 } : c)),
+    })
     void api.markRead(id).catch(() => undefined)
     await useMessagesStore.getState().loadMessages(id)
   },
@@ -58,7 +84,11 @@ export const useChatsStore = create<ChatsState>((set, get) => ({
   deleteChat: async (id) => {
     await api.deleteChat(id)
     const wasActive = get().activeChatId === id
-    if (wasActive) set({ activeChatId: null })
+    if (wasActive) {
+      set({ activeChatId: null })
+      localStorage.removeItem('covan-active-chat')
+    }
+    useDraftsStore.getState().clearDraft(id)
     await get().loadChats()
   },
 }))

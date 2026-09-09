@@ -12,10 +12,30 @@ export interface GroupContext {
 /**
  * 注入拼接：bot.system_prompt + 最近 30 条记忆 + 群聊上下文指令。
  */
-export function buildSystemPrompt(bot: Bot, memories: Memory[], groupContext?: GroupContext): string {
+export function buildSystemPrompt(
+  bot: Bot,
+  memories: Memory[],
+  groupContext?: GroupContext,
+): string {
   const parts: string[] = []
   const base = bot.system_prompt.trim()
-  parts.push(base || `你是 ${bot.name}。${bot.description || '请友好、简洁地用中文回复。'}`)
+  parts.push(
+    base ||
+      `你是 ${bot.name}。${bot.description || '请友好、简洁地用中文回复。'}`,
+  )
+  const profile = db.getUserProfile()
+  const about = Object.entries(profile)
+    .filter(([, value]) => value.trim())
+    .map(([key, value]) => `${key}: ${value}`)
+    .join('\n')
+  const sharedMemories = db.listUserMemories(60)
+  if (about || sharedMemories.length)
+    parts.push(
+      `## 关于用户（所有 Bot 共享）\n${about}\n${sharedMemories.map((m) => '- ' + m.content).join('\n')}\n用户当前明确表达优先于旧记忆，不要推测未提供的个人事实。`,
+    )
+  parts.push(
+    `## 应用能力\n你的 Bot ID 是 ${bot.id}，当前名称是「${bot.name}」。用户要求改名、修改设定或头像时，调用实际工具完成，不要只口头承诺。可以用 list_bots 查找其他 Bot，用 agent_private_chat 向另一位 Bot 咨询；私聊内容会在用户会话中留下可查看的记录。仅共享完成咨询所需的信息。用户明确要求记住的个人事实/偏好可以用 remember_user 保存。\n生图服务未配置时使用本地头像，并如实告知生成方式。`,
+  )
   if (memories.length > 0) {
     const items = memories
       .slice(0, 30)
@@ -24,7 +44,8 @@ export function buildSystemPrompt(bot: Bot, memories: Memory[], groupContext?: G
     parts.push(`## 你的长期记忆\n${items}`)
   }
   if (groupContext) {
-    const others = groupContext.otherMembers.map((m) => m.name).join('、') || '（无）'
+    const others =
+      groupContext.otherMembers.map((m) => m.name).join('、') || '（无）'
     parts.push(
       `## 群聊上下文\n你在群聊「${groupContext.chatName}」中，其他成员：${others}。` +
         `请用口语化中文简短回复，不要复述别人。`,
@@ -41,7 +62,11 @@ const counters = new Map<string, number>()
 /**
  * 记录新消息；每 bot 每 chat 累计 10 条新消息时触发一次自动提取（异步、失败静默）。
  */
-export function noteNewMessages(chatId: string, botIds: string[], count = 1): void {
+export function noteNewMessages(
+  chatId: string,
+  botIds: string[],
+  count = 1,
+): void {
   for (const botId of botIds) {
     const key = `${chatId}:${botId}`
     const n = (counters.get(key) ?? 0) + count
@@ -73,7 +98,10 @@ function isDuplicate(content: string, existing: Memory[]): boolean {
  * 自动提取：用该 bot 自己的 provider/model 调一次非流式 completion，
  * 要求输出 JSON 数组字符串，去重后入库。失败静默。
  */
-export async function extractMemories(bot: Bot, recentMessages: Message[]): Promise<number> {
+export async function extractMemories(
+  bot: Bot,
+  recentMessages: Message[],
+): Promise<number> {
   try {
     if (recentMessages.length === 0) return 0
     const transcript = recentMessages
@@ -105,7 +133,14 @@ export async function extractMemories(bot: Bot, recentMessages: Message[]): Prom
       if (!content || content.length > 200) continue
       if (isDuplicate(content, existing)) continue
       db.addMemory(bot.id, content, 'fact', 'auto')
-      existing.push({ id: '', bot_id: bot.id, kind: 'fact', content, source: 'auto', created_at: Date.now() })
+      existing.push({
+        id: '',
+        bot_id: bot.id,
+        kind: 'fact',
+        content,
+        source: 'auto',
+        created_at: Date.now(),
+      })
       added += 1
     }
     return added

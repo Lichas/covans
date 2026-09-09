@@ -18,7 +18,7 @@ Covan 是一个 macOS 风格三栏布局的桌面应用（Electron + React），
 - 数据库：better-sqlite3 ^11（主进程内，WAL 模式）
 - Agent runtime：pi-mono（具体包名与 API 见 §8，依据调研结果填写）
 - 构建：electron-vite build；打包说明用 electron-builder（README 中说明，不要求交付时产出安装包）
-- Node >= 20
+- Node >= 22.19（系统 Node 用于构建；原生模块及冒烟测试使用 Electron 的 ABI）
 
 ## 2. 进程架构
 
@@ -133,7 +133,8 @@ interface CovanApi {
   updateBot(id: string, patch: Partial<BotInput>): Promise<Bot>;
   deleteBot(id: string): Promise<void>;
   pickAvatar(botId: string): Promise<string>;          // 打开文件对话框，拷贝进 avatars/，返回路径
-  generateAvatar(botId: string, prompt: string): Promise<string>; // 调 provider 图像能力，可选实现；失败返回 ''
+  generateAvatar(botId: string, prompt: string, mode?: 'local'|'image'|'auto'): Promise<string>; // 返回保存路径；失败 reject
+  expandAvatarPrompt(botId: string, direction?: string): Promise<AvatarDesign>;
 
   // chats
   listChats(): Promise<ChatSummary[]>;                 // 含最后一条消息预览、未读、成员头像
@@ -142,6 +143,8 @@ interface CovanApi {
   updateChat(id: string, patch: { name?: string; coordinatorBotId?: string }): Promise<void>;
   deleteChat(id: string): Promise<void>;
   markRead(chatId: string): Promise<void>;
+  exportChat(chatId: string): Promise<string | null>;  -- 原生保存对话框，导出完整 Markdown 历史
+  writeClipboard(text: string): Promise<void>;        -- 原生剪贴板写入，不暴露读取接口
 
   // messages
   listMessages(chatId: string, before?: number, limit?: number): Promise<Message[]>;
@@ -167,6 +170,10 @@ interface CovanApi {
 }
 
 type CovanEvent =
+  | { type: 'user-context-updated' }
+  | { type: 'agent-thread-updated'; chatId: string; threadId: string }
+  | { type: 'message-start'; chatId: string; message: Message }
+  | { type: 'generation-state'; chatId: string; generating: boolean }
   | { type: 'message-delta'; chatId: string; messageId: string; delta: string }
   | { type: 'message-done'; chatId: string; message: Message }
   | { type: 'message-error'; chatId: string; messageId: string; error: string }
@@ -269,17 +276,17 @@ await agent.prompt(userText)   // agent.abort() 用于 stopChat
 
 **工作区工具（自研 3 个 AgentTool，不用 pi-coding-agent）**：`workspace_read` / `workspace_write` / `workspace_list`，参数 TypeBox `Type.Object({...})`，实现里把路径 resolve 到 `workspaces/<botId>/` 下并拒绝 `..` 逃逸。仅当 bot.system_prompt 非空标记为「工作型」或群聊场景时挂载？——简化为：**所有 bot 都挂载**，由人设决定是否使用。
 
-**Provider kind → pi 内置 provider 映射**：`openai→openAIProvider()`、`anthropic→anthropicProvider()`、`google→googleProvider()`、`openrouter→openrouterProvider()`、`kimi→createProvider(...)`（Kimi Coding Plan，模型从 `/v1/models` 动态拉取）、`zhipu→createProvider(...)`（智谱 OpenAI 兼容国内端点）、`deepseek→deepseekProvider()`、`openai-compatible→createProvider(...)`。`testProvider` 用一次 `models.complete(model, {messages:[{role:'user',content:'ping',timestamp:Date.now()}]}, {apiKey})` 验证。
+**Provider kind → pi 内置 provider 映射**：`openai→openAIProvider()`、`anthropic→anthropicProvider()`、`google→googleProvider()`、`openrouter→openrouterProvider()`、`kimi→createProvider(...)`（Kimi Coding Plan，模型从 `/v1/models` 动态拉取）、`zhipu→createProvider(...)`（智谱 OpenAI 兼容国内端点）、`deepseek→deepseekProvider()`、`openai-compatible→createProvider(...)`。`testProvider` 用一次 `models.complete(model, {messages:[{role:'user',content:'ping',timestamp:Date.now()}]}, {apiKey})` 验证。OpenAI-compatible 支持 API Key 留空的本地服务：模型目录请求不发送 Authorization，pi-agent-core 运行时使用不落库、无权限的占位值满足其非空校验。LM Studio 预设为 `http://localhost:1234/v1`；误填 `/api/v1/chat` 或 `/v1/chat/completions` 会规范到 `/v1`。Covan 使用支持自定义 tools 与完整历史的 `/v1/chat/completions`，不直接使用 LM Studio 原生 `/api/v1/chat`。
 
-**进行中任务表**：`Map<chatId, Set<AbortController>>`，`stopChat` 逐个 abort。
+**进行中任务表**：Agent 层维护 `Map<chatId, Set<AbortController>>`；编排层另外维护轮次级 AbortController。stopChat 同时取消协调者决策、当前 Agent 和后续群聊发言，保留当前已生成文本为 stopped 消息。generation-state 明确表示整个轮次是否结束。
 **Mock provider（冒烟测试）**：kind='mock' 时不走 pi，直接按名字模板生成流式假回复（`main/mockProvider.ts`）。
 
 ## 9. UI 规范（复刻参考截图）
 
-- 三栏：Sidebar 280px / ChatView 自适应 / BotSettingsPanel 320px（可收起）。
-- 浅色主题默认 + 跟随系统暗色（Tailwind `dark:` + `prefers-color-scheme`）。低饱和度、暖灰背景（#f5f5f4 / stone 系）、用户气泡近黑（#171717 白字）、bot 气泡浅灰（#f0f0ee）、圆角 18px。
-- Sidebar：搜索框；置顶区横排已 pin Bot 圆形头像（在线绿点）；会话列表项=头像(群聊显示叠头像+N角标)/名称/最后消息预览/时间/未读蓝点；底部「市场」「我的」占位；顶部「+」弹出菜单：新建 Bot(⌘1) / 创建群聊(⌘2)。
-- ChatView：顶部 bot/群名 + 右上角分享、展开设置按钮；消息流用户右侧黑气泡、bot 左侧带头像灰气泡；system 消息居中灰字胶囊；图片消息圆角卡片；流式打字中显示光标；Composer 底部圆角输入框（+ 附件按钮、@ 提及按钮在群聊时、发送键 Enter、Shift+Enter 换行）。
+- 三栏：Sidebar 256px / ChatView 自适应 / BotSettingsPanel 320px（默认收起）。
+- 跟随系统浅色/深色主题；暖白/炭灰背景、低饱和绿点缀；用户消息为紧凑浅灰气泡，Bot 回复使用宽阅读区域；代码和表格独立滚动。
+- Sidebar：搜索框；单聊列表项右键「置顶 / 取消置顶」，最多3个 Bot，数据库层同样校验；顶部仅在有置顶时显示横排圆形头像，不显示空槽位或添加入口。会话列表项=头像(群聊显示叠头像+N角标)/名称/最后消息预览/时间/未读蓝点；底部为「关于我」「我的 Bot」「新建群聊」「设置」；顶部「+」菜单新建 Bot(⌘1) / 创建群聊(⌘2)。
+- ChatView：顶部 Bot/群名、当前模型、完整会话导出和设置入口。消息显示作者、时间、跨日分隔；支持 Markdown、代码复制、原文复制、引用回复和错误重试。上翻阅读时不强制贴底，可手动回到最新；历史分页保持阅读位置。Composer 使用浮动圆角输入框、群聊 @ 提及、独立持久草稿与中文输入法保护。Enter 发送，Shift+Enter 换行。附件与图片消息为后续功能；远程 Markdown 图片显示为可点击链接。
 - BotSettingsPanel（右栏，单聊选中时显示）：头像、名称输入、标签、描述、通知开关、人设 system prompt 编辑、模型选择（provider + model + temperature）、记忆标签页、工作区标签页。
 - SettingsModal（通用）：账户占位、外观（主题跟随系统/浅色/深色、语言）、Bot（时区自动检测、自动审核开关 + 规则文本——审核规则作为自然语言注入 coordinator 决策前的检查）、Provider 管理（列表 + 新增/编辑表单 + 测试连接按钮）。
 - 新建 Bot 对话框：名称/人设模板下拉（开发分队四人、产品经理、设计师、虚拟女友「小美女」、空白自定义）/描述/provider/模型。
@@ -301,3 +308,14 @@ await agent.prompt(userText)   // agent.abort() 用于 stopChat
 
 - 完整源码（含本 SPEC.md、PRD.md、ARCHITECTURE.md、README.md）
 - 冒烟脚本：`npm run smoke`（用 mock provider 验证：建 bot→建群→发消息→收到 mock 回复→记忆写入）
+
+## 13. 用户背景、头像与 Agent 私聊（2026-09-08）
+
+- **关于我**：settings.user_profile 保存 name/role/bio/preferences/goals/boundaries；user_memories 保存 id/content/kind/source/source_bot_id/created_at。个人资料与最近60条共同记忆注入所有 Bot 后续 system prompt；资料编辑/共同记忆增删改经独立 IPC 通道保存，user-context-updated 通知刷新。用户界面标明本机保存与对话时发送模型服务的区别。
+- **应用工具**：list_bots、update_bot、expand_avatar_prompt、generate_bot_avatar、read_user_profile、remember_user、agent_private_chat。修改以用户明确要求为依据，不向模型返回 Provider 密钥。记忆需为用户直接表达的事实，不保存猜测或密钥。
+- **头像**：默认自动生成本地 SVG（人物/机器人/猫咪/抽象，5套柔和配色）；自定义上传不被自动刷新覆盖。可选择通过已有 Provider 扩写人设提示词。图片模式由 avatar_provider / avatar_model / avatar_base_url 配置，POST /images/generations 支持 base64 或 URL，限16MB、120秒。显式 image 未配置时报错，auto 未配置时使用 local，并返回实际模式。
+- **私聊数据**：agent_threads 关联 parent_chat_id、origin_message_id、from_bot_id、to_bot_id、subject、status 与时间；agent_private_messages 保存双方文本、状态、错误与时间。删除主会话级联删除对应私聊，关闭应用后不自动续跑网络任务。
+- **私聊执行**：一次咨询将问题发送给目标 Bot，接收方使用自己的人设/模型与工作区读取工具；不递归调用私聊或修改应用状态。每个主会话最多并发3个、每个用户轮次最多调用3次；可独立停止，也随主轮次停止。
+- **私聊界面**：自然语言工具触发后，卡片插在来源用户消息后；未加载来源消息时仍有入口。点击浮窗显示双方真实消息、Markdown、作者、时间、流式/失败/停止状态。聊天顶部双人按钮也可手动指定咨询问题，不自动转发整段主会话。
+- **IPC 契约**：getUserProfile / saveUserProfile / listUserMemories / saveUserMemory / deleteUserMemory；listAgentThreads / getAgentThread / startAgentConversation / stopAgentConversation；准确类型以 shared/types.ts 为准。
+- **启动与验证**：根目录 start.command 一键启动；npm run typecheck、npm run smoke、npm run test:ui、npm run test:context。UI 与工具测试均使用临时 profile；真实 pi 工具循环由本地 HTTP fixture 驱动，无付费 API 调用。

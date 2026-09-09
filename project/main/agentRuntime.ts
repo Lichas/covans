@@ -4,6 +4,7 @@ import {
   createModels,
   createProvider,
   envApiKeyAuth,
+  type ApiKeyAuth,
   type AssistantMessage,
   type Message as PiMessage,
   type Model,
@@ -22,6 +23,7 @@ import type { Bot, Provider } from '../shared/types'
 import * as db from './db'
 import { mockComplete, mockStream } from './mockProvider'
 import { createWorkspaceTools } from './workspace'
+import { createAppTools } from './agentTools'
 
 export interface AgentCallbacks {
   onDelta(delta: string): void
@@ -32,6 +34,7 @@ export interface AgentCallbacks {
 export interface RunAgentOptions {
   systemPrompt?: string
   signal?: AbortSignal
+  privateConversation?: boolean
 }
 
 // ---------- 进行中任务表（SPEC §8）：Map<chatId, Set<AbortController>> ----------
@@ -83,6 +86,18 @@ interface ResolvedModel {
 const KIMI_CODING_OPENAI_BASE_URL = 'https://api.kimi.com/coding/v1'
 const ZHIPU_OPENAI_BASE_URL = 'https://open.bigmodel.cn/api/paas/v4'
 
+/** pi 要求每个 Provider 声明鉴权语义；本地服务可明确声明为无需鉴权。 */
+function keylessApiAuth(): ApiKeyAuth {
+  return {
+    name: '无需鉴权',
+    check: async () => ({ type: 'api_key', source: '无需鉴权' }),
+    resolve: async ({ signal }) => {
+      signal.throwIfAborted()
+      return { auth: {}, source: '无需鉴权' }
+    },
+  }
+}
+
 function builtinProviderId(kind: Provider['kind']): string {
   switch (kind) {
     case 'openai':
@@ -114,10 +129,17 @@ export function resolveModel(bot: Bot): ResolvedModel {
   if (!modelId) throw new Error(`Provider「${provider.name}」未配置模型`)
 
   if (provider.kind === 'kimi') {
-    return resolveOpenAICompatibleModel(provider, modelId, KIMI_CODING_OPENAI_BASE_URL, true)
+    return resolveOpenAICompatibleModel(
+      provider,
+      modelId,
+      KIMI_CODING_OPENAI_BASE_URL,
+      true,
+    )
   }
   if (provider.kind === 'openai-compatible' || provider.kind === 'zhipu') {
-    const baseUrl = provider.base_url || (provider.kind === 'zhipu' ? ZHIPU_OPENAI_BASE_URL : '')
+    const baseUrl =
+      provider.base_url ||
+      (provider.kind === 'zhipu' ? ZHIPU_OPENAI_BASE_URL : '')
     if (!baseUrl) throw new Error(`Provider「${provider.name}」缺少 base_url`)
     return resolveOpenAICompatibleModel(provider, modelId, baseUrl, false)
   }
@@ -149,7 +171,9 @@ export function resolveModel(bot: Bot): ResolvedModel {
       .map((m) => m.id)
       .slice(0, 12)
       .join(', ')
-    throw new Error(`Provider「${provider.name}」下找不到模型 ${modelId}（可用：${available || '无'}）`)
+    throw new Error(
+      `Provider「${provider.name}」下找不到模型 ${modelId}（可用：${available || '无'}）`,
+    )
   }
   return { models, model, provider, apiKey }
 }
@@ -166,7 +190,11 @@ function resolveOpenAICompatibleModel(
     id: customId,
     name: provider.name,
     baseUrl,
-    auth: { apiKey: envApiKeyAuth('key', []) }, // key 在调用时显式传
+    auth: {
+      apiKey: provider.api_key
+        ? envApiKeyAuth('API Key', [])
+        : keylessApiAuth(),
+    }, // Key 在调用时显式传；本地服务允许无鉴权
     models: [
       {
         id: modelId,
@@ -177,9 +205,13 @@ function resolveOpenAICompatibleModel(
         reasoning,
         input: ['text', 'image'],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: provider.kind === 'kimi' && modelId === 'k3' ? 1048576 : 262144,
+        contextWindow:
+          provider.kind === 'kimi' && modelId === 'k3' ? 1048576 : 262144,
         maxTokens: 131072,
-        compat: { supportsDeveloperRole: false, supportsReasoningEffort: reasoning },
+        compat: {
+          supportsDeveloperRole: false,
+          supportsReasoningEffort: reasoning,
+        },
       },
     ],
     api: openAICompletionsApi(),
@@ -187,7 +219,17 @@ function resolveOpenAICompatibleModel(
   models.setProvider(custom)
   const model = models.getModel(customId, modelId)
   if (!model) throw new Error(`模型 ${modelId} 解析失败`)
-  return { models, model, provider, apiKey: provider.api_key || '' }
+  // pi-agent-core requires a non-empty value from getApiKey even when the
+  // endpoint itself is keyless. This local placeholder is not stored and has
+  // no authority; LM Studio accepts it like its documented `lm-studio` value.
+  return {
+    models,
+    model,
+    provider,
+    apiKey:
+      provider.api_key ||
+      (provider.kind === 'openai-compatible' ? 'covan-local' : ''),
+  }
 }
 
 function staticProviderModels(provider: Provider): string[] {
@@ -244,18 +286,36 @@ function extractModelIds(payload: unknown): string[] {
   const list = Array.isArray(payload)
     ? payload
     : payload && typeof payload === 'object'
-      ? ((payload as { data?: unknown; models?: unknown }).data ?? (payload as { models?: unknown }).models)
+      ? ((payload as { data?: unknown; models?: unknown }).data ??
+        (payload as { models?: unknown }).models)
       : []
   if (!Array.isArray(list)) return []
-  return [...new Set(list.map((item) => (typeof item === 'string' ? item : item && typeof item === 'object' && typeof (item as { id?: unknown }).id === 'string' ? (item as { id: string }).id : '')).filter(Boolean))]
+  return [
+    ...new Set(
+      list
+        .map((item) =>
+          typeof item === 'string'
+            ? item
+            : item &&
+                typeof item === 'object' &&
+                typeof (item as { id?: unknown }).id === 'string'
+              ? (item as { id: string }).id
+              : '',
+        )
+        .filter(Boolean),
+    ),
+  ]
 }
 
-async function fetchRemoteModelIds(baseUrl: string, apiKey: string): Promise<string[]> {
+async function fetchRemoteModelIds(
+  baseUrl: string,
+  apiKey: string,
+): Promise<string[]> {
   const url = `${baseUrl.replace(/\/+$/, '')}/models`
   const response = await fetch(url, {
     headers: {
       Accept: 'application/json',
-      Authorization: `Bearer ${apiKey}`,
+      ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
     },
   })
   if (!response.ok) throw new Error(`拉取模型失败：HTTP ${response.status}`)
@@ -265,10 +325,12 @@ async function fetchRemoteModelIds(baseUrl: string, apiKey: string): Promise<str
 }
 
 /** 拉取 Provider 当前账号可用模型；没有动态目录的内置 Provider 使用本地目录兜底。 */
-export async function listProviderModels(provider: Provider): Promise<string[]> {
+export async function listProviderModels(
+  provider: Provider,
+): Promise<string[]> {
   const fallback = staticProviderModels(provider)
   const baseUrl = remoteModelsBaseUrl(provider)
-  if (!baseUrl || !provider.api_key) return fallback
+  if (!baseUrl) return fallback
   try {
     return await fetchRemoteModelIds(baseUrl, provider.api_key)
   } catch (error) {
@@ -297,10 +359,11 @@ export async function runAgent(
   opts: RunAgentOptions = {},
 ): Promise<void> {
   const ctrl = new AbortController()
+  const onParentAbort = () => ctrl.abort()
   register(chatId, ctrl)
   if (opts.signal) {
     if (opts.signal.aborted) ctrl.abort()
-    else opts.signal.addEventListener('abort', () => ctrl.abort(), { once: true })
+    else opts.signal.addEventListener('abort', onParentAbort, { once: true })
   }
   try {
     if (isMockBot(bot)) {
@@ -308,7 +371,11 @@ export async function runAgent(
       return
     }
     await runPiAgent(chatId, bot, historyMessages, callbacks, opts, ctrl.signal)
+  } catch (e) {
+    if (!ctrl.signal.aborted)
+      callbacks.onError(e instanceof Error ? e.message : String(e))
   } finally {
+    opts.signal?.removeEventListener('abort', onParentAbort)
     unregister(chatId, ctrl)
   }
 }
@@ -329,9 +396,15 @@ async function runMockAgent(
   signal: AbortSignal,
 ): Promise<void> {
   const userText = lastUserText(historyMessages)
-  const full = await mockStream(bot, opts.systemPrompt ?? bot.system_prompt, userText, {
-    onDelta: callbacks.onDelta,
-  }, { signal })
+  const full = await mockStream(
+    bot,
+    opts.systemPrompt ?? bot.system_prompt,
+    userText,
+    {
+      onDelta: callbacks.onDelta,
+    },
+    { signal },
+  )
   if (signal.aborted) return // 已停止：消息保持 streaming，由 stopChat 标记 stopped
   callbacks.onDone(full)
 }
@@ -349,7 +422,14 @@ async function runPiAgent(
     initialState: {
       systemPrompt: opts.systemPrompt ?? bot.system_prompt,
       model,
-      tools: createWorkspaceTools(bot.id), // 所有 bot 都挂载工作区工具（SPEC §8）
+      tools: opts.privateConversation
+        ? createWorkspaceTools(bot.id).filter(
+            (tool) => tool.name !== 'workspace_write',
+          )
+        : [
+            ...createWorkspaceTools(bot.id),
+            ...createAppTools(bot.id, chatId, signal),
+          ],
       thinkingLevel: provider.kind === 'kimi' ? 'high' : 'off',
       messages: historyMessages,
     },
@@ -362,7 +442,10 @@ async function runPiAgent(
   const assistants: AssistantMessage[] = []
   let sawError: string | null = null
   const unsub = agent.subscribe((event) => {
-    if (event.type === 'message_update' && event.assistantMessageEvent.type === 'text_delta') {
+    if (
+      event.type === 'message_update' &&
+      event.assistantMessageEvent.type === 'text_delta'
+    ) {
       acc += event.assistantMessageEvent.delta
       callbacks.onDelta(event.assistantMessageEvent.delta)
     } else if (event.type === 'message_end') {
@@ -399,30 +482,55 @@ async function runPiAgent(
 
 // ---------- 非流式 completion（协调者决策 / 记忆提取 / testProvider） ----------
 
-export async function completeOnce(bot: Bot, systemPrompt: string, userText: string): Promise<string> {
-  if (isMockBot(bot)) return mockComplete(bot, systemPrompt, userText)
+export async function completeOnce(
+  bot: Bot,
+  systemPrompt: string,
+  userText: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  if (isMockBot(bot))
+    return mockComplete(bot, systemPrompt, userText, { signal })
   const { models, model, apiKey } = resolveModel(bot)
   const msg = await models.complete(
     model,
-    { systemPrompt, messages: [{ role: 'user', content: userText, timestamp: Date.now() }] },
-    { apiKey: apiKey || undefined },
+    {
+      systemPrompt,
+      messages: [{ role: 'user', content: userText, timestamp: Date.now() }],
+    },
+    { apiKey: apiKey || undefined, signal },
   )
-  if (msg.stopReason === 'error') throw new Error(msg.errorMessage || '调用失败')
+  if (msg.stopReason === 'error')
+    throw new Error(msg.errorMessage || '调用失败')
   return contentText(msg.content)
 }
 
 /** testProvider：用一次 ping completion 验证连通性 */
-export async function testProviderConnection(provider: Provider): Promise<{ ok: boolean; error?: string; models?: string[] }> {
+export async function testProviderConnection(
+  provider: Provider,
+): Promise<{ ok: boolean; error?: string; models?: string[] }> {
   try {
     if (provider.kind === 'mock') return { ok: true, models: ['mock-default'] }
     const modelIds = await listProviderModels(provider)
     const modelId = provider.default_model || modelIds[0]
-    if (!modelId) return { ok: false, error: '未找到可用模型，请先拉取模型或填写模型 ID' }
+    if (!modelId)
+      return { ok: false, error: '未找到可用模型，请先拉取模型或填写模型 ID' }
     const probe: Bot = {
-      id: '__probe__', name: provider.name, avatar: '', description: '', tags: '',
-      system_prompt: '', provider_id: provider.id, model: modelId,
-      temperature: 0.7, max_tokens: 4096, workspace_dir: '', notify: 0,
-      is_coordinator: 0, pinned: 0, sort_order: 0, created_at: 0,
+      id: '__probe__',
+      name: provider.name,
+      avatar: '',
+      description: '',
+      tags: '',
+      system_prompt: '',
+      provider_id: provider.id,
+      model: modelId,
+      temperature: 0.7,
+      max_tokens: 4096,
+      workspace_dir: '',
+      notify: 0,
+      is_coordinator: 0,
+      pinned: 0,
+      sort_order: 0,
+      created_at: 0,
     }
     const { models, model, apiKey } = resolveModel(probe)
     const msg = await models.complete(
@@ -430,7 +538,12 @@ export async function testProviderConnection(provider: Provider): Promise<{ ok: 
       { messages: [{ role: 'user', content: 'ping', timestamp: Date.now() }] },
       { apiKey: apiKey || undefined },
     )
-    if (msg.stopReason === 'error') return { ok: false, error: msg.errorMessage || '调用失败', models: modelIds }
+    if (msg.stopReason === 'error')
+      return {
+        ok: false,
+        error: msg.errorMessage || '调用失败',
+        models: modelIds,
+      }
     return { ok: true, models: modelIds }
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) }

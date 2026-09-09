@@ -4,11 +4,19 @@ import type { Provider, ProviderInput, ProviderKind } from '@shared/types'
 import { useSettingsStore, type ThemeMode } from '../stores/settingsStore'
 import { useUiStore } from '../stores/uiStore'
 import { Dialog } from './Dialog'
+import { AvatarSettingsSection } from './AvatarSettings'
 import { Field, Toggle, btnGhostCls, btnPrimaryCls, inputCls } from './controls'
-import { CheckIcon, PencilIcon, PlusIcon, ProviderIcon, TrashIcon, WarnIcon } from './icons'
+import {
+  CheckIcon,
+  PencilIcon,
+  PlusIcon,
+  ProviderIcon,
+  TrashIcon,
+  WarnIcon,
+} from './icons'
 import { getProviderPreset, PROVIDER_PRESETS } from '../lib/providers'
 
-type Section = 'general' | 'providers' | 'bot'
+type Section = 'general' | 'providers' | 'bot' | 'avatars'
 
 const PROVIDER_KINDS = PROVIDER_PRESETS
 
@@ -23,7 +31,9 @@ function GeneralSection() {
   return (
     <div className="space-y-5 p-5">
       <div>
-        <div className="mb-2 text-[13px] font-medium text-stone-700 dark:text-stone-200">外观主题</div>
+        <div className="mb-2 text-[13px] font-medium text-stone-700 dark:text-stone-200">
+          外观主题
+        </div>
         <div className="flex gap-2">
           {options.map((o) => (
             <button
@@ -41,22 +51,51 @@ function GeneralSection() {
         </div>
       </div>
       <div>
-        <div className="mb-2 text-[13px] font-medium text-stone-700 dark:text-stone-200">语言</div>
+        <div className="mb-2 text-[13px] font-medium text-stone-700 dark:text-stone-200">
+          语言
+        </div>
         <div className="rounded-lg border border-stone-200 bg-stone-50 px-3 py-2 text-[13px] text-stone-500 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-400">
           跟随系统（当前：中文）
         </div>
       </div>
       <div>
-        <div className="mb-2 text-[13px] font-medium text-stone-700 dark:text-stone-200">账户</div>
-        <div className="rounded-lg border border-dashed border-stone-300 px-3 py-3 text-[12.5px] text-stone-400 dark:border-stone-600">
-          本地应用，暂无账户体系（占位）
+        <div className="mb-2 text-[13px] font-medium text-stone-700 dark:text-stone-200">
+          关于 Covan
         </div>
+        <div className="rounded-lg border border-dashed border-stone-300 px-3 py-3 text-[12.5px] text-stone-400 dark:border-stone-600">
+          会话、Bot 设定和草稿保存在这台设备上。模型服务由你配置的 Provider
+          提供。
+        </div>
+      </div>
+      <div className="space-y-2 text-[12px] text-stone-500 dark:text-stone-400">
+        <div className="mb-3 font-medium text-stone-700 dark:text-stone-200">
+          键盘快捷键
+        </div>
+        {[
+          ['搜索会话', '⌘ K'],
+          ['新建 Bot', '⌘ 1'],
+          ['创建群聊', '⌘ 2'],
+          ['打开设置', '⌘ ,'],
+          ['切换 Bot 面板', '⌘ .'],
+          ['消息换行', 'Shift + Enter'],
+        ].map(([name, key]) => (
+          <div key={name} className="flex justify-between">
+            <span>{name}</span>
+            <kbd>{key}</kbd>
+          </div>
+        ))}
       </div>
     </div>
   )
 }
 
-function ProviderForm({ editing, onDone }: { editing: Provider | null; onDone: () => void }) {
+function ProviderForm({
+  editing,
+  onDone,
+}: {
+  editing: Provider | null
+  onDone: () => void
+}) {
   const saveProvider = useSettingsStore((s) => s.saveProvider)
   const listProviderModels = useSettingsStore((s) => s.listProviderModels)
   const testProvider = useSettingsStore((s) => s.testProvider)
@@ -69,12 +108,16 @@ function ProviderForm({ editing, onDone }: { editing: Provider | null; onDone: (
     default_model: editing?.default_model ?? '',
   })
   const [saving, setSaving] = useState(false)
-  const [testResult, setTestResult] = useState<{ ok: boolean; text: string } | null>(null)
+  const [testResult, setTestResult] = useState<{
+    ok: boolean
+    text: string
+  } | null>(null)
   const [testing, setTesting] = useState(false)
   const [loadingModels, setLoadingModels] = useState(false)
   const [modelOptions, setModelOptions] = useState<string[]>([])
 
-  const set = (patch: Partial<ProviderInput>) => setForm((f) => ({ ...f, ...patch }))
+  const set = (patch: Partial<ProviderInput>) =>
+    setForm((f) => ({ ...f, ...patch }))
   const needBaseUrl = form.kind === 'openai-compatible'
   const selectedPreset = getProviderPreset(form.kind)
 
@@ -83,9 +126,13 @@ function ProviderForm({ editing, onDone }: { editing: Provider | null; onDone: (
     setModelOptions([])
     set({
       kind,
-      base_url: !form.base_url || form.base_url === previousPreset.baseUrl ? getProviderPreset(kind).baseUrl : form.base_url,
+      base_url:
+        !form.base_url || form.base_url === previousPreset.baseUrl
+          ? getProviderPreset(kind).baseUrl
+          : form.base_url,
       default_model:
-        !form.default_model || form.default_model === previousPreset.defaultModel
+        !form.default_model ||
+        form.default_model === previousPreset.defaultModel
           ? getProviderPreset(kind).defaultModel
           : form.default_model,
     })
@@ -95,7 +142,10 @@ function ProviderForm({ editing, onDone }: { editing: Provider | null; onDone: (
     if (!form.name.trim()) return null
     setSaving(true)
     try {
-      const saved = await saveProvider({ ...form, id: providerId ?? editing?.id })
+      const saved = await saveProvider({
+        ...form,
+        id: providerId ?? editing?.id,
+      })
       setProviderId(saved.id)
       return saved
     } finally {
@@ -106,7 +156,8 @@ function ProviderForm({ editing, onDone }: { editing: Provider | null; onDone: (
   const applyModels = async (saved: Provider, models: string[]) => {
     setModelOptions(models)
     const current = form.default_model?.trim() ?? ''
-    const next = current && models.includes(current) ? current : models[0] ?? current
+    const next =
+      current && models.includes(current) ? current : (models[0] ?? current)
     if (next && next !== current) {
       const nextForm = { ...form, id: saved.id, default_model: next }
       setForm(nextForm)
@@ -125,7 +176,10 @@ function ProviderForm({ editing, onDone }: { editing: Provider | null; onDone: (
       }
       const models = await listProviderModels(saved.id)
       await applyModels(saved, models)
-      setTestResult({ ok: true, text: `已拉取 ${models.length} 个可用模型，请选择默认模型` })
+      setTestResult({
+        ok: true,
+        text: `已拉取 ${models.length} 个可用模型，请选择默认模型`,
+      })
     } catch (e) {
       setTestResult({ ok: false, text: String(e) })
     } finally {
@@ -146,7 +200,10 @@ function ProviderForm({ editing, onDone }: { editing: Provider | null; onDone: (
       if (r.models?.length) await applyModels(saved, r.models)
       setTestResult(
         r.ok
-          ? { ok: true, text: `连接成功${r.models?.length ? `（${r.models.length} 个可用模型）` : ''}` }
+          ? {
+              ok: true,
+              text: `连接成功${r.models?.length ? `（${r.models.length} 个可用模型）` : ''}`,
+            }
           : { ok: false, text: r.error || '连接失败' },
       )
     } catch (e) {
@@ -162,28 +219,48 @@ function ProviderForm({ editing, onDone }: { editing: Provider | null; onDone: (
         {editing ? '编辑 Provider' : '新增 Provider'}
       </div>
       <Field label="名称">
-        <input className={inputCls} value={form.name} onChange={(e) => set({ name: e.target.value })} placeholder="如：OpenAI 主账号" />
+        <input
+          className={inputCls}
+          value={form.name}
+          onChange={(e) => set({ name: e.target.value })}
+          placeholder="如：OpenAI 主账号"
+        />
       </Field>
       <Field label="类型">
         <div className="flex items-center gap-2">
-          <ProviderIcon kind={form.kind} width={22} height={22} className="shrink-0" />
-          <select className={`${inputCls} min-w-0 flex-1`} value={form.kind} onChange={(e) => changeKind(e.target.value as ProviderKind)}>
-          {PROVIDER_KINDS.map((k) => (
-            <option key={k.value} value={k.value}>
-              {k.label}
-            </option>
-          ))}
+          <ProviderIcon
+            kind={form.kind}
+            width={22}
+            height={22}
+            className="shrink-0"
+          />
+          <select
+            className={`${inputCls} min-w-0 flex-1`}
+            value={form.kind}
+            onChange={(e) => changeKind(e.target.value as ProviderKind)}
+          >
+            {PROVIDER_KINDS.map((k) => (
+              <option key={k.value} value={k.value}>
+                {k.label}
+              </option>
+            ))}
           </select>
         </div>
       </Field>
       {form.kind !== 'mock' && (
-        <Field label="API Key">
+        <Field
+          label={`API Key${form.kind === 'openai-compatible' ? '（本地服务可留空）' : ''}`}
+        >
           <input
             className={inputCls}
             type="password"
             value={form.api_key ?? ''}
             onChange={(e) => set({ api_key: e.target.value })}
-            placeholder="sk-…（仅保存在本地）"
+            placeholder={
+              form.kind === 'openai-compatible'
+                ? '本地无鉴权服务留空'
+                : 'sk-…（仅保存在本地）'
+            }
           />
         </Field>
       )}
@@ -192,9 +269,36 @@ function ProviderForm({ editing, onDone }: { editing: Provider | null; onDone: (
           className={inputCls}
           value={form.base_url ?? ''}
           onChange={(e) => set({ base_url: e.target.value })}
-          placeholder={selectedPreset.baseUrl || (needBaseUrl ? 'http://localhost:11434/v1' : '留空使用官方地址')}
+          placeholder={
+            selectedPreset.baseUrl ||
+            (needBaseUrl ? 'http://localhost:11434/v1' : '留空使用官方地址')
+          }
         />
       </Field>
+      {form.kind === 'openai-compatible' && (
+        <div className="flex items-start justify-between gap-3 rounded-lg border border-dashed border-stone-300 px-3 py-2.5 dark:border-stone-600">
+          <div className="min-w-0 text-[11.5px] leading-relaxed text-stone-500 dark:text-stone-400">
+            <strong className="block text-stone-700 dark:text-stone-200">
+              LM Studio 本地服务
+            </strong>
+            使用 OpenAI 兼容入口 /v1；不要填 /api/v1/chat 完整地址。
+          </div>
+          <button
+            type="button"
+            className={btnGhostCls + ' shrink-0'}
+            onClick={() =>
+              set({
+                name: form.name.trim() || 'LM Studio 本地',
+                api_key: '',
+                base_url: 'http://localhost:1234/v1',
+                default_model: '',
+              })
+            }
+          >
+            一键填写
+          </button>
+        </div>
+      )}
       <Field label="默认模型">
         <div className="flex gap-2">
           {modelOptions.length > 0 ? (
@@ -214,7 +318,11 @@ function ProviderForm({ editing, onDone }: { editing: Provider | null; onDone: (
               className={`${inputCls} min-w-0 flex-1`}
               value={form.default_model ?? ''}
               onChange={(e) => set({ default_model: e.target.value })}
-              placeholder={form.kind === 'kimi' ? '先点击「拉取模型」' : selectedPreset.defaultModel || '如 gpt-4o / claude-sonnet-4'}
+              placeholder={
+                form.kind === 'kimi'
+                  ? '先点击「拉取模型」'
+                  : selectedPreset.defaultModel || '如 gpt-4o / claude-sonnet-4'
+              }
             />
           )}
           <button
@@ -225,7 +333,11 @@ function ProviderForm({ editing, onDone }: { editing: Provider | null; onDone: (
             {loadingModels ? '拉取中…' : '拉取模型'}
           </button>
         </div>
-        {modelOptions.length > 0 && <div className="mt-1 text-[11.5px] text-stone-400">模型列表来自 Provider 当前账号</div>}
+        {modelOptions.length > 0 && (
+          <div className="mt-1 text-[11.5px] text-stone-400">
+            模型列表来自 Provider 当前账号
+          </div>
+        )}
       </Field>
 
       {testResult && (
@@ -249,14 +361,20 @@ function ProviderForm({ editing, onDone }: { editing: Provider | null; onDone: (
         <button className={btnGhostCls} onClick={onDone}>
           取消
         </button>
-        <button className={btnGhostCls} disabled={testing || loadingModels || saving} onClick={() => void onTest()}>
+        <button
+          className={btnGhostCls}
+          disabled={testing || loadingModels || saving}
+          onClick={() => void onTest()}
+        >
           {testing ? '测试中…' : '测试连接'}
         </button>
         <button
           className={btnPrimaryCls}
           disabled={saving || !form.name.trim()}
           onClick={() => {
-            void save().then((p) => p && onDone())
+            void save()
+              .then((p) => p && onDone())
+              .catch((e) => setTestResult({ ok: false, text: String(e) }))
           }}
         >
           保存
@@ -280,8 +398,13 @@ function ProvidersSection() {
   return (
     <div className="space-y-3 p-5">
       <div className="flex items-center justify-between">
-        <span className="text-[13px] text-stone-500 dark:text-stone-400">已配置 {providers.length} 个 Provider</span>
-        <button className={btnGhostCls + ' flex items-center gap-1'} onClick={() => setAdding(true)}>
+        <span className="text-[13px] text-stone-500 dark:text-stone-400">
+          已配置 {providers.length} 个 Provider
+        </span>
+        <button
+          className={btnGhostCls + ' flex items-center gap-1'}
+          onClick={() => setAdding(true)}
+        >
           <PlusIcon width={14} height={14} />
           新增
         </button>
@@ -295,11 +418,19 @@ function ProvidersSection() {
             key={p.id}
             className="flex items-center gap-3 rounded-xl border border-stone-200 bg-white px-3.5 py-3 dark:border-stone-700 dark:bg-stone-800"
           >
-            <ProviderIcon kind={p.kind} width={32} height={32} className="shrink-0" />
+            <ProviderIcon
+              kind={p.kind}
+              width={32}
+              height={32}
+              className="shrink-0"
+            />
             <div className="min-w-0 flex-1">
-              <div className="text-[13.5px] font-medium text-stone-800 dark:text-stone-100">{p.name}</div>
+              <div className="text-[13.5px] font-medium text-stone-800 dark:text-stone-100">
+                {p.name}
+              </div>
               <div className="mt-0.5 truncate text-[11.5px] text-stone-400">
-                {PROVIDER_KINDS.find((k) => k.value === p.kind)?.label ?? p.kind}
+                {PROVIDER_KINDS.find((k) => k.value === p.kind)?.label ??
+                  p.kind}
                 {p.default_model ? ` · 默认模型 ${p.default_model}` : ''}
               </div>
             </div>
@@ -316,7 +447,8 @@ function ProvidersSection() {
             <button
               className="rounded-md p-1.5 text-stone-400 transition hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-950/50"
               onClick={() => {
-                if (window.confirm(`确定删除 Provider「${p.name}」吗？`)) void deleteProvider(p.id)
+                if (window.confirm(`确定删除 Provider「${p.name}」吗？`))
+                  void deleteProvider(p.id)
               }}
               aria-label="删除"
             >
@@ -345,16 +477,27 @@ function BotSection() {
   return (
     <div className="space-y-5 p-5">
       <div className="flex items-center justify-between rounded-xl border border-stone-200 px-3.5 py-3 dark:border-stone-700">
-        <span className="text-[13px] text-stone-700 dark:text-stone-200">时区</span>
-        <span className="text-[13px] text-stone-500 dark:text-stone-400">{timezone}（自动检测）</span>
+        <span className="text-[13px] text-stone-700 dark:text-stone-200">
+          时区
+        </span>
+        <span className="text-[13px] text-stone-500 dark:text-stone-400">
+          {timezone}（自动检测）
+        </span>
       </div>
       <div className="space-y-3 rounded-xl border border-stone-200 px-3.5 py-3 dark:border-stone-700">
         <div className="flex items-center justify-between">
           <div>
-            <div className="text-[13px] text-stone-700 dark:text-stone-200">群聊发言自动审核</div>
-            <div className="mt-0.5 text-[11.5px] text-stone-400">协调 Bot 决策前先按规则检查</div>
+            <div className="text-[13px] text-stone-700 dark:text-stone-200">
+              群聊发言自动审核
+            </div>
+            <div className="mt-0.5 text-[11.5px] text-stone-400">
+              协调 Bot 决策前先按规则检查
+            </div>
           </div>
-          <Toggle checked={autoReview} onChange={(v) => void setSettingValue('auto_review', v ? '1' : '0')} />
+          <Toggle
+            checked={autoReview}
+            onChange={(v) => void setSettingValue('auto_review', v ? '1' : '0')}
+          />
         </div>
         {autoReview && (
           <textarea
@@ -380,10 +523,16 @@ export function SettingsModal() {
     { id: 'general', label: '通用' },
     { id: 'providers', label: 'Provider' },
     { id: 'bot', label: 'Bot' },
+    { id: 'avatars', label: '头像生成' },
   ]
 
   return (
-    <Dialog open={open} title="设置" width="w-[560px]" onClose={() => setOpen(false)}>
+    <Dialog
+      open={open}
+      title="设置"
+      width="w-[560px]"
+      onClose={() => setOpen(false)}
+    >
       <div className="flex border-b border-stone-200 px-4 dark:border-stone-700">
         {sections.map((s) => (
           <button
@@ -405,6 +554,7 @@ export function SettingsModal() {
       {section === 'general' && <GeneralSection />}
       {section === 'providers' && <ProvidersSection />}
       {section === 'bot' && <BotSection />}
+      {section === 'avatars' && <AvatarSettingsSection />}
     </Dialog>
   )
 }

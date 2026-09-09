@@ -6,12 +6,14 @@ export function formatChatTime(ts: number): string {
   if (!ts) return ''
   const d = new Date(ts)
   const now = new Date()
-  const startOfDay = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime()
+  const startOfDay = (x: Date) =>
+    new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime()
   const dayDiff = Math.floor((startOfDay(now) - startOfDay(d)) / 86400000)
   const hhmm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
   if (dayDiff <= 0) return hhmm
   if (dayDiff === 1) return '昨天'
-  if (dayDiff < 7) return ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][d.getDay()]
+  if (dayDiff < 7)
+    return ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][d.getDay()]
   const md = `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
   if (d.getFullYear() === now.getFullYear()) return md
   return `${d.getFullYear()}-${md}`
@@ -27,6 +29,32 @@ export function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+}
+
+export function formatMessageTime(ts: number): string {
+  return new Date(ts).toLocaleTimeString('zh-CN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  })
+}
+
+export function messageDay(ts: number): string {
+  const d = new Date(ts)
+  return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`
+}
+
+export function formatMessageDay(ts: number): string {
+  if (messageDay(ts) === messageDay(Date.now())) return '今天'
+  const yesterday = new Date()
+  yesterday.setDate(yesterday.getDate() - 1)
+  if (messageDay(ts) === messageDay(yesterday.getTime())) return '昨天'
+  return new Date(ts).toLocaleDateString('zh-CN', {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+    weekday: 'long',
+  })
 }
 
 /** bot 名字首字占位头像的固定配色（按名字哈希取色，低饱和暖色） */
@@ -54,15 +82,27 @@ export function botInitial(name: string): string {
 /**
  * bot.avatar 是「相对 userData 的路径」或「emoji:xx 内置头像 id」。
  * 渲染层无法直接拼 userData 绝对路径，约定通过主进程注册的
- * covan-avatar://<path> 协议加载；emoji: 前缀直接展示字符。
+ * covan-avatar://local/avatars/<path> 协议加载；emoji: 前缀直接展示字符。
  */
-export function avatarSrc(avatar: string): { kind: 'emoji'; char: string } | { kind: 'url'; url: string } | { kind: 'none' } {
+export function avatarSrc(
+  avatar: string,
+):
+  | { kind: 'emoji'; char: string }
+  | { kind: 'url'; url: string }
+  | { kind: 'none' } {
   if (!avatar) return { kind: 'none' }
-  if (avatar.startsWith('emoji:')) return { kind: 'emoji', char: avatar.slice('emoji:'.length) }
-  return { kind: 'url', url: `covan-avatar://${encodeURIComponent(avatar)}` }
+  if (avatar.startsWith('emoji:'))
+    return { kind: 'emoji', char: avatar.slice('emoji:'.length) }
+  return {
+    kind: 'url',
+    url: `covan-avatar://local/${avatar.split('/').map(encodeURIComponent).join('/')}`,
+  }
 }
 
 /** 群组叠头像用的成员（最多前几个） */
-export function groupMembersOf(botMap: Map<string, Bot>, memberIds: string[]): Bot[] {
+export function groupMembersOf(
+  botMap: Map<string, Bot>,
+  memberIds: string[],
+): Bot[] {
   return memberIds.map((id) => botMap.get(id)).filter((b): b is Bot => !!b)
 }

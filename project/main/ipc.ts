@@ -1,21 +1,31 @@
 // main/ipc.ts — 注册 SPEC §4 全部 ipcMain.handle 通道（白名单）
-import { app, dialog, ipcMain, shell, BrowserWindow } from 'electron'
+import { app, clipboard, dialog, ipcMain, shell, BrowserWindow } from 'electron'
 import fs from 'node:fs'
 import path from 'node:path'
-import type {
-  BotInput,
-  MemoryKind,
-  ProviderInput,
-} from '../shared/types'
+import type { BotInput, MemoryKind, ProviderInput } from '../shared/types'
 import { CH } from '../shared/ipcChannels'
 import * as db from './db'
-import { abortChat, listProviderModels, testProviderConnection } from './agentRuntime'
-import { sendUserMessage } from './orchestrator'
-import { ensureWorkspace, listWorkspaceFiles, readWorkspaceFile } from './workspace'
+import { listProviderModels, testProviderConnection } from './agentRuntime'
+import { isTurnRunning, sendUserMessage, stopTurn } from './orchestrator'
+import { registerContextIpc } from './contextIpc'
+import {
+  generateBotAvatar,
+  refreshAutomaticAvatar,
+  type AvatarMode,
+} from './avatars'
+import {
+  ensureWorkspace,
+  listWorkspaceFiles,
+  readWorkspaceFile,
+} from './workspace'
 
 // ---------- 参数校验 ----------
 
-function assertStr(v: unknown, name: string, allowEmpty = false): asserts v is string {
+function assertStr(
+  v: unknown,
+  name: string,
+  allowEmpty = false,
+): asserts v is string {
   if (typeof v !== 'string' || (!allowEmpty && v.trim() === '')) {
     throw new Error(`参数 ${name} 必须是非空字符串`)
   }
@@ -48,10 +58,16 @@ function handle<TArgs extends unknown[], TRet>(
 // ---------- 注册 ----------
 
 export function registerIpc(): void {
+  registerContextIpc()
+  handle(CH.writeClipboard, (text: string) => {
+    assertStr(text, 'text', true)
+    clipboard.writeText(text)
+  })
   // providers
   handle(CH.listProviders, () => db.listProviders())
   handle(CH.saveProvider, (p: ProviderInput) => {
-    if (!p || typeof p !== 'object') throw new Error('参数必须是 ProviderInput 对象')
+    if (!p || typeof p !== 'object')
+      throw new Error('参数必须是 ProviderInput 对象')
     assertStr(p.name, 'name')
     assertStr(p.kind, 'kind')
     return db.saveProvider(p)
@@ -76,16 +92,22 @@ export function registerIpc(): void {
   // bots
   handle(CH.listBots, () => db.listBots())
   handle(CH.createBot, (input: BotInput) => {
-    if (!input || typeof input !== 'object') throw new Error('参数必须是 BotInput 对象')
+    if (!input || typeof input !== 'object')
+      throw new Error('参数必须是 BotInput 对象')
     assertStr(input.name, 'name')
     const bot = db.createBot(input)
     ensureWorkspace(bot.id)
-    return bot
+    return refreshAutomaticAvatar(bot)
   })
   handle(CH.updateBot, (id: string, patch: Partial<BotInput>) => {
     assertStr(id, 'id')
-    if (!patch || typeof patch !== 'object') throw new Error('参数 patch 必须是对象')
-    return db.updateBot(id, patch)
+    if (!patch || typeof patch !== 'object')
+      throw new Error('参数 patch 必须是对象')
+    const bot = db.updateBot(id, patch)
+    return (patch.name || patch.description || patch.system_prompt) &&
+      !patch.avatar
+      ? refreshAutomaticAvatar(bot)
+      : bot
   })
   handle(CH.deleteBot, (id: string) => {
     assertStr(id, 'id')
@@ -99,23 +121,33 @@ export function registerIpc(): void {
     const result = await dialog.showOpenDialog(win!, {
       title: '选择头像',
       properties: ['openFile'],
-      filters: [{ name: '图片', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp'] }],
+      filters: [
+        { name: '图片', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp'] },
+      ],
     })
     if (result.canceled || result.filePaths.length === 0) return ''
     const src = result.filePaths[0]
     const avatarsDir = path.join(app.getPath('userData'), 'avatars')
     fs.mkdirSync(avatarsDir, { recursive: true })
     const ext = path.extname(src) || '.png'
-    const rel = path.join('avatars', `${botId}${ext}`)
+    if (fs.statSync(src).size > 16 * 1024 * 1024)
+      throw new Error('头像图片不能超过 16MB')
+    const rel = path.join('avatars', `${botId}-${db.newId()}${ext}`)
     fs.copyFileSync(src, path.join(app.getPath('userData'), rel))
     db.updateBot(botId, { avatar: rel.split(path.sep).join('/') })
     return rel.split(path.sep).join('/')
   })
-  handle(CH.generateAvatar, async (botId: string, _prompt: string) => {
-    assertStr(botId, 'botId')
-    // 可选实现：当前版本不调用图像生成能力，按约定失败返回 ''
-    return ''
-  })
+  handle(
+    CH.generateAvatar,
+    async (botId: string, prompt: string, mode: AvatarMode = 'auto') => {
+      assertStr(botId, 'botId')
+      assertStr(prompt, 'prompt', true)
+      if (prompt.length > 4000) throw new Error('头像提示词不超过4000字')
+      if (!['auto', 'local', 'image'].includes(mode))
+        throw new Error('未知头像生成方式')
+      return (await generateBotAvatar(botId, prompt, mode)).path
+    },
+  )
 
   // chats
   handle(CH.listChats, () => db.listChats())
@@ -124,66 +156,106 @@ export function registerIpc(): void {
     if (!db.getBot(botId)) throw new Error('Bot 不存在')
     return db.createDm(botId)
   })
-  handle(CH.createGroup, (name: string, memberBotIds: string[], coordinatorBotId?: string) => {
-    assertStr(name, 'name')
-    assertStrArray(memberBotIds, 'memberBotIds')
-    if (memberBotIds.length === 0) throw new Error('群聊至少需要一个 Bot 成员')
-    for (const id of memberBotIds) {
-      if (!db.getBot(id)) throw new Error(`Bot 不存在：${id}`)
-    }
-    if (coordinatorBotId !== undefined && coordinatorBotId !== null) {
-      assertStr(coordinatorBotId, 'coordinatorBotId')
-      if (!db.getBot(coordinatorBotId)) throw new Error('协调者 Bot 不存在')
-    }
-    return db.createGroup(name, memberBotIds, coordinatorBotId ?? undefined)
-  })
-  handle(CH.updateChat, (id: string, patch: { name?: string; coordinatorBotId?: string | null }) => {
-    assertStr(id, 'id')
-    if (!patch || typeof patch !== 'object') throw new Error('参数 patch 必须是对象')
-    db.updateChat(id, patch)
-  })
+  handle(
+    CH.createGroup,
+    (name: string, memberBotIds: string[], coordinatorBotId?: string) => {
+      assertStr(name, 'name')
+      assertStrArray(memberBotIds, 'memberBotIds')
+      if (memberBotIds.length === 0)
+        throw new Error('群聊至少需要一个 Bot 成员')
+      for (const id of memberBotIds) {
+        if (!db.getBot(id)) throw new Error(`Bot 不存在：${id}`)
+      }
+      if (coordinatorBotId !== undefined && coordinatorBotId !== null) {
+        assertStr(coordinatorBotId, 'coordinatorBotId')
+        if (!db.getBot(coordinatorBotId)) throw new Error('协调者 Bot 不存在')
+      }
+      return db.createGroup(name, memberBotIds, coordinatorBotId ?? undefined)
+    },
+  )
+  handle(
+    CH.updateChat,
+    (
+      id: string,
+      patch: { name?: string; coordinatorBotId?: string | null },
+    ) => {
+      assertStr(id, 'id')
+      if (!patch || typeof patch !== 'object')
+        throw new Error('参数 patch 必须是对象')
+      db.updateChat(id, patch)
+    },
+  )
   handle(CH.deleteChat, (id: string) => {
     assertStr(id, 'id')
-    abortChat(id)
+    stopTurn(id)
     db.deleteChat(id)
   })
   handle(CH.markRead, (chatId: string) => {
     assertStr(chatId, 'chatId')
     db.markRead(chatId)
   })
+  handle(CH.exportChat, async (chatId: string) => {
+    assertStr(chatId, 'chatId')
+    const chat = db.getChat(chatId)
+    if (!chat) throw new Error('会话不存在')
+    const title =
+      chat.name || (chat.bot_id && db.getBot(chat.bot_id)?.name) || '会话'
+    const win = BrowserWindow.getAllWindows()[0]
+    const result = await dialog.showSaveDialog(win!, {
+      title: '导出会话',
+      defaultPath: `${title.replace(/[\\/:*?"<>|]/g, '-')}.md`,
+      filters: [{ name: 'Markdown', extensions: ['md'] }],
+    })
+    if (result.canceled || !result.filePath) return null
+    const messages = db.listMessages(chatId, undefined, 2147483647)
+    const text =
+      [
+        `# ${title}`,
+        `从 Covan 导出 · ${new Date().toLocaleString('zh-CN')}`,
+        ...messages
+          .filter((m) => m.status !== 'streaming')
+          .map((m) => {
+            const who =
+              m.sender_type === 'user'
+                ? '你'
+                : m.sender_type === 'system'
+                  ? '系统'
+                  : (m.sender_bot_id && db.getBot(m.sender_bot_id)?.name) ||
+                    'Bot'
+            return `## ${who} · ${new Date(m.created_at).toLocaleString('zh-CN')}\n\n${m.content}${m.error ? `\n\n> 生成失败：${m.error}` : ''}${m.status === 'stopped' ? '\n\n> 已停止生成' : ''}`
+          }),
+      ].join('\n\n') + '\n'
+    await fs.promises.writeFile(result.filePath, text, 'utf8')
+    return result.filePath
+  })
 
   // messages
   handle(CH.listMessages, (chatId: string, before?: number, limit?: number) => {
     assertStr(chatId, 'chatId')
-    if (before !== undefined && typeof before !== 'number') throw new Error('参数 before 必须是数字')
-    if (limit !== undefined && (typeof limit !== 'number' || limit <= 0)) throw new Error('参数 limit 必须是正数')
+    if (before !== undefined && typeof before !== 'number')
+      throw new Error('参数 before 必须是数字')
+    if (limit !== undefined && (typeof limit !== 'number' || limit <= 0))
+      throw new Error('参数 limit 必须是正数')
     return db.listMessages(chatId, before, limit)
   })
-  handle(CH.sendUserMessage, (chatId: string, content: string, mentions: string[]) => {
-    assertStr(chatId, 'chatId')
-    assertStr(content, 'content')
-    assertStrArray(mentions ?? [], 'mentions')
-    if (!db.getChat(chatId)) throw new Error('会话不存在')
-    // 生成在后台推进，事件通过 CH.event 推送；这里立即返回
-    void sendUserMessage(chatId, content, mentions ?? []).catch((e) => {
-      // 编排过程异常：落一条 system 消息告知用户（失败静默兜底）
-      try {
-        if (db.getChat(chatId)) {
-          db.insertMessage({
-            chat_id: chatId,
-            sender_type: 'system',
-            content: `出错了：${e instanceof Error ? e.message : String(e)}`,
-          })
-        }
-      } catch {
-        /* ignore */
-      }
-    })
-  })
+  handle(
+    CH.sendUserMessage,
+    (chatId: string, content: string, mentions: string[]) => {
+      assertStr(chatId, 'chatId')
+      assertStr(content, 'content')
+      assertStrArray(mentions ?? [], 'mentions')
+      if (!db.getChat(chatId)) throw new Error('会话不存在')
+      if (isTurnRunning(chatId))
+        throw new Error('当前会话正在回复，请稍后再发送')
+      // 生成在后台推进，事件通过 CH.event 推送；这里立即返回
+      void sendUserMessage(chatId, content, mentions ?? []).catch(
+        () => undefined,
+      )
+    },
+  )
   handle(CH.stopChat, (chatId: string) => {
     assertStr(chatId, 'chatId')
-    abortChat(chatId)
-    db.stopStreamingMessages(chatId)
+    stopTurn(chatId)
   })
 
   // memory
@@ -195,7 +267,8 @@ export function registerIpc(): void {
     assertStr(botId, 'botId')
     assertStr(content, 'content')
     if (!db.getBot(botId)) throw new Error('Bot 不存在')
-    const k: MemoryKind = kind === 'preference' || kind === 'summary' ? kind : 'fact'
+    const k: MemoryKind =
+      kind === 'preference' || kind === 'summary' ? kind : 'fact'
     return db.addMemory(botId, content.trim(), k, 'manual')
   })
   handle(CH.deleteMemory, (id: string) => {
