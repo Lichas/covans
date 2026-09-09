@@ -12,7 +12,7 @@ import { WorkspacePanel } from './WorkspacePanel'
 import { Field, Toggle, inputCls } from './controls'
 import { PencilIcon, ProviderIcon } from './icons'
 
-type Tab = 'settings' | 'memory' | 'workspace'
+type Tab = 'settings' | 'memory' | 'workspace' | 'model'
 
 /** 失焦保存的文本输入 */
 function BotField({
@@ -60,6 +60,42 @@ function BotField({
 }
 
 function SettingsTab({ bot }: { bot: Bot }) {
+  const updateBot = useBotsStore((s) => s.updateBot)
+  const save = (patch: Parameters<typeof updateBot>[1]) => {
+    void updateBot(bot.id, patch).catch(() => undefined)
+  }
+  return (
+    <div className="space-y-4 p-4">
+      <div className="flex items-center justify-between">
+        <span className="text-[13px] text-stone-600 dark:text-stone-300">
+          新消息通知
+        </span>
+        <Toggle checked={!!bot.notify} onChange={(v) => save({ notify: v })} />
+      </div>
+      <BotField
+        label="描述"
+        value={bot.description}
+        placeholder="一句话介绍这个 Bot"
+        onSave={(v) => save({ description: v })}
+      />
+      <BotField
+        label="标签（逗号分隔）"
+        value={bot.tags}
+        placeholder="开发,后端"
+        onSave={(v) => save({ tags: v })}
+      />
+      <BotField
+        label="人设 System Prompt"
+        multiline
+        value={bot.system_prompt}
+        placeholder="描述这个 Bot 的身份、能力与说话方式…"
+        onSave={(v) => save({ system_prompt: v })}
+      />
+    </div>
+  )
+}
+
+function ModelTab({ bot }: { bot: Bot }) {
   const providers = useSettingsStore((s) => s.providers)
   const updateBot = useBotsStore((s) => s.updateBot)
   const [temp, setTemp] = useState(bot.temperature)
@@ -80,35 +116,8 @@ function SettingsTab({ bot }: { bot: Bot }) {
   }
 
   return (
-    <div className="flex flex-col gap-4 p-4">
-      <div className="flex items-center justify-between">
-        <span className="text-[13px] text-stone-600 dark:text-stone-300">
-          新消息通知
-        </span>
-        <Toggle checked={!!bot.notify} onChange={(v) => save({ notify: v })} />
-      </div>
-
-      <BotField
-        label="描述"
-        value={bot.description}
-        placeholder="一句话介绍这个 Bot"
-        onSave={(v) => save({ description: v })}
-      />
-      <BotField
-        label="标签（逗号分隔）"
-        value={bot.tags}
-        placeholder="开发,后端"
-        onSave={(v) => save({ tags: v })}
-      />
-      <BotField
-        label="人设 System Prompt"
-        multiline
-        value={bot.system_prompt}
-        placeholder="描述这个 Bot 的身份、能力与说话方式…"
-        onSave={(v) => save({ system_prompt: v })}
-      />
-
-      <div className="-order-1 space-y-3 rounded-xl border border-stone-200 bg-stone-50 p-3.5 dark:border-stone-700 dark:bg-stone-800/50">
+    <div className="p-4">
+      <div className="space-y-3 rounded-xl border border-stone-200 bg-stone-50 p-3.5 dark:border-stone-700 dark:bg-stone-800/50">
         <div className="text-[12.5px] font-medium text-stone-600 dark:text-stone-300">
           模型配置
         </div>
@@ -263,6 +272,7 @@ export function BotSettingsPanel() {
     { id: 'settings', label: '设定' },
     { id: 'memory', label: '记忆' },
     { id: 'workspace', label: '工作区' },
+    { id: 'model', label: '模型' },
   ]
 
   return (
@@ -341,6 +351,7 @@ export function BotSettingsPanel() {
         {tab === 'settings' && <SettingsTab bot={bot} />}
         {tab === 'memory' && <MemoryPanel botId={bot.id} />}
         {tab === 'workspace' && <WorkspacePanel botId={bot.id} />}
+        {tab === 'model' && <ModelTab bot={bot} />}
       </div>
     </aside>
   )
