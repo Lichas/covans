@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- 群聊列表项支持右键删除；确认后同时删除群消息、成员关系与关联 Agent 私聊记录。
+
 ### Changed
 
 - 将 Electron 应用从 `project/` 提升到 Git 仓库根目录，仓库 clone 后可直接执行 `npm install` 和 `npm run dev`。

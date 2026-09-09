@@ -162,7 +162,7 @@ interface CovanApi {
   addChatMembers(chatId: string, botIds: string[]): Promise<void>;
   hideChat(chatId: string): Promise<void>;
   clearChatMessages(chatId: string): Promise<void>;
-  deleteChat(id: string): Promise<void>;
+  deleteChat(id: string): Promise<void>; // 停止生成后永久删除会话及关联记录
   markRead(chatId: string): Promise<void>;
   exportChat(chatId: string): Promise<string | null>; // 原生保存对话框，导出完整 Markdown 历史
   writeClipboard(text: string): Promise<void>;        // 原生剪贴板写入，不暴露读取接口
@@ -300,7 +300,7 @@ await agent.prompt(userText)   // agent.abort() 用于 stopChat
 
 - 三栏：Sidebar 256px / ChatView 自适应 / BotSettingsPanel 320px（默认收起）。
 - 跟随系统浅色/深色主题；暖白/炭灰背景、低饱和绿点缀；用户消息为紧凑浅灰气泡，Bot 回复使用宽阅读区域；代码和表格独立滚动。
-- Sidebar：搜索框；单聊列表项右键「置顶 / 取消置顶」，最多3个 Bot，数据库层同样校验；顶部仅在有置顶时显示横排圆形头像，不显示空槽位或添加入口。会话列表项=头像(群聊显示叠头像+N角标)/名称/最后消息预览/时间/未读蓝点；底部为「关于我」「我的 Bot」「新建群聊」「设置」；顶部「+」菜单新建 Bot(⌘1) / 创建群聊(⌘2)。
+- Sidebar：搜索框；单聊列表项右键「置顶 / 取消置顶」，最多3个 Bot，数据库层同样校验；群聊列表项右键提供经确认的「删除群聊」，永久删除群及关联记录。顶部仅在有置顶时显示横排圆形头像，不显示空槽位或添加入口。会话列表项=头像(群聊显示叠头像+N角标)/名称/最后消息预览/时间/未读蓝点；底部为「关于我」「我的 Bot」「新建群聊」「设置」；顶部「+」菜单新建 Bot(⌘1) / 创建群聊(⌘2)。
 - ChatView：顶部 Bot/群名、完整会话导出和设置入口；群聊齿轮打开回复机制设置。消息显示作者、时间、跨日分隔；支持 Markdown、多图、代码复制、原文复制、引用回复和错误重试。Composer 支持群聊 @ 提及、独立持久草稿与中文输入法保护；上方以动画小头像显示正在思考/回复的成员。主动回复中可继续发送新消息。
 - BotSettingsPanel（右栏，单聊选中时显示）：头像与身份信息；设定、记忆、工作区、模型四个标签页。模型页独立管理 provider、model、temperature、reasoning effort 与 max tokens。
 - SettingsModal（通用）：账户占位、外观（主题跟随系统/浅色/深色、语言）、Bot（时区自动检测、自动审核开关 + 规则文本——审核规则作为自然语言注入各成员的判断与回复）、Provider 管理（列表 + 新增/编辑表单 + 测试连接按钮）。

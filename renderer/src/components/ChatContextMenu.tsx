@@ -1,18 +1,17 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import type { ChatSummary } from '@shared/types'
 import { useBotsStore } from '../stores/botsStore'
 import { useChatsStore } from '../stores/chatsStore'
 import { EyeOffIcon, TrashIcon } from './icons'
 
 export function ChatContextMenu({
-  botId,
-  chatId,
+  chat,
   x,
   y,
   onClose,
 }: {
-  botId: string
-  chatId: string
+  chat: ChatSummary
   x: number
   y: number
   onClose: () => void
@@ -22,9 +21,10 @@ export function ChatContextMenu({
   const deleteBot = useBotsStore((s) => s.deleteBot)
   const hideChat = useChatsStore((s) => s.hideChat)
   const clearChatMessages = useChatsStore((s) => s.clearChatMessages)
+  const deleteChat = useChatsStore((s) => s.deleteChat)
   const selectChat = useChatsStore((s) => s.selectChat)
   const loadChats = useChatsStore((s) => s.loadChats)
-  const bot = bots.find((b) => b.id === botId)
+  const bot = bots.find((b) => b.id === chat.bot_id)
   const menu = useRef<HTMLDivElement>(null)
   const close = useRef(onClose)
   close.current = onClose
@@ -49,6 +49,47 @@ export function ChatContextMenu({
       window.removeEventListener('resize', dismiss)
     }
   }, [])
+  if (chat.type === 'group')
+    return createPortal(
+      <div
+        ref={menu}
+        role="menu"
+        aria-label="群聊操作"
+        className="chat-context-menu"
+        style={{
+          left: Math.max(8, Math.min(x, window.innerWidth - 240)),
+          top: Math.max(8, Math.min(y, window.innerHeight - 100)),
+        }}
+      >
+        <button
+          role="menuitem"
+          disabled={busy}
+          className="chat-context-danger"
+          onClick={async () => {
+            if (
+              !window.confirm(
+                `确定删除群聊「${chat.name || '群聊'}」吗？全部聊天记录和 Agent 私聊记录将永久删除，此操作不可撤销。`,
+              )
+            )
+              return
+            setBusy(true)
+            try {
+              await deleteChat(chat.id)
+              onClose()
+            } catch (e) {
+              setError(String(e))
+            } finally {
+              setBusy(false)
+            }
+          }}
+        >
+          <span>删除群聊</span>
+          <TrashIcon width={15} height={15} />
+        </button>
+        {error && <p role="alert">{error}</p>}
+      </div>,
+      document.body,
+    )
   if (!bot) return null
   return createPortal(
     <div
@@ -100,7 +141,7 @@ export function ChatContextMenu({
             return
           setBusy(true)
           try {
-            await hideChat(chatId)
+            await hideChat(chat.id)
             onClose()
           } catch (e) {
             setError(String(e))
@@ -124,7 +165,7 @@ export function ChatContextMenu({
             return
           setBusy(true)
           try {
-            await clearChatMessages(chatId)
+            await clearChatMessages(chat.id)
             onClose()
           } catch (e) {
             setError(String(e))

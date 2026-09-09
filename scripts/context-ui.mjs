@@ -179,9 +179,26 @@ try {
   await item('第四位伙伴').click({ button: 'right' })
   await page.getByRole('menuitem', { name: /置顶/ }).click()
   await item('测试群').click({ button: 'right' })
-  await expect(page.getByRole('menu')).toHaveCount(0)
+  const groupMenu = page.getByRole('menu', { name: '群聊操作' })
+  await expect(groupMenu).toBeVisible()
+  await expect(groupMenu.getByRole('menuitem')).toHaveCount(1)
+  await expect(
+    groupMenu.getByRole('menuitem', { name: '删除群聊' }),
+  ).toBeVisible()
+  page.once('dialog', async (dialog) => {
+    assert.match(dialog.message(), /全部聊天记录.*永久删除/)
+    await dialog.accept()
+  })
+  await groupMenu.getByRole('menuitem', { name: '删除群聊' }).click()
+  await expect(item('测试群')).toHaveCount(0)
+  assert.equal(
+    (await page.evaluate(() => window.covan.listChats())).some(
+      (chat) => chat.name === '测试群',
+    ),
+    false,
+  )
   console.log(
-    '✓ Right-click DM pin/unpin, no empty slots, 3-Bot UI and backend cap, no group pin',
+    '✓ Right-click DM pin/unpin, 3-Bot cap, and permanent group deletion',
   )
 
   await page.getByRole('button', { name: '关于我', exact: false }).click()

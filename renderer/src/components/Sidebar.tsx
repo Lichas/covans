@@ -66,15 +66,15 @@ function ChatListItem({ chat }: { chat: ChatSummary }) {
       <button
         aria-current={active ? 'page' : undefined}
         aria-label={name}
-        aria-haspopup={chat.type === 'dm' ? 'menu' : undefined}
+        aria-haspopup="menu"
         onContextMenu={(e) => {
-          if (chat.type !== 'dm' || !chat.bot_id) return
+          if (chat.type === 'dm' && !chat.bot_id) return
           e.preventDefault()
           setMenu({ x: e.clientX, y: e.clientY })
         }}
         onKeyDown={(e) => {
           if (
-            chat.type === 'dm' &&
+            (chat.type === 'group' || chat.bot_id) &&
             (e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10'))
           ) {
             e.preventDefault()
@@ -127,10 +127,9 @@ function ChatListItem({ chat }: { chat: ChatSummary }) {
           </span>
         </span>
       </button>
-      {menu && chat.bot_id && (
+      {menu && (chat.type === 'group' || chat.bot_id) && (
         <ChatContextMenu
-          botId={chat.bot_id}
-          chatId={chat.id}
+          chat={chat}
           x={menu.x}
           y={menu.y}
           onClose={() => setMenu(null)}
