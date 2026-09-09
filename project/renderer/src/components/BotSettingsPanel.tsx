@@ -1,8 +1,13 @@
 // components/BotSettingsPanel.tsx — 右栏：Bot 设定 / 记忆 / 工作区
 import { useEffect, useRef, useState } from 'react'
-import type { Bot, ReasoningEffort } from '@shared/types'
+import type {
+  Bot,
+  ChatSummary,
+  GroupReplyMode,
+  ReasoningEffort,
+} from '@shared/types'
 import { useBotsStore } from '../stores/botsStore'
-import { useActiveChat } from '../stores/chatsStore'
+import { useActiveChat, useChatsStore } from '../stores/chatsStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useUiStore } from '../stores/uiStore'
 import { Avatar } from './Avatar'
@@ -10,7 +15,7 @@ import { AvatarDialog } from './AvatarSettings'
 import { MemoryPanel } from './MemoryPanel'
 import { WorkspacePanel } from './WorkspacePanel'
 import { Field, Toggle, inputCls } from './controls'
-import { PencilIcon, ProviderIcon } from './icons'
+import { PencilIcon, ProviderIcon, UsersIcon } from './icons'
 
 type Tab = 'settings' | 'memory' | 'workspace' | 'model'
 
@@ -239,6 +244,118 @@ function ModelTab({ bot }: { bot: Bot }) {
   )
 }
 
+function GroupSettingsPanel({ chat }: { chat: ChatSummary }) {
+  const updateChat = useChatsStore((s) => s.updateChat)
+  const [saving, setSaving] = useState<GroupReplyMode | null>(null)
+  const [error, setError] = useState('')
+
+  const choose = async (replyMode: GroupReplyMode) => {
+    if (replyMode === chat.reply_mode || saving) return
+    setSaving(replyMode)
+    setError('')
+    try {
+      await updateChat(chat.id, { replyMode })
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setSaving(null)
+    }
+  }
+
+  const modes: {
+    id: GroupReplyMode
+    title: string
+    description: string
+    badge: string
+  }[] = [
+    {
+      id: 'active',
+      title: '主动回复',
+      description:
+        '每位成员并发结合前文总结与最新 5 条消息，自己判断是否发言。思考时收到新消息会刷新尚未完成的判断。',
+      badge: '并发',
+    },
+    {
+      id: 'sequential',
+      title: '顺序回复',
+      description:
+        '成员按群成员顺序逐个判断与发言，后面的成员可以看到前面成员的回复。',
+      badge: '低并发',
+    },
+  ]
+
+  return (
+    <aside className="flex h-full w-[320px] shrink-0 flex-col border-l border-stone-200 bg-stone-50/60 dark:border-stone-800 dark:bg-stone-900/40">
+      <div className="flex items-center gap-3 border-b border-stone-200 px-4 py-4 dark:border-stone-800">
+        <span className="grid h-[46px] w-[46px] shrink-0 place-items-center rounded-full bg-stone-200 text-stone-600 dark:bg-stone-800 dark:text-stone-300">
+          <UsersIcon width={20} height={20} />
+        </span>
+        <div className="min-w-0">
+          <div className="truncate text-[15px] font-semibold text-stone-800 dark:text-stone-100">
+            {chat.name || '群聊设置'}
+          </div>
+          <div className="mt-0.5 text-[11.5px] text-stone-400">
+            {chat.member_bots.length} 位成员 · 群成员回复机制
+          </div>
+        </div>
+      </div>
+
+      <div className="scroll-thin min-h-0 flex-1 overflow-y-auto p-4">
+        <div className="mb-2 text-[12px] font-medium text-stone-500 dark:text-stone-400">
+          回复机制
+        </div>
+        <div className="space-y-2.5">
+          {modes.map((mode) => {
+            const selected = chat.reply_mode === mode.id
+            return (
+              <button
+                key={mode.id}
+                type="button"
+                disabled={!!saving}
+                aria-pressed={selected}
+                onClick={() => void choose(mode.id)}
+                className={`w-full rounded-xl border p-3.5 text-left transition ${
+                  selected
+                    ? 'border-stone-500 bg-white shadow-sm dark:border-stone-500 dark:bg-stone-800'
+                    : 'border-stone-200 bg-white/60 hover:border-stone-300 hover:bg-white dark:border-stone-800 dark:bg-stone-900/40 dark:hover:border-stone-700 dark:hover:bg-stone-800/70'
+                }`}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[13px] font-medium text-stone-800 dark:text-stone-100">
+                    {mode.title}
+                  </span>
+                  <span
+                    className={`rounded-full px-2 py-0.5 text-[10px] ${
+                      selected
+                        ? 'bg-stone-800 text-white dark:bg-stone-200 dark:text-stone-900'
+                        : 'bg-stone-100 text-stone-400 dark:bg-stone-800'
+                    }`}
+                  >
+                    {saving === mode.id ? '保存中…' : mode.badge}
+                  </span>
+                </div>
+                <p className="mt-2 text-[11.5px] leading-[1.65] text-stone-500 dark:text-stone-400">
+                  {mode.description}
+                </p>
+              </button>
+            )
+          })}
+        </div>
+
+        <div className="mt-5 rounded-xl bg-stone-100/80 p-3.5 text-[11px] leading-relaxed text-stone-500 dark:bg-stone-800/60 dark:text-stone-400">
+          Covan 会持续保存群聊前文总结。成员判断时只携带该总结与最新 5
+          条消息，避免群聊越长越慢。
+        </div>
+        {error && (
+          <p role="alert" className="mt-3 text-[12px] text-red-500">
+            {error}
+          </p>
+        )}
+      </div>
+    </aside>
+  )
+}
+
 export function BotSettingsPanel() {
   const chat = useActiveChat()
   const inspectedBotId = useUiStore((s) => s.inspectedBotId)
@@ -255,6 +372,9 @@ export function BotSettingsPanel() {
 
   if (!rightPanelOpen) return null
   if (!chat) return null
+
+  if (chat.type === 'group' && !inspectedBotId)
+    return <GroupSettingsPanel chat={chat} />
 
   if (!bot) {
     return (

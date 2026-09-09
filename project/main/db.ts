@@ -69,6 +69,8 @@ CREATE TABLE IF NOT EXISTS chats (
   last_message_at INTEGER NOT NULL DEFAULT 0,
   unread INTEGER NOT NULL DEFAULT 0,
   hidden INTEGER NOT NULL DEFAULT 0,
+  reply_mode TEXT NOT NULL DEFAULT 'sequential',
+  context_summary TEXT NOT NULL DEFAULT '',
   created_at INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS chat_members (
@@ -152,6 +154,10 @@ export function initDb(dir: string): Db {
   const chatColumns = d.pragma('table_info(chats)') as { name: string }[]
   if (!chatColumns.some((column) => column.name === 'hidden'))
     d.exec('ALTER TABLE chats ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0')
+  if (!chatColumns.some((column) => column.name === 'reply_mode'))
+    d.exec("ALTER TABLE chats ADD COLUMN reply_mode TEXT NOT NULL DEFAULT 'sequential'")
+  if (!chatColumns.some((column) => column.name === 'context_summary'))
+    d.exec("ALTER TABLE chats ADD COLUMN context_summary TEXT NOT NULL DEFAULT ''")
   // 仅迁移明确指向 LM Studio 默认端口的旧“OpenAI 兼容”配置。
   d.exec(
     `UPDATE providers SET kind='lm-studio'
@@ -404,6 +410,8 @@ interface ChatRow {
   last_message_at: number
   unread: number
   hidden: number
+  reply_mode: 'active' | 'sequential'
+  context_summary: string
   created_at: number
 }
 interface MessageRow {
@@ -810,19 +818,30 @@ export function createGroup(
 
 export function updateChat(
   id: string,
-  patch: { name?: string; coordinatorBotId?: string | null },
+  patch: {
+    name?: string
+    coordinatorBotId?: string | null
+    replyMode?: 'active' | 'sequential'
+  },
 ): void {
   const existing = getChat(id)
   if (!existing) throw new Error('会话不存在')
   getDb()
-    .prepare('UPDATE chats SET name=?, coordinator_bot_id=? WHERE id=?')
+    .prepare('UPDATE chats SET name=?, coordinator_bot_id=?, reply_mode=? WHERE id=?')
     .run(
       patch.name ?? existing.name,
       patch.coordinatorBotId === undefined
         ? existing.coordinator_bot_id
         : patch.coordinatorBotId,
+      patch.replyMode ?? existing.reply_mode,
       id,
     )
+}
+
+export function updateChatSummary(id: string, summary: string): void {
+  getDb()
+    .prepare('UPDATE chats SET context_summary=? WHERE id=?')
+    .run(summary.slice(0, 6000), id)
 }
 
 export function addChatMembers(chatId: string, botIds: string[]): void {
@@ -850,9 +869,9 @@ export function clearChatMessages(chatId: string): void {
   d.transaction(() => {
     d.prepare('DELETE FROM agent_threads WHERE parent_chat_id=?').run(chatId)
     d.prepare('DELETE FROM messages WHERE chat_id=?').run(chatId)
-    d.prepare('UPDATE chats SET last_message_at=0, unread=0 WHERE id=?').run(
-      chatId,
-    )
+    d.prepare(
+      "UPDATE chats SET last_message_at=0, unread=0, context_summary='' WHERE id=?",
+    ).run(chatId)
   })()
 }
 

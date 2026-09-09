@@ -7,7 +7,7 @@
 Covan 是一个 macOS 风格三栏布局的桌面应用（Electron + React），核心概念是 **Bot**（有独立人设、记忆、模型配置、工作区的智能体）与 **Chat**（单聊或群聊）。用户可以：
 - 创建多个 Bot（工作伙伴或虚拟伴侣）
 - 与单个 Bot 私聊，或把多个 Bot 拉入群聊讨论
-- 群聊中由「协调 Bot」（coordinator）决定谁发言、说什么方向
+- 群聊可选「主动回复」或「顺序回复」，由每位成员结合上下文自主判断是否发言
 - 每个 Bot 有持久记忆（自动提取 + 手动管理）、独立文件工作区
 - 所有对话通过 pi-mono agent runtime 调用用户配置的 LLM provider
 
@@ -28,7 +28,7 @@ main/           Electron 主进程（Node）
   db.ts             SQLite 打开、migration、DAO 函数
   ipc.ts            ipcMain.handle 注册全部通道（白名单）
   agentRuntime.ts   pi-mono 封装：provider 解析、agent 会话创建、流式转发
-  orchestrator.ts   群聊编排（协调者决策 → 成员依次发言 → 落库）
+  orchestrator.ts   群聊编排（成员判断 → 并发/顺序回复 → 落库）
   memory.ts         记忆提取（后台摘要任务）与注入
   workspace.ts      每 Bot 工作区目录管理
 preload/
@@ -84,6 +84,9 @@ CREATE TABLE chats (
   coordinator_bot_id TEXT REFERENCES bots(id), -- group 专用，可空
   last_message_at INTEGER NOT NULL DEFAULT 0,
   unread INTEGER NOT NULL DEFAULT 0,
+  hidden INTEGER NOT NULL DEFAULT 0,
+  reply_mode TEXT NOT NULL DEFAULT 'sequential', -- 'active'|'sequential'
+  context_summary TEXT NOT NULL DEFAULT '',
   created_at INTEGER NOT NULL
 );
 CREATE TABLE chat_members (
@@ -140,7 +143,7 @@ interface CovanApi {
   listChats(): Promise<ChatSummary[]>;                 // 含最后一条消息预览、未读、成员头像
   createDm(botId: string): Promise<Chat>;
   createGroup(name: string, memberBotIds: string[], coordinatorBotId?: string): Promise<Chat>;
-  updateChat(id: string, patch: { name?: string; coordinatorBotId?: string }): Promise<void>;
+  updateChat(id: string, patch: { name?: string; coordinatorBotId?: string; replyMode?: 'active'|'sequential' }): Promise<void>;
   deleteChat(id: string): Promise<void>;
   markRead(chatId: string): Promise<void>;
   exportChat(chatId: string): Promise<string | null>;  -- 原生保存对话框，导出完整 Markdown 历史
@@ -174,6 +177,7 @@ type CovanEvent =
   | { type: 'agent-thread-updated'; chatId: string; threadId: string }
   | { type: 'message-start'; chatId: string; message: Message }
   | { type: 'generation-state'; chatId: string; generating: boolean }
+  | { type: 'agent-activity'; chatId: string; botId: string; state: 'preparing'|'speaking'|'idle' }
   | { type: 'message-delta'; chatId: string; messageId: string; delta: string }
   | { type: 'message-done'; chatId: string; message: Message }
   | { type: 'message-error'; chatId: string; messageId: string; error: string }
@@ -186,18 +190,11 @@ type CovanEvent =
 
 触发：`sendUserMessage(groupChatId, …)`。
 1. 落库用户消息；发 `chat-updated`。
-2. 构建群聊 transcript（最近 30 条，格式 `[名字]: 内容`）。
-3. 若群配置了 coordinator：调用 coordinator agent，工具不限，但要求其**只输出 JSON**：
-   `{"speak": [{"botId": "...", "hint": "要说什么的简短指令"}, ...], "note": "系统条文本，如：已发消息给 3 个 Bot"}`
-   - 解析失败兜底：所有被 @mention 的 bot + coordinator 自己发言。
-   - 用户 @mention 的 bot 强制加入 speak 列表首位。
-4. 若无 coordinator：被 mention 的 bot 发言；无 mention 则全体成员按 sort_order 发言（最多 5 人）。
-5. 写入一条 system 消息（note）。
-6. 依次（串行）对每个 speak 项调用对应 Bot 的 agent：
-   - system prompt = bot.system_prompt + 记忆注入 + 群聊上下文指令（"你在群聊 X 中，其他成员：…，请用口语化中文简短回复，不要复述别人"）
-   - hint 作为用户消息前缀：`(协调者提示: hint)`
-   - 流式 delta → `message-delta` 事件；完成 → 落库 + `message-done`。
-7. 全部完成后触发后台记忆提取（memory.ts）。
+2. 每位成员使用自己的 Provider/Model，读取 `context_summary` + 最新 5 条消息，输出 `REPLY` 或 `SKIP`。被用户 @mention 的成员必须回复。
+3. `reply_mode='active'`：所有成员并发判断，决定回复的成员并发输出。判断阶段收到新用户消息时，中止尚未完成的判断并按新上下文重新开始；正在输出的回复不截断，完成后再处理新消息。
+4. `reply_mode='sequential'`：成员按群成员顺序逐个判断、回复，后面成员可以看到前面成员的输出。
+5. 准备判断/正在输出通过 `agent-activity` 推送。回复机制不写入 system 消息，不在聊天消息区显示调度文案。
+6. 流式 delta → `message-delta`；完成 → 落库 + `message-done`。轮次完成后异步刷新群聊前文总结，并触发长期记忆提取。
 
 单聊（dm）：直接调用该 bot agent，流程同 6。
 
@@ -278,7 +275,7 @@ await agent.prompt(userText)   // agent.abort() 用于 stopChat
 
 **Provider kind → pi 内置 provider 映射**：`openai→openAIProvider()`、`anthropic→anthropicProvider()`、`google→googleProvider()`、`openrouter→openrouterProvider()`、`kimi→createProvider(...)`（Kimi Coding Plan，模型从 `/v1/models` 动态拉取）、`zhipu→createProvider(...)`（智谱 OpenAI 兼容国内端点）、`deepseek→deepseekProvider()`、`openai-compatible→createProvider(...)`。`testProvider` 用一次 `models.complete(model, {messages:[{role:'user',content:'ping',timestamp:Date.now()}]}, {apiKey})` 验证。OpenAI-compatible 支持 API Key 留空的本地服务：模型目录请求不发送 Authorization，pi-agent-core 运行时使用不落库、无权限的占位值满足其非空校验。LM Studio 预设为 `http://localhost:1234/v1`；误填 `/api/v1/chat` 或 `/v1/chat/completions` 会规范到 `/v1`。Covan 使用支持自定义 tools 与完整历史的 `/v1/chat/completions`，不直接使用 LM Studio 原生 `/api/v1/chat`。
 
-**进行中任务表**：Agent 层维护 `Map<chatId, Set<AbortController>>`；编排层另外维护轮次级 AbortController。stopChat 同时取消协调者决策、当前 Agent 和后续群聊发言，保留当前已生成文本为 stopped 消息。generation-state 明确表示整个轮次是否结束。
+**进行中任务表**：Agent 层维护 `Map<chatId, Set<AbortController>>`；编排层另外维护轮次级 AbortController 与主动群的判断修订号。stopChat 同时取消当前判断、Agent 输出和后续群聊发言，保留当前已生成文本为 stopped 消息。generation-state 明确表示整个轮次是否结束。
 **Mock provider（冒烟测试）**：kind='mock' 时不走 pi，直接按名字模板生成流式假回复（`main/mockProvider.ts`）。
 
 ## 9. UI 规范（复刻参考截图）
@@ -286,7 +283,7 @@ await agent.prompt(userText)   // agent.abort() 用于 stopChat
 - 三栏：Sidebar 256px / ChatView 自适应 / BotSettingsPanel 320px（默认收起）。
 - 跟随系统浅色/深色主题；暖白/炭灰背景、低饱和绿点缀；用户消息为紧凑浅灰气泡，Bot 回复使用宽阅读区域；代码和表格独立滚动。
 - Sidebar：搜索框；单聊列表项右键「置顶 / 取消置顶」，最多3个 Bot，数据库层同样校验；顶部仅在有置顶时显示横排圆形头像，不显示空槽位或添加入口。会话列表项=头像(群聊显示叠头像+N角标)/名称/最后消息预览/时间/未读蓝点；底部为「关于我」「我的 Bot」「新建群聊」「设置」；顶部「+」菜单新建 Bot(⌘1) / 创建群聊(⌘2)。
-- ChatView：顶部 Bot/群名、当前模型、完整会话导出和设置入口。消息显示作者、时间、跨日分隔；支持 Markdown、代码复制、原文复制、引用回复和错误重试。上翻阅读时不强制贴底，可手动回到最新；历史分页保持阅读位置。Composer 使用浮动圆角输入框、群聊 @ 提及、独立持久草稿与中文输入法保护。Enter 发送，Shift+Enter 换行。附件与图片消息为后续功能；远程 Markdown 图片显示为可点击链接。
+- ChatView：顶部 Bot/群名、完整会话导出和设置入口；群聊齿轮打开回复机制设置。消息显示作者、时间、跨日分隔；支持 Markdown、多图、代码复制、原文复制、引用回复和错误重试。Composer 支持群聊 @ 提及、独立持久草稿与中文输入法保护；上方以动画小头像显示正在思考/回复的成员。主动回复中可继续发送新消息。
 - BotSettingsPanel（右栏，单聊选中时显示）：头像、名称输入、标签、描述、通知开关、人设 system prompt 编辑、模型选择（provider + model + temperature）、记忆标签页、工作区标签页。
 - SettingsModal（通用）：账户占位、外观（主题跟随系统/浅色/深色、语言）、Bot（时区自动检测、自动审核开关 + 规则文本——审核规则作为自然语言注入 coordinator 决策前的检查）、Provider 管理（列表 + 新增/编辑表单 + 测试连接按钮）。
 - 新建 Bot 对话框：名称/人设模板下拉（开发分队四人、产品经理、设计师、虚拟女友「小美女」、空白自定义）/描述/provider/模型。

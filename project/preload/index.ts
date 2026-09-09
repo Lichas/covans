@@ -54,7 +54,11 @@ const api: CovanApi = {
   ) => ipcRenderer.invoke(CH.createGroup, name, memberBotIds, coordinatorBotId),
   updateChat: (
     id: string,
-    patch: { name?: string; coordinatorBotId?: string | null },
+    patch: {
+      name?: string
+      coordinatorBotId?: string | null
+      replyMode?: 'active' | 'sequential'
+    },
   ) => ipcRenderer.invoke(CH.updateChat, id, patch),
   addChatMembers: (chatId, botIds) =>
     ipcRenderer.invoke(CH.addChatMembers, chatId, botIds),

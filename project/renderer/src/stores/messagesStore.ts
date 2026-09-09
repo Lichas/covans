@@ -6,6 +6,10 @@ interface MessagesState {
   messages: Record<string, Message[]>
   streaming: Record<string, Message>
   generating: Record<string, boolean>
+  agentActivity: Record<
+    string,
+    Record<string, 'preparing' | 'speaking'>
+  >
   loadedChats: Record<string, boolean>
   loadingOlder: Record<string, boolean>
   hasOlder: Record<string, boolean>
@@ -17,6 +21,7 @@ interface MessagesState {
     content: string,
     mentions: string[],
     attachments?: Attachment[],
+    allowWhileGenerating?: boolean,
   ) => Promise<void>
   stop: (chatId: string) => Promise<void>
   retry: (chatId: string, failedMessage: Message) => Promise<void>
@@ -38,6 +43,7 @@ export const useMessagesStore = create<MessagesState>((set, get) => ({
   messages: {},
   streaming: {},
   generating: {},
+  agentActivity: {},
   loadedChats: {},
   loadingOlder: {},
   hasOlder: {},
@@ -124,9 +130,19 @@ export const useMessagesStore = create<MessagesState>((set, get) => ({
       set({ loadingOlder: { ...get().loadingOlder, [chatId]: false } })
     }
   },
-  send: async (chatId, content, mentions, attachments = []) => {
+  send: async (
+    chatId,
+    content,
+    mentions,
+    attachments = [],
+    allowWhileGenerating = false,
+  ) => {
     const text = content.trim()
-    if ((!text && !attachments.length) || get().generating[chatId]) return
+    if (
+      (!text && !attachments.length) ||
+      (get().generating[chatId] && !allowWhileGenerating)
+    )
+      return
     set({ generating: { ...get().generating, [chatId]: true } })
     const optimistic: Message = {
       id: `local-${crypto.randomUUID()}`,
@@ -204,8 +220,30 @@ export const useMessagesStore = create<MessagesState>((set, get) => ({
     const s = get()
     switch (ev.type) {
       case 'generation-state':
-        set({ generating: { ...s.generating, [ev.chatId]: ev.generating } })
+        set({
+          generating: { ...s.generating, [ev.chatId]: ev.generating },
+          ...(!ev.generating
+            ? {
+                agentActivity: {
+                  ...s.agentActivity,
+                  [ev.chatId]: {},
+                },
+              }
+            : {}),
+        })
         break
+      case 'agent-activity': {
+        const chatActivity = { ...(s.agentActivity[ev.chatId] ?? {}) }
+        if (ev.state === 'idle') delete chatActivity[ev.botId]
+        else chatActivity[ev.botId] = ev.state
+        set({
+          agentActivity: {
+            ...s.agentActivity,
+            [ev.chatId]: chatActivity,
+          },
+        })
+        break
+      }
       case 'message-start':
         set({
           streaming: { ...s.streaming, [ev.message.id]: ev.message },

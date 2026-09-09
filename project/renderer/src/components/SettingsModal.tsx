@@ -474,7 +474,7 @@ function BotSection() {
               群聊发言自动审核
             </div>
             <div className="mt-0.5 text-[11.5px] text-stone-400">
-              协调 Bot 决策前先按规则检查
+              每位成员判断与回复时都会遵守
             </div>
           </div>
           <Toggle

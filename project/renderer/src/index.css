@@ -598,6 +598,58 @@ button:disabled {
   margin: 0 auto;
   padding: 12px 32px 18px;
 }
+.agent-activity {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 34px;
+  padding: 0 10px 8px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.agent-activity-avatars {
+  display: flex;
+  align-items: center;
+  padding-left: 4px;
+}
+.agent-activity-avatar {
+  position: relative;
+  display: inline-flex;
+  margin-left: -4px;
+  border: 2px solid var(--bg);
+  border-radius: 999px;
+  box-shadow: 0 1px 5px #00000014;
+  animation: agent-bob 1.5s ease-in-out infinite;
+}
+.agent-activity-avatar:nth-child(2) {
+  animation-delay: 120ms;
+}
+.agent-activity-avatar:nth-child(3) {
+  animation-delay: 240ms;
+}
+.agent-activity-avatar:nth-child(4) {
+  animation-delay: 360ms;
+}
+.agent-activity-avatar.speaking::after {
+  content: '';
+  position: absolute;
+  right: -2px;
+  bottom: -1px;
+  width: 7px;
+  height: 7px;
+  border: 1.5px solid var(--bg);
+  border-radius: 50%;
+  background: var(--accent);
+}
+@keyframes agent-bob {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-3px);
+  }
+}
 .composer-box {
   display: flex;
   gap: 10px;

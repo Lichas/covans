@@ -122,10 +122,10 @@ assert(
   'bot A 工作区目录已创建',
 )
 
-console.log('\n[3] 建群（无协调者 → 全体成员发言）并发送用户消息')
-// 不设 coordinator：兜底规则 = 全体成员按 sort_order 发言，确保 A/B/C 都产生 done 消息
+console.log('\n[3] 建群（默认顺序回复）并发送用户消息')
 const group = db.createGroup('冒烟讨论组', [botA.id, botB.id, botC.id])
 assert(group.type === 'group', '群聊已创建')
+assert(group.reply_mode === 'sequential', '新群默认使用顺序回复')
 const t0 = Date.now()
 await orchestrator.sendUserMessage(
   group.id,
@@ -142,8 +142,12 @@ assert(
   '用户消息已落库',
 )
 assert(
-  msgs.some((m) => m.sender_type === 'system'),
-  '产生了 system 消息',
+  !msgs.some(
+    (m) =>
+      m.sender_type === 'system' &&
+      (m.content.includes('依次发言') || m.content.includes('已发消息给')),
+  ),
+  '不在聊天记录中插入回复机制提示',
 )
 for (const [label, bot] of [
   ['A', botA],
@@ -163,8 +167,12 @@ for (const [label, bot] of [
   )
 }
 assert(
-  events.some((e) => e.type === 'system-message'),
-  '推送了 system-message 事件',
+  events.some((e) => e.type === 'agent-activity' && e.state === 'preparing'),
+  '推送了 Agent 准备回复状态',
+)
+assert(
+  events.some((e) => e.type === 'agent-activity' && e.state === 'speaking'),
+  '推送了 Agent 正在回复状态',
 )
 assert(
   events.some((e) => e.type === 'message-delta'),
@@ -181,7 +189,7 @@ assert(
 const chatAfter = db.getChat(group.id)
 assert(chatAfter.last_message_at > 0, 'last_message_at 已更新')
 
-console.log('\n[3b] 协调者群 + @mention 强制首位')
+console.log('\n[3b] 顺序回复 + @mention 强制首位')
 {
   events.length = 0
   const g2 = db.createGroup(
@@ -194,22 +202,60 @@ console.log('\n[3b] 协调者群 + @mention 强制首位')
     botB.id,
   ])
   const m2 = db.listMessages(g2.id, undefined, 100)
-  assert(
-    m2.some(
-      (m) => m.sender_type === 'system' && m.content.includes('已发消息给'),
-    ),
-    '协调者 note 落为 system 消息',
-  )
   const botMsgs = m2.filter(
     (m) => m.sender_type === 'bot' && m.status === 'done',
   )
   assert(
     botMsgs.length >= 2,
-    `协调者决策后至少 2 个 bot 发言（实际 ${botMsgs.length}）`,
+    `成员判断后至少 2 个 bot 发言（实际 ${botMsgs.length}）`,
   )
   assert(
     botMsgs[0]?.sender_bot_id === botB.id,
     '@mention 的 bot B 被强制排在首位发言',
+  )
+}
+
+console.log('\n[3c] 主动回复：并发判断 + 思考中插入新消息')
+{
+  events.length = 0
+  const active = db.createGroup('主动回复冒烟组', [
+    botA.id,
+    botB.id,
+    botC.id,
+  ])
+  db.updateChat(active.id, { replyMode: 'active' })
+  assert(db.getChat(active.id).reply_mode === 'active', '可切换为主动回复')
+  const running = orchestrator.sendUserMessage(
+    active.id,
+    '第一条：你们怎么看？',
+    [],
+  )
+  await sleep(5)
+  await orchestrator.sendUserMessage(
+    active.id,
+    '补充：请优先考虑可靠性。',
+    [],
+  )
+  await running
+  const activeMessages = db.listMessages(active.id, undefined, 100)
+  assert(
+    activeMessages.filter((message) => message.sender_type === 'user')
+      .length === 2,
+    '思考中的新消息会立即落库',
+  )
+  assert(
+    activeMessages.filter(
+      (message) =>
+        message.sender_type === 'bot' && message.status === 'done',
+    ).length === 3,
+    '三位成员并发判断后完成回复',
+  )
+  const preparing = events.filter(
+    (event) => event.type === 'agent-activity' && event.state === 'preparing',
+  )
+  assert(
+    preparing.length >= 6,
+    '新消息使尚未完成的三个判断重新开始',
   )
 }
 

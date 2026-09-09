@@ -57,6 +57,8 @@ export function ChatView() {
   const retry = useMessagesStore((s) => s.retry)
   const rightPanelOpen = useUiStore((s) => s.rightPanelOpen)
   const toggleRightPanel = useUiStore((s) => s.toggleRightPanel)
+  const setRightPanelOpen = useUiStore((s) => s.setRightPanelOpen)
+  const inspectedBotId = useUiStore((s) => s.inspectedBotId)
   const inspectBot = useUiStore((s) => s.inspectBot)
   const providers = useSettingsStore((s) => s.providers)
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -93,6 +95,7 @@ export function ChatView() {
     setShowJump(false)
     setExportState('')
     setPrivateId(null)
+    if (chat?.type === 'group') inspectBot(null)
   }, [chat?.id])
 
   useLayoutEffect(() => {
@@ -179,7 +182,7 @@ export function ChatView() {
               )}
               {generating
                 ? isGroup
-                  ? '成员正在依次回复'
+                  ? '成员正在准备回复…'
                   : '正在回复…'
                 : isGroup
                   ? `${chat.member_bots.length} 位成员 · 共享上下文`
@@ -220,7 +223,18 @@ export function ChatView() {
           </button>
           <button
             className={`icon-button ${rightPanelOpen ? 'active' : ''}`}
-            onClick={toggleRightPanel}
+            onClick={() => {
+              if (!isGroup) {
+                toggleRightPanel()
+                return
+              }
+              if (rightPanelOpen && !inspectedBotId) {
+                setRightPanelOpen(false)
+                return
+              }
+              inspectBot(null)
+              setRightPanelOpen(true)
+            }}
             aria-label={rightPanelOpen ? '收起设置' : '展开设置'}
             title="Bot 设置 · ⌘."
           >
@@ -350,10 +364,12 @@ export function ChatView() {
                   ))}
               </Fragment>
             ))}
-            {generating && !messages.some((m) => m.status === 'streaming') && (
+            {!isGroup &&
+              generating &&
+              !messages.some((m) => m.status === 'streaming') && (
               <div className="waiting-turn" role="status">
                 <span className="status-dot" />
-                {isGroup ? '正在安排成员发言…' : '正在准备回复…'}
+                正在准备回复…
               </div>
             )}
           </div>

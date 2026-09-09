@@ -240,6 +240,23 @@ try {
     .locator('aside')
     .getByRole('button', { name: /灵感工作室/ })
     .click()
+  if (
+    await page
+      .getByRole('button', { name: '收起设置', exact: true })
+      .isVisible()
+      .catch(() => false)
+  )
+    await page.getByRole('button', { name: '收起设置', exact: true }).click()
+  await page.getByRole('button', { name: '展开设置', exact: true }).click()
+  await expect(page.getByText('回复机制', { exact: true }).first()).toBeVisible()
+  await expect(page.getByRole('button', { name: /^主动回复/ })).toBeVisible()
+  await expect(
+    page.getByRole('button', { name: /^顺序回复/ }),
+  ).toHaveAttribute('aria-pressed', 'true')
+  await page.screenshot({ path: path.join(artifacts, 'group-settings.png') })
+  await page.getByRole('button', { name: '收起设置', exact: true }).click()
+  console.log('✓ Group gear opens reply-mode settings; sequential is default')
+
   await composer.fill('请大家讨论一下新功能')
   await page.getByRole('button', { name: '发送', exact: true }).click()
   await expect(
@@ -287,6 +304,44 @@ try {
       .getByRole('button', { name: '灵感工作室', exact: true })
       .locator('.bg-sky-500'),
   ).toHaveCount(0)
+
+  await page.getByRole('button', { name: '展开设置', exact: true }).click()
+  await page.getByRole('button', { name: /^主动回复/ }).click()
+  await expect(
+    page.getByRole('button', { name: /^主动回复/ }),
+  ).toHaveAttribute('aria-pressed', 'true')
+  await page.getByRole('button', { name: '收起设置', exact: true }).click()
+  await composer.fill('主动模式：请一起看这个方案')
+  await page.getByRole('button', { name: '发送', exact: true }).click()
+  await expect(page.locator('.agent-activity-avatar')).toHaveCount(2)
+  await expect(
+    page.getByRole('button', { name: '发送', exact: true }),
+  ).toBeVisible()
+  await composer.fill('补充：优先考虑可靠性')
+  await page.getByRole('button', { name: '发送', exact: true }).click()
+  await expect(
+    page.getByRole('button', { name: '停止生成', exact: true }),
+  ).toHaveCount(0, { timeout: 20000 })
+  const activeCompleted = await page.evaluate(
+    (id) => window.covan.listMessages(id),
+    fixture.group.id,
+  )
+  assert.ok(
+    activeCompleted.some(
+      (message) =>
+        message.sender_type === 'user' && message.content.includes('优先考虑'),
+    ),
+  )
+  assert.equal(
+    activeCompleted.filter(
+      (message) => message.sender_type === 'bot' && message.status === 'done',
+    ).length,
+    6,
+  )
+  console.log(
+    '✓ Active mode shows animated member avatars and accepts new messages while replying',
+  )
+
   await page
     .locator('aside')
     .getByRole('button', { name: /未配置助手/ })

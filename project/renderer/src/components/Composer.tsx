@@ -18,10 +18,14 @@ interface Props {
   chat: ChatSummary
 }
 
+const NO_AGENT_ACTIVITY: Record<string, 'preparing' | 'speaking'> = {}
+
 export function Composer({ chat }: Props) {
   const send = useMessagesStore((s) => s.send)
   const stop = useMessagesStore((s) => s.stop)
   const generating = useMessagesStore((s) => !!s.generating[chat.id])
+  const agentActivity =
+    useMessagesStore((s) => s.agentActivity[chat.id]) ?? NO_AGENT_ACTIVITY
 
   const draft = useDraftsStore((s) => s.drafts[chat.id])
   const text = draft?.text ?? ''
@@ -85,6 +89,8 @@ export function Composer({ chat }: Props) {
     () => (isGroup ? chat.member_bots : []),
     [isGroup, chat.member_bots],
   )
+  const allowDuringGeneration = isGroup && chat.reply_mode === 'active'
+  const activeMembers = members.filter((member) => agentActivity[member.id])
 
   const filteredMembers = useMemo(() => {
     if (!mentionPopup) return []
@@ -138,7 +144,11 @@ export function Composer({ chat }: Props) {
 
   const doSend = () => {
     const content = text.trim()
-    if ((!content && !attachments.length) || generating || importLock.current)
+    if (
+      (!content && !attachments.length) ||
+      (generating && !allowDuringGeneration) ||
+      importLock.current
+    )
       return
     // 提取仍然存在于文本中的 @提及
     const mentions = Object.entries(mentionNames)
@@ -146,7 +156,13 @@ export function Composer({ chat }: Props) {
       .map(([botId]) => botId)
     clearDraft(chat.id)
     closePopup()
-    void send(chat.id, content, mentions, attachments)
+    void send(
+      chat.id,
+      content,
+      mentions,
+      attachments,
+      allowDuringGeneration,
+    )
     taRef.current?.focus()
   }
 
@@ -253,6 +269,33 @@ export function Composer({ chat }: Props) {
           {imageError}
         </div>
       )}
+      {activeMembers.length > 0 && (
+        <div className="agent-activity" role="status" aria-live="polite">
+          <div className="agent-activity-avatars" aria-hidden="true">
+            {activeMembers.map((member) => (
+              <span
+                key={member.id}
+                className={`agent-activity-avatar ${agentActivity[member.id]}`}
+                title={`${member.name}${
+                  agentActivity[member.id] === 'speaking'
+                    ? '正在回复'
+                    : '正在思考'
+                }`}
+              >
+                <Avatar name={member.name} avatar={member.avatar} size={24} />
+              </span>
+            ))}
+          </div>
+          <span className="truncate">
+            {activeMembers.map((member) => member.name).join('、')}
+            {activeMembers.some(
+              (member) => agentActivity[member.id] === 'speaking',
+            )
+              ? '正在回复…'
+              : '正在思考是否回复…'}
+          </span>
+        </div>
+      )}
       {/* @ 成员浮层 */}
       {mentionPopup && filteredMembers.length > 0 && (
         <div className="absolute bottom-full left-4 z-30 mb-2 w-60 animate-fadeIn overflow-hidden rounded-xl border border-stone-200 bg-white shadow-lg dark:border-stone-700 dark:bg-stone-800">
@@ -328,17 +371,20 @@ export function Composer({ chat }: Props) {
           }
           className="selectable max-h-40 flex-1 resize-none bg-transparent py-1.5 text-[14px] leading-relaxed text-stone-800 outline-none placeholder:text-stone-400 dark:text-stone-100"
         />
-        {generating ? (
+        {generating && (
           <button
             onClick={() => void stop(chat.id)}
-            className="flex items-center gap-1.5 rounded-full bg-stone-700 px-3.5 py-1.5 text-[13px] text-white transition hover:bg-stone-800 dark:bg-stone-200 dark:text-stone-800 dark:hover:bg-stone-300"
+            className={`flex items-center gap-1.5 rounded-full bg-stone-700 text-[13px] text-white transition hover:bg-stone-800 dark:bg-stone-200 dark:text-stone-800 dark:hover:bg-stone-300 ${
+              allowDuringGeneration ? 'p-2' : 'px-3.5 py-1.5'
+            }`}
             title="停止生成"
             aria-label="停止生成"
           >
             <StopIcon width={14} height={14} />
-            停止
+            {!allowDuringGeneration && '停止'}
           </button>
-        ) : (
+        )}
+        {(!generating || allowDuringGeneration) && (
           <button
             onClick={doSend}
             disabled={(!text.trim() && !attachments.length) || importing}
@@ -355,7 +401,9 @@ export function Composer({ chat }: Props) {
           {importing
             ? '正在导入图片…'
             : generating
-              ? '正在回复，你可以先写下一条消息'
+              ? allowDuringGeneration
+                ? '主动回复中 · 可继续补充消息'
+                : '正在回复，你可以先写下一条消息'
               : text || attachments.length
                 ? '草稿已在本地保存'
                 : '支持 Markdown · 多图粘贴与拖放'}

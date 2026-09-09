@@ -2,10 +2,6 @@
 // 不依赖 pi 包 / electron，可在纯 Node 冒烟测试中使用。
 import type { Bot } from '../shared/types'
 
-/** 协调者决策 prompt 中的标记（orchestrator 注入，mock 识别后输出决策 JSON） */
-export const COORDINATOR_MARKER = '<<coordinator-json>>'
-/** 协调者成员名单行格式前缀：ROSTER:<botId>:<name> */
-export const ROSTER_PREFIX = 'ROSTER:'
 /** 记忆提取 prompt 中的标记（memory 注入，mock 识别后输出 JSON 数组） */
 export const MEMORY_EXTRACT_MARKER = '<<memory-extract>>'
 
@@ -61,23 +57,6 @@ export function mockPersonaReply(bot: Bot, userText: string): string {
   return `我是${bot.name}。关于「${clip(userText)}」，我的想法是：先把问题拆小，一步一步来。${bot.description ? `（${clip(bot.description, 30)}）` : ''}你还有什么想补充的吗？`
 }
 
-/** mock 协调者：从 systemPrompt 的 ROSTER 行解析成员，输出决策 JSON */
-export function mockCoordinatorDecision(bot: Bot, systemPrompt: string, userText: string): string {
-  const roster: { botId: string; name: string }[] = []
-  for (const line of systemPrompt.split('\n')) {
-    const t = line.trim()
-    if (t.startsWith(ROSTER_PREFIX)) {
-      const rest = t.slice(ROSTER_PREFIX.length)
-      const idx = rest.indexOf(':')
-      if (idx > 0) roster.push({ botId: rest.slice(0, idx), name: rest.slice(idx + 1) })
-    }
-  }
-  const others = roster.filter((r) => r.botId !== bot.id)
-  const picked = others.slice(0, 3)
-  const speak = picked.map((r) => ({ botId: r.botId, hint: `请围绕用户的最新消息谈谈你的看法` }))
-  return JSON.stringify({ speak, note: `已发消息给 ${speak.length} 个 Bot` })
-}
-
 /** mock 记忆提取：输出确定性的 JSON 数组字符串 */
 export function mockMemoryExtraction(bot: Bot, prompt: string): string {
   const snippet = clip(prompt, 18)
@@ -97,7 +76,6 @@ export async function mockComplete(
 ): Promise<string> {
   if (opts.signal?.aborted) return ''
   await new Promise((r) => setTimeout(r, 30))
-  if (systemPrompt.includes(COORDINATOR_MARKER)) return mockCoordinatorDecision(bot, systemPrompt, userText)
   if (systemPrompt.includes(MEMORY_EXTRACT_MARKER)) return mockMemoryExtraction(bot, userText)
   return mockPersonaReply(bot, userText)
 }
@@ -117,9 +95,7 @@ export function mockStream(
   callbacks: MockStreamCallbacks,
   opts: MockCompleteOptions = {},
 ): Promise<string> {
-  const full = systemPrompt.includes(COORDINATOR_MARKER)
-    ? mockCoordinatorDecision(bot, systemPrompt, userText)
-    : mockPersonaReply(bot, userText)
+  const full = mockPersonaReply(bot, userText)
   return new Promise((resolve) => {
     let i = 0
     const timer = setInterval(() => {

@@ -1,6 +1,6 @@
 // stores/chatsStore.ts — 会话列表与当前选中会话
 import { create } from 'zustand'
-import type { Chat, ChatSummary } from '@shared/types'
+import type { Chat, ChatSummary, GroupReplyMode } from '@shared/types'
 import { api } from '../lib/api'
 import { useMessagesStore } from './messagesStore'
 import { useDraftsStore } from './draftsStore'
@@ -20,7 +20,11 @@ interface ChatsState {
   ) => Promise<Chat>
   updateChat: (
     id: string,
-    patch: { name?: string; coordinatorBotId?: string | null },
+    patch: {
+      name?: string
+      coordinatorBotId?: string | null
+      replyMode?: GroupReplyMode
+    },
   ) => Promise<void>
   addChatMembers: (id: string, botIds: string[]) => Promise<void>
   hideChat: (id: string) => Promise<void>
@@ -107,6 +111,7 @@ export const useChatsStore = create<ChatsState>((set, get) => ({
         ),
       ),
       generating: { ...state.generating, [id]: false },
+      agentActivity: { ...state.agentActivity, [id]: {} },
       hasOlder: { ...state.hasOlder, [id]: false },
     }))
     await get().loadChats()

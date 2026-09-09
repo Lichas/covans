@@ -15,14 +15,12 @@ export function NewGroupDialog() {
 
   const [name, setName] = useState('')
   const [selected, setSelected] = useState<Set<string>>(new Set())
-  const [coordinatorId, setCoordinatorId] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
   const reset = () => {
     setName('')
     setSelected(new Set())
-    setCoordinatorId('')
     setError('')
   }
   const close = () => {
@@ -33,12 +31,8 @@ export function NewGroupDialog() {
   const toggle = (id: string) => {
     setSelected((prev) => {
       const next = new Set(prev)
-      if (next.has(id)) {
-        next.delete(id)
-        if (coordinatorId === id) setCoordinatorId('')
-      } else {
-        next.add(id)
-      }
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
       return next
     })
   }
@@ -48,7 +42,7 @@ export function NewGroupDialog() {
     setBusy(true)
     setError('')
     try {
-      await createGroup(name.trim(), [...selected], coordinatorId || undefined)
+      await createGroup(name.trim(), [...selected])
       close()
     } catch (e) {
       setError(String(e))
@@ -56,8 +50,6 @@ export function NewGroupDialog() {
       setBusy(false)
     }
   }
-
-  const selectedBots = bots.filter((b) => selected.has(b.id))
 
   return (
     <Dialog open={open} title="创建群聊" onClose={close}>
@@ -99,11 +91,6 @@ export function NewGroupDialog() {
                       <span className="block truncate text-[11px] text-stone-400">{b.description}</span>
                     )}
                   </span>
-                  {!!b.is_coordinator && (
-                    <span className="shrink-0 rounded-full bg-amber-100 px-1.5 py-0.5 text-[10.5px] text-amber-700 dark:bg-amber-950/60 dark:text-amber-300">
-                      可协调
-                    </span>
-                  )}
                 </label>
               )
             })}
@@ -113,16 +100,9 @@ export function NewGroupDialog() {
           </div>
         </div>
 
-        <Field label="协调 Bot（可选，决定群聊中谁发言）">
-          <select className={inputCls} value={coordinatorId} onChange={(e) => setCoordinatorId(e.target.value)}>
-            <option value="">不设协调者（@提及 或全体成员轮流发言）</option>
-            {selectedBots.map((b) => (
-              <option key={b.id} value={b.id}>
-                {b.name}
-              </option>
-            ))}
-          </select>
-        </Field>
+        <div className="rounded-xl bg-stone-100/80 px-3.5 py-3 text-[11.5px] leading-relaxed text-stone-500 dark:bg-stone-800/60 dark:text-stone-400">
+          新群默认使用「顺序回复」。创建后可在群聊右上角设置中切换为「主动回复」。
+        </div>
 
         {error && <div className="rounded-lg bg-red-50 px-3 py-2 text-[12.5px] text-red-600 dark:bg-red-950/50 dark:text-red-300">{error}</div>}
 

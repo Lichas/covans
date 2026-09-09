@@ -195,11 +195,17 @@ export function registerIpc(): void {
     CH.updateChat,
     (
       id: string,
-      patch: { name?: string; coordinatorBotId?: string | null },
+      patch: {
+        name?: string
+        coordinatorBotId?: string | null
+        replyMode?: 'active' | 'sequential'
+      },
     ) => {
       assertStr(id, 'id')
       if (!patch || typeof patch !== 'object')
         throw new Error('参数 patch 必须是对象')
+      if (patch.replyMode && !['active', 'sequential'].includes(patch.replyMode))
+        throw new Error('未知群聊回复机制')
       db.updateChat(id, patch)
     },
   )
@@ -300,8 +306,12 @@ export function registerIpc(): void {
       assertStr(chatId, 'chatId')
       assertStr(content, 'content', true)
       assertStrArray(mentions ?? [], 'mentions')
-      if (!db.getChat(chatId)) throw new Error('会话不存在')
-      if (isTurnRunning(chatId))
+      const chat = db.getChat(chatId)
+      if (!chat) throw new Error('会话不存在')
+      if (
+        isTurnRunning(chatId) &&
+        !(chat.type === 'group' && chat.reply_mode === 'active')
+      )
         throw new Error('当前会话正在回复，请稍后再发送')
       const images = validateChatImages(attachments)
       if (!content.trim() && !images.length)

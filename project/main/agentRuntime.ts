@@ -562,7 +562,7 @@ async function runPiAgent(
   callbacks.onDone(full)
 }
 
-// ---------- 非流式 completion（协调者决策 / 记忆提取 / testProvider） ----------
+// ---------- 非流式 completion（成员回复判断 / 记忆提取 / testProvider） ----------
 
 export interface CompleteOnceOptions {
   signal?: AbortSignal

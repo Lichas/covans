@@ -70,6 +70,7 @@ export interface BotInput {
 }
 
 export type ChatType = 'dm' | 'group'
+export type GroupReplyMode = 'active' | 'sequential'
 
 export interface Chat {
   id: string
@@ -81,6 +82,8 @@ export interface Chat {
   unread: number
   /** 隐藏的单聊保留在本地，可从「我的 Bot」再次打开。 */
   hidden: number
+  reply_mode: GroupReplyMode
+  context_summary: string
   created_at: number
 }
 
@@ -188,6 +191,12 @@ export type CovanEvent =
   | { type: 'message-start'; chatId: string; message: Message }
   | { type: 'generation-state'; chatId: string; generating: boolean }
   | {
+      type: 'agent-activity'
+      chatId: string
+      botId: string
+      state: 'preparing' | 'speaking' | 'idle'
+    }
+  | {
       type: 'message-delta'
       chatId: string
       messageId: string
@@ -259,7 +268,11 @@ export interface CovanApi {
   ): Promise<Chat>
   updateChat(
     id: string,
-    patch: { name?: string; coordinatorBotId?: string | null },
+    patch: {
+      name?: string
+      coordinatorBotId?: string | null
+      replyMode?: GroupReplyMode
+    },
   ): Promise<void>
   addChatMembers(chatId: string, botIds: string[]): Promise<void>
   hideChat(chatId: string): Promise<void>
