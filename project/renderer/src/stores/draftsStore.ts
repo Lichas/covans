@@ -1,7 +1,9 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
+import type { Attachment } from '@shared/types'
 
 interface Draft {
+  attachments?: Attachment[]
   text: string
   mentionNames: Record<string, string>
 }

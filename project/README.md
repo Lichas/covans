@@ -62,6 +62,17 @@ LM Studio：Provider 类型选 **LM Studio**，无需 API Key，点 **拉取模�
 
 生图使用 [Images API](https://developers.openai.com/api/reference/resources/images/methods/generate) 的 `POST /images/generations`，兼容 base64 或图片 URL 响应；不预置或猜测生图模型。自动模式未配置服务时使用本地 SVG，显式选择 AI 生图时配置不足会显示错误。生图最多等待 120 秒、下载限制 16MB。调用会消耗所选服务额度，API 兼容性需以该服务文档为准。
 
+## 聊天图片
+
+- 点输入框左侧「+」、粘贴或拖入图片；每条最多 8 张，每张最多 16MB，支持 PNG、JPEG、WebP、GIF，可只发图片。
+- 发送前可预览、移除；双方消息中的图片支持点击放大。图片与草稿保存在本地，重启和重试不丢失；导出 Markdown 会同时导出图片文件夹。
+- 视觉模型会收到实际图片内容，而非文件名；聊天历史中的图片也可再次提问。请在 Bot 设置里选择支持视觉的模型。Kimi `k3` 的温度按服务要求固定为 1。
+- 对 Agent 说「帮我画一张图」可调用 `generate_image`，使用 **设置 → 头像生成** 中配置的 Images API 服务，结果直接附在聊天回复里，不替换头像。每轮最多 4 张，支持停止；服务未配置时会报错，不会伪造成功。此工具目前是文生图，不是图像编辑。
+- 看图与生图是独立能力：Kimi Coding Plan 的识图不代表它提供 Images API。聊天模型直接返回的 Markdown 图片链接同样可内嵌查看。
+- 附件随消息发送到当前 Bot 的模型服务；群聊会发送给参与回复的 Bot。草稿保存在本地，不会因为预览就上传给模型。
+
+验证：`npm run test:multimodal` 使用本地模拟 API；`node scripts/multimodal-ui.mjs --kimi` 使用现有 Kimi 配置和实时拉取的 `k3` 做真实双图识别（消耗额度），测试会话使用独立临时目录。
+
 ## 目录结构
 
 ```

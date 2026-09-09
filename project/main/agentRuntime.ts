@@ -20,13 +20,19 @@ import { kimiCodingProvider } from '@earendil-works/pi-ai/providers/kimi-coding'
 import { deepseekProvider } from '@earendil-works/pi-ai/providers/deepseek'
 import { openAICompletionsApi } from '@earendil-works/pi-ai/api/openai-completions.lazy'
 import { Agent } from '@earendil-works/pi-agent-core'
-import type { Bot, Provider, ReasoningEffort } from '../shared/types'
+import type {
+  Attachment,
+  Bot,
+  Provider,
+  ReasoningEffort,
+} from '../shared/types'
 import * as db from './db'
 import { mockComplete, mockStream } from './mockProvider'
 import { createWorkspaceTools } from './workspace'
 import { createAppTools } from './agentTools'
 
 export interface AgentCallbacks {
+  onImages?(images: Attachment[]): void
   onDelta(delta: string): void
   onDone(fullText: string): void
   onError(error: string): void
@@ -470,6 +476,17 @@ async function runPiAgent(
   signal: AbortSignal,
 ): Promise<void> {
   const { models, model, apiKey, provider } = resolveModel(bot)
+  if (
+    !model.input.includes('image') &&
+    historyMessages.some(
+      (message) =>
+        Array.isArray(message.content) &&
+        message.content.some((part) => part.type === 'image'),
+    )
+  )
+    throw new Error(
+      '当前模型不支持图片输入，请在 Bot 设置中切换到支持视觉的模型',
+    )
   const effort = reasoningLevel(bot.reasoning_effort)
   const systemPrompt = applyLmStudioReasoningHint(
     provider,
@@ -486,7 +503,7 @@ async function runPiAgent(
           )
         : [
             ...createWorkspaceTools(bot.id),
-            ...createAppTools(bot.id, chatId, signal),
+            ...createAppTools(bot.id, chatId, signal, callbacks.onImages),
           ],
       thinkingLevel: effort,
       messages: historyMessages,
@@ -494,7 +511,9 @@ async function runPiAgent(
     streamFn: (m, context, options) =>
       models.streamSimple(m, context, {
         ...options,
-        temperature: bot.temperature,
+        // Kimi k3 rejects any explicit temperature other than 1.
+        temperature:
+          provider.kind === 'kimi' && m.id === 'k3' ? 1 : bot.temperature,
         maxTokens: bot.max_tokens,
       }),
     sessionId: `${chatId}:${bot.id}`,
@@ -567,11 +586,7 @@ export async function completeOnce(
   const msg = await models.completeSimple(
     model,
     {
-      systemPrompt: applyLmStudioReasoningHint(
-        provider,
-        systemPrompt,
-        effort,
-      ),
+      systemPrompt: applyLmStudioReasoningHint(provider, systemPrompt, effort),
       messages: [{ role: 'user', content: userText, timestamp: Date.now() }],
     },
     {
@@ -579,7 +594,10 @@ export async function completeOnce(
       signal: options.signal,
       reasoning: effort === 'off' ? undefined : effort,
       maxTokens: options.maxTokens ?? bot.max_tokens,
-      temperature: options.temperature ?? bot.temperature,
+      temperature:
+        provider.kind === 'kimi' && model.id === 'k3'
+          ? 1
+          : (options.temperature ?? bot.temperature),
     },
   )
   if (msg.stopReason === 'error')
@@ -596,7 +614,10 @@ export async function testProviderConnection(
     const modelIds = await listProviderModels(provider)
     const modelId = provider.default_model || modelIds[0]
     if (!modelId)
-      return { ok: false, error: '未找到可用模型，请先拉取模型或填写模型 ID' }
+      return {
+        ok: false,
+        error: '未找到可用模型，请先拉取模型或填写模型 ID',
+      }
     const probe: Bot = {
       id: '__probe__',
       name: provider.name,
@@ -619,7 +640,9 @@ export async function testProviderConnection(
     const { models, model, apiKey } = resolveModel(probe)
     const msg = await models.completeSimple(
       model,
-      { messages: [{ role: 'user', content: 'ping', timestamp: Date.now() }] },
+      {
+        messages: [{ role: 'user', content: 'ping', timestamp: Date.now() }],
+      },
       { apiKey: apiKey || undefined, reasoning: undefined, maxTokens: 32 },
     )
     if (msg.stopReason === 'error')

@@ -1,10 +1,12 @@
 import { Type } from '@earendil-works/pi-ai'
 import type { AgentTool } from '@earendil-works/pi-agent-core'
-import type { BotInput, MemoryKind } from '../shared/types'
+import type { Attachment, BotInput, MemoryKind } from '../shared/types'
+import { storeChatImage, imageContent } from './chatImages'
 import * as db from './db'
 import {
   expandAvatarPrompt,
   generateBotAvatar,
+  requestGeneratedImage,
   refreshAutomaticAvatar,
   type AvatarMode,
 } from './avatars'
@@ -24,9 +26,40 @@ export function createAppTools(
   botId: string,
   chatId: string,
   parentSignal?: AbortSignal,
+  onImages?: (images: Attachment[]) => void,
 ): AgentTool[] {
   let privateCalls = 0
+  let imageCalls = 0
   return [
+    {
+      name: 'generate_image',
+      label: '生成聊天图片',
+      description:
+        '用户明确要求画图或生成图片时调用已配置的生图服务。图片自动显示在当前回复中，不修改头像。不要伪造图片链接；失败时说明原因。每轮最多生成4张。此工具是文生图，不支持根据输入图像进行精确编辑。',
+      parameters: Type.Object({
+        prompt: Type.String({ minLength: 1, maxLength: 6000 }),
+      }),
+      execute: async (_id, params) => {
+        if (++imageCalls > 4) throw new Error('每轮最多生成4张图片')
+        const { data, ext } = await requestGeneratedImage(
+          (params as { prompt: string }).prompt,
+          parentSignal,
+        )
+        parentSignal?.throwIfAborted()
+        const attachment = storeChatImage(data, `生成图片.${ext}`)
+        onImages?.([attachment])
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: '图片已生成并显示在你的回复中，无需重复插入链接。',
+            },
+            imageContent(attachment),
+          ],
+          details: { attachment },
+        }
+      },
+    },
     {
       name: 'list_bots',
       label: '查看 Bot 名单',
@@ -35,14 +68,12 @@ export function createAppTools(
       parameters: Type.Object({}),
       execute: async () =>
         result(
-          db
-            .listBots()
-            .map((b) => ({
-              id: b.id,
-              name: b.name,
-              description: b.description,
-              pinned: !!b.pinned,
-            })),
+          db.listBots().map((b) => ({
+            id: b.id,
+            name: b.name,
+            description: b.description,
+            pinned: !!b.pinned,
+          })),
         ),
     },
     {

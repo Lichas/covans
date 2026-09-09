@@ -10,6 +10,8 @@ import type {
 } from '../shared/types'
 
 const api: CovanApi = {
+  importChatImage: (name, bytes) =>
+    ipcRenderer.invoke(CH.importChatImage, name, bytes),
   getUserProfile: () => ipcRenderer.invoke(CH.getUserProfile),
   saveUserProfile: (profile) => ipcRenderer.invoke(CH.saveUserProfile, profile),
   listUserMemories: () => ipcRenderer.invoke(CH.listUserMemories),
@@ -62,8 +64,14 @@ const api: CovanApi = {
   // messages
   listMessages: (chatId: string, before?: number, limit?: number) =>
     ipcRenderer.invoke(CH.listMessages, chatId, before, limit),
-  sendUserMessage: (chatId: string, content: string, mentions: string[]) =>
-    ipcRenderer.invoke(CH.sendUserMessage, chatId, content, mentions),
+  sendUserMessage: (chatId, content, mentions, attachments) =>
+    ipcRenderer.invoke(
+      CH.sendUserMessage,
+      chatId,
+      content,
+      mentions,
+      attachments,
+    ),
   stopChat: (chatId: string) => ipcRenderer.invoke(CH.stopChat, chatId),
 
   // memory

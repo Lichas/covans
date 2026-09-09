@@ -160,6 +160,20 @@ export async function generateBotAvatar(
     mode === 'auto' ? (providerId && model ? 'image' : 'local') : mode
   if (selectedMode === 'local')
     return { path: generateLocalAvatar(bot, prompt), mode: 'local' }
+  const { data, ext } = await requestGeneratedImage(
+    prompt.trim() || localAvatarDesign(bot).prompt,
+    signal,
+  )
+  return { path: storeAvatar(bot.id, data, ext, 'image'), mode: 'image' }
+}
+
+export async function requestGeneratedImage(
+  prompt: string,
+  signal?: AbortSignal,
+): Promise<{ data: Buffer; ext: string }> {
+  signal?.throwIfAborted()
+  const providerId = db.getSetting('avatar_provider')
+  const model = db.getSetting('avatar_model')
   const provider = providerId ? db.getProvider(providerId) : null
   if (!provider || !model)
     throw new Error(
@@ -188,7 +202,7 @@ export async function generateBotAvatar(
       },
       body: JSON.stringify({
         model,
-        prompt: prompt.trim() || localAvatarDesign(bot).prompt,
+        prompt,
         n: 1,
         size: '1024x1024',
       }),
@@ -196,7 +210,9 @@ export async function generateBotAvatar(
   )
   if (!response.ok)
     throw new Error(
-      `生图服务返回 HTTP ${response.status}，请检查模型、额度和配置`,
+      response.status === 404
+        ? '当前服务未找到 Images API 生图接口（HTTP 404）。请在设置 → 头像生成中配置生图服务和模型；聊天识图模型不能代替生图服务。'
+        : `生图服务返回 HTTP ${response.status}，请检查模型、额度和配置`,
     )
   const payload = JSON.parse(
     (await limitedBody(response, 24 * 1024 * 1024)).toString('utf8'),
@@ -225,5 +241,5 @@ export async function generateBotAvatar(
         : ''
   if (!ext) throw new Error('生图服务需返回 PNG、JPEG 或 WebP 图片')
   requestSignal.throwIfAborted()
-  return { path: storeAvatar(bot.id, data, ext, 'image'), mode: 'image' }
+  return { data, ext }
 }

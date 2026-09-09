@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { CovanEvent, Message } from '@shared/types'
+import type { Attachment, CovanEvent, Message } from '@shared/types'
 import { api } from '../lib/api'
 
 interface MessagesState {
@@ -12,7 +12,12 @@ interface MessagesState {
   errors: Record<string, string>
   loadMessages: (chatId: string) => Promise<void>
   loadOlder: (chatId: string) => Promise<number>
-  send: (chatId: string, content: string, mentions: string[]) => Promise<void>
+  send: (
+    chatId: string,
+    content: string,
+    mentions: string[],
+    attachments?: Attachment[],
+  ) => Promise<void>
   stop: (chatId: string) => Promise<void>
   retry: (chatId: string, failedMessage: Message) => Promise<void>
   handleEvent: (ev: CovanEvent) => void
@@ -119,9 +124,9 @@ export const useMessagesStore = create<MessagesState>((set, get) => ({
       set({ loadingOlder: { ...get().loadingOlder, [chatId]: false } })
     }
   },
-  send: async (chatId, content, mentions) => {
+  send: async (chatId, content, mentions, attachments = []) => {
     const text = content.trim()
-    if (!text || get().generating[chatId]) return
+    if ((!text && !attachments.length) || get().generating[chatId]) return
     set({ generating: { ...get().generating, [chatId]: true } })
     const optimistic: Message = {
       id: `local-${crypto.randomUUID()}`,
@@ -129,7 +134,7 @@ export const useMessagesStore = create<MessagesState>((set, get) => ({
       sender_type: 'user',
       sender_bot_id: null,
       content: text,
-      attachments: [],
+      attachments,
       mentions,
       status: 'done',
       error: '',
@@ -142,7 +147,7 @@ export const useMessagesStore = create<MessagesState>((set, get) => ({
       },
     })
     try {
-      await api.sendUserMessage(chatId, text, mentions)
+      await api.sendUserMessage(chatId, text, mentions, attachments)
       await get().loadMessages(chatId)
     } catch (e) {
       set({
@@ -174,7 +179,12 @@ export const useMessagesStore = create<MessagesState>((set, get) => ({
           ),
         },
       })
-      await get().send(chatId, failedMessage.content, failedMessage.mentions)
+      await get().send(
+        chatId,
+        failedMessage.content,
+        failedMessage.mentions,
+        failedMessage.attachments,
+      )
       return
     }
     const list = get().messages[chatId] ?? []
@@ -182,7 +192,13 @@ export const useMessagesStore = create<MessagesState>((set, get) => ({
     const lastUser = [...(idx >= 0 ? list.slice(0, idx) : list)]
       .reverse()
       .find((m) => m.sender_type === 'user' && m.status !== 'error')
-    if (lastUser) await get().send(chatId, lastUser.content, lastUser.mentions)
+    if (lastUser)
+      await get().send(
+        chatId,
+        lastUser.content,
+        lastUser.mentions,
+        lastUser.attachments,
+      )
   },
   handleEvent: (ev) => {
     const s = get()

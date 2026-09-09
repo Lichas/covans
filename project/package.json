@@ -13,6 +13,7 @@
     "test:ui": "npm run build && node scripts/ui-smoke.mjs",
     "test:context": "npm run build && node scripts/context-ui.mjs",
     "test:local-llm": "npm run build && node scripts/local-llm-smoke.mjs",
+    "test:multimodal": "npm run build && node scripts/multimodal-ui.mjs",
     "pack": "electron-builder --mac --dir"
   },
   "engines": {

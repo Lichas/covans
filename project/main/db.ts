@@ -140,7 +140,9 @@ export function initDb(dir: string): Db {
   d.exec(MIGRATION)
   const botColumns = d.pragma('table_info(bots)') as { name: string }[]
   if (!botColumns.some((column) => column.name === 'reasoning_effort')) {
-    d.exec("ALTER TABLE bots ADD COLUMN reasoning_effort TEXT NOT NULL DEFAULT 'off'")
+    d.exec(
+      "ALTER TABLE bots ADD COLUMN reasoning_effort TEXT NOT NULL DEFAULT 'off'",
+    )
     // 旧版本的 Kimi Coding Plan 固定使用 high，迁移时保留原有行为。
     d.exec(
       "UPDATE bots SET reasoning_effort='high' WHERE provider_id IN (SELECT id FROM providers WHERE kind='kimi')",
@@ -667,7 +669,9 @@ export function updateBot(
   return getBot(id)!
 }
 
-function assertReasoningEffort(value: string): asserts value is Bot['reasoning_effort'] {
+function assertReasoningEffort(
+  value: string,
+): asserts value is Bot['reasoning_effort'] {
   if (!['off', 'low', 'medium', 'high', 'xhigh'].includes(value))
     throw new Error('未知推理强度')
 }
@@ -883,16 +887,24 @@ export function getMessage(id: string): Message | null {
 
 export function updateMessage(
   id: string,
-  patch: { content?: string; status?: MessageStatus; error?: string },
+  patch: {
+    content?: string
+    status?: MessageStatus
+    error?: string
+    attachments?: Attachment[]
+  },
 ): Message {
   const existing = getMessage(id)
   if (!existing) throw new Error('消息不存在')
   getDb()
-    .prepare('UPDATE messages SET content=?, status=?, error=? WHERE id=?')
+    .prepare(
+      'UPDATE messages SET content=?, status=?, error=?, attachments=? WHERE id=?',
+    )
     .run(
       patch.content ?? existing.content,
       patch.status ?? existing.status,
       patch.error ?? existing.error,
+      JSON.stringify(patch.attachments ?? existing.attachments),
       id,
     )
   return getMessage(id)!

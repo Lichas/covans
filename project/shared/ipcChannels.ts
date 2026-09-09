@@ -1,5 +1,6 @@
 // shared/ipcChannels.ts — IPC 通道名常量（主/preload 共用）
 export const CH = {
+  importChatImage: 'images:import',
   getUserProfile: 'user:profile',
   saveUserProfile: 'user:saveProfile',
   listUserMemories: 'user:memories',

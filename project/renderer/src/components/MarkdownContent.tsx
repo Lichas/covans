@@ -1,5 +1,9 @@
 import { memo, useRef, type ComponentProps } from 'react'
-import ReactMarkdown, { type Components } from 'react-markdown'
+import ReactMarkdown, {
+  defaultUrlTransform,
+  type Components,
+} from 'react-markdown'
+import { ChatImage, safeImageUrl } from './ChatImage'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
 import { CopyButton } from './CopyButton'
@@ -36,16 +40,7 @@ const components: Components = {
       <table {...props} />
     </div>
   ),
-  img: ({ src, alt }) => (
-    <a
-      href={src}
-      target="_blank"
-      rel="noopener noreferrer"
-      className="image-reference"
-    >
-      ↗ {alt || '查看图片'}
-    </a>
-  ),
+  img: ({ src, alt }) => <ChatImage src={src || ''} alt={alt || '图片'} />,
 }
 const remarkPlugins = [remarkGfm]
 const rehypePlugins = [
@@ -60,6 +55,11 @@ export const MarkdownContent = memo(function MarkdownContent({
   return (
     <div className="markdown-content selectable">
       <ReactMarkdown
+        urlTransform={(url, key, node) =>
+          node.tagName === 'img' && key === 'src'
+            ? safeImageUrl(url)
+            : defaultUrlTransform(url)
+        }
         remarkPlugins={remarkPlugins}
         rehypePlugins={rehypePlugins}
         components={components}

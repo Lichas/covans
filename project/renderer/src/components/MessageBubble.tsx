@@ -4,6 +4,7 @@ import { Avatar } from './Avatar'
 import { QuoteIcon, RefreshIcon, WarnIcon } from './icons'
 import { CopyButton } from './CopyButton'
 import { MarkdownContent } from './MarkdownContent'
+import { ChatImage, attachmentUrl } from './ChatImage'
 import { formatFullTime, formatMessageTime } from '../lib/format'
 
 interface Props {
@@ -69,11 +70,22 @@ export const MessageBubble = memo(function MessageBubble({
           {streaming && <span className="generation-label">正在回复</span>}
         </div>
         <div className={`message-surface ${isError ? 'message-error' : ''}`}>
+          {message.attachments.length > 0 && (
+            <div className="message-images">
+              {message.attachments.map((item, i) => (
+                <ChatImage
+                  key={`${item.path}-${i}`}
+                  src={attachmentUrl(item.path)}
+                  alt={item.name}
+                />
+              ))}
+            </div>
+          )}
           {isUser ? (
             <div className="selectable msg-content">{message.content}</div>
           ) : message.content ? (
             <MarkdownContent content={message.content} />
-          ) : streaming ? (
+          ) : streaming && !message.attachments.length ? (
             <div className="thinking-indicator" role="status">
               <span />
               <span />

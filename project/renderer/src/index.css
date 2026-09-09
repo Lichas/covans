@@ -1099,3 +1099,82 @@ kbd {
     scroll-behavior: auto !important;
   }
 }
+
+/* Chat media uses the same local files for drafts, history and model input. */
+.message-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.chat-image {
+  display: inline-flex;
+  max-width: 100%;
+  overflow: hidden;
+  border-radius: 12px;
+  vertical-align: middle;
+  cursor: zoom-in;
+  background: rgba(128, 128, 128, 0.08);
+  border: 1px solid rgba(128, 128, 128, 0.15);
+}
+.chat-image img {
+  display: block;
+  width: auto;
+  max-width: 320px;
+  max-height: 300px;
+  object-fit: contain;
+}
+.message-images .chat-image {
+  flex: 0 1 auto;
+}
+.image-lightbox {
+  display: block;
+  margin: auto;
+  max-width: 100%;
+  max-height: 72vh;
+  object-fit: contain;
+  padding: 12px;
+}
+.image-unavailable {
+  font-size: 12px;
+  opacity: 0.65;
+}
+.composer-images {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  overflow-x: auto;
+  padding: 8px 3px 12px;
+}
+.composer-image {
+  position: relative;
+  flex-shrink: 0;
+}
+.composer-image .chat-image img {
+  width: 72px;
+  height: 72px;
+  object-fit: cover;
+}
+.remove-image {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #292524;
+  color: white;
+  border: 2px solid white;
+}
+.image-count {
+  font-size: 11px;
+  color: #78716c;
+  white-space: nowrap;
+}
+@media (max-width: 680px) {
+  .chat-image img {
+    max-width: min(260px, 60vw);
+  }
+}

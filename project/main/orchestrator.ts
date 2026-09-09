@@ -5,7 +5,8 @@ import type {
   Message as PiMessage,
   Usage,
 } from '@earendil-works/pi-ai'
-import type { Bot, CovanEvent, Message } from '../shared/types'
+import type { Attachment, Bot, CovanEvent, Message } from '../shared/types'
+import { imageContent, validateChatImages } from './chatImages'
 import * as db from './db'
 import { abortChat, completeOnce, runAgent } from './agentRuntime'
 import { buildSystemPrompt, noteNewMessages, type GroupContext } from './memory'
@@ -40,11 +41,23 @@ function toPiHistory(messages: Message[], self: Bot): PiMessage[] {
   const out: PiMessage[] = []
   for (const m of messages) {
     if (m.sender_type === 'user') {
-      out.push({ role: 'user', content: m.content, timestamp: m.created_at })
+      out.push({
+        role: 'user',
+        content: [
+          { type: 'text', text: m.content || '请查看这些图片。' },
+          ...m.attachments.map(imageContent),
+        ],
+        timestamp: m.created_at,
+      })
     } else if (m.sender_type === 'bot' && m.sender_bot_id === self.id) {
       const assistant: AssistantMessage = {
         role: 'assistant',
-        content: [{ type: 'text', text: m.content }],
+        content: [
+          {
+            type: 'text',
+            text: m.content || (m.attachments.length ? '[已发送图片]' : ''),
+          },
+        ],
         api: 'openai-completions',
         provider: 'covan-history',
         model: 'history',
@@ -53,12 +66,27 @@ function toPiHistory(messages: Message[], self: Bot): PiMessage[] {
         timestamp: m.created_at,
       }
       out.push(assistant)
+      if (m.attachments.length)
+        out.push({
+          role: 'user',
+          content: [
+            {
+              type: 'text',
+              text: '[历史图片：这是你此前回复中生成的图片，不是新的用户请求]',
+            },
+            ...m.attachments.map(imageContent),
+          ],
+          timestamp: m.created_at,
+        })
     } else if (m.sender_type === 'bot') {
       const name =
         (m.sender_bot_id && db.getBot(m.sender_bot_id)?.name) || 'Bot'
       out.push({
         role: 'user',
-        content: `[${name}]: ${m.content}`,
+        content: [
+          { type: 'text', text: `[${name}]: ${m.content}` },
+          ...m.attachments.map(imageContent),
+        ],
         timestamp: m.created_at,
       })
     } else {
@@ -169,13 +197,20 @@ export async function sendUserMessage(
   chatId: string,
   content: string,
   mentions: string[] = [],
+  attachments: Attachment[] = [],
 ): Promise<void> {
   if (turns.has(chatId)) throw new Error('当前会话正在回复，请稍后再发送')
   const controller = new AbortController()
   turns.set(chatId, controller)
   emit({ type: 'generation-state', chatId, generating: true })
   try {
-    await runTurn(chatId, content, mentions, controller.signal)
+    await runTurn(
+      chatId,
+      content,
+      mentions,
+      controller.signal,
+      validateChatImages(attachments),
+    )
   } catch (e) {
     if (!controller.signal.aborted && db.getChat(chatId)) {
       const message = db.insertMessage({
@@ -209,11 +244,12 @@ async function runTurn(
   content: string,
   mentions: string[],
   signal: AbortSignal,
+  attachments: Attachment[],
 ): Promise<void> {
   const chat = db.getChat(chatId)
   if (!chat) throw new Error('会话不存在')
   const text = content.trim()
-  if (!text) throw new Error('消息内容不能为空')
+  if (!text && !attachments.length) throw new Error('消息内容不能为空')
 
   const members = db.listMemberBots(chatId)
   if (members.length === 0) throw new Error('会话内没有 Bot 成员')
@@ -223,6 +259,7 @@ async function runTurn(
     chat_id: chatId,
     sender_type: 'user',
     content: text,
+    attachments,
     mentions,
   })
   db.touchChat(chatId, Date.now())
@@ -346,7 +383,6 @@ async function speakOne(
 
   // 历史（最近 30 条）+ hint 作为用户消息前缀（加在最后一条真实用户消息上）
   const recent = db.listRecentMessages(chatId, 30)
-  const history = toPiHistory(recent, bot)
   let userIdx = -1
   for (let i = recent.length - 1; i >= 0; i--) {
     if (recent[i].sender_type === 'user') {
@@ -355,12 +391,12 @@ async function speakOne(
     }
   }
   if (hint && userIdx >= 0) {
-    history[userIdx] = {
-      role: 'user',
+    recent[userIdx] = {
+      ...recent[userIdx],
       content: `(协调者提示: ${hint})\n${userText}`,
-      timestamp: recent[userIdx].created_at,
     }
   }
+  const history = toPiHistory(recent, bot)
 
   // 先落一条 streaming 占位消息
   const placeholder = db.insertMessage({
@@ -378,6 +414,14 @@ async function speakOne(
     bot,
     history,
     {
+      onImages: (images) => {
+        const current = db.getMessage(placeholder.id)!
+        const msg = db.updateMessage(placeholder.id, {
+          content: acc,
+          attachments: [...current.attachments, ...images],
+        })
+        emit({ type: 'message-start', chatId, message: msg })
+      },
       onDelta: (delta) => {
         acc += delta
         emit({

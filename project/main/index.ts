@@ -8,6 +8,7 @@ import { getDb, initDb } from './db'
 import { initWorkspace } from './workspace'
 import { initOrchestrator } from './orchestrator'
 import { registerIpc } from './ipc'
+import { chatImagePath } from './chatImages'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -18,6 +19,15 @@ if (process.env.COVAN_USER_DATA_DIR)
 // 自定义头像协议：covan-avatar://local/avatars/<逐段编码的文件路径>
 // 必须在 app ready 之前注册特权
 protocol.registerSchemesAsPrivileged([
+  {
+    scheme: 'covan-image',
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      stream: true,
+    },
+  },
   {
     scheme: 'covan-avatar',
     privileges: {
@@ -30,6 +40,19 @@ protocol.registerSchemesAsPrivileged([
 ])
 
 function registerAvatarProtocol(userData: string): void {
+  protocol.handle('covan-image', async (request) => {
+    try {
+      const url = new URL(request.url)
+      if (url.hostname !== 'local')
+        return new Response('forbidden', { status: 403 })
+      const file = chatImagePath(
+        decodeURIComponent(url.pathname).replace(/^\/+/, ''),
+      )
+      return await net.fetch(pathToFileURL(file).toString())
+    } catch {
+      return new Response('not found', { status: 404 })
+    }
+  })
   protocol.handle('covan-avatar', async (request) => {
     try {
       const url = new URL(request.url)

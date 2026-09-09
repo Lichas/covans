@@ -43,6 +43,7 @@ export function AvatarSettingsSection() {
         <strong className="block pb-1">两种方式，同一个入口</strong>本地插画无需
         Key，按名称和人设生成。AI 生图可生成真人、动漫等头像，需要支持 Images
         API 的服务，会使用该服务的额度。
+        聊天中的「帮我画一张图」也使用这里的生图配置，生成结果直接显示在消息中，不会替换头像。
       </div>
       <Field label="生图 Provider">
         <select
@@ -69,6 +70,11 @@ export function AvatarSettingsSection() {
       <p className="text-[11px] leading-relaxed text-stone-400">
         先在 Provider 页添加服务。聊天模型或 Coding Plan 不一定支持生图。
       </p>
+      {providers.find((p) => p.id === provider)?.kind === 'kimi' && !base && (
+        <p role="status" className="rounded-lg bg-amber-50 p-3 text-[12px] text-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
+          当前选择的是 Kimi Coding Plan。识图与生图是两种能力：聊天中的 k3 可看图；生成图片需配置支持 /images/generations 的服务和生图模型。
+        </p>
+      )}
       <Field label="生图模型">
         <input
           className={inputCls}

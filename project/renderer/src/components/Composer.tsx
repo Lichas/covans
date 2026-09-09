@@ -4,7 +4,9 @@ import type { ChatSummary } from '@shared/types'
 import { useMessagesStore } from '../stores/messagesStore'
 import { useDraftsStore } from '../stores/draftsStore'
 import { Avatar } from './Avatar'
-import { AtIcon, SendIcon, StopIcon } from './icons'
+import { AtIcon, SendIcon, StopIcon, PlusIcon, CloseIcon } from './icons'
+import { ChatImage, attachmentUrl } from './ChatImage'
+import { api } from '../lib/api'
 
 interface MemberLite {
   id: string
@@ -23,6 +25,48 @@ export function Composer({ chat }: Props) {
 
   const draft = useDraftsStore((s) => s.drafts[chat.id])
   const text = draft?.text ?? ''
+  const attachments = draft?.attachments ?? []
+  const [importing, setImporting] = useState(false)
+  const importLock = useRef(false)
+  const [imageError, setImageError] = useState('')
+  const fileRef = useRef<HTMLInputElement>(null)
+  useEffect(() => setImageError(''), [chat.id])
+  const addImages = async (files: File[]) => {
+    if (importLock.current || !files.length) return
+    const targetChatId = chat.id
+    importLock.current = true
+    setImporting(true)
+    setImageError('')
+    try {
+      const previous =
+        useDraftsStore.getState().drafts[targetChatId]?.attachments ?? []
+      if (previous.length + files.length > 8)
+        throw new Error('每条消息最多 8 张图片')
+      if (files.some((f) => f.size > 16 * 1024 * 1024))
+        throw new Error('每张图片最多 16MB')
+      for (const file of files) {
+        const image = await api.importChatImage(
+          file.name,
+          new Uint8Array(await file.arrayBuffer()),
+        )
+        const current =
+          useDraftsStore.getState().drafts[targetChatId]?.attachments ?? []
+        useDraftsStore
+          .getState()
+          .setDraft(targetChatId, { attachments: [...current, image] })
+      }
+    } catch (e) {
+      setImageError(
+        (e instanceof Error ? e.message : String(e)).replace(
+          /^Error invoking remote method '[^']+': (?:Error: )?/,
+          '',
+        ),
+      )
+    } finally {
+      importLock.current = false
+      setImporting(false)
+    }
+  }
   const setDraft = useDraftsStore((s) => s.setDraft)
   const clearDraft = useDraftsStore((s) => s.clearDraft)
   const setText = (value: string) => setDraft(chat.id, { text: value })
@@ -94,14 +138,15 @@ export function Composer({ chat }: Props) {
 
   const doSend = () => {
     const content = text.trim()
-    if (!content || generating) return
+    if ((!content && !attachments.length) || generating || importLock.current)
+      return
     // 提取仍然存在于文本中的 @提及
     const mentions = Object.entries(mentionNames)
       .filter(([, name]) => content.includes(`@${name}`))
       .map(([botId]) => botId)
     clearDraft(chat.id)
     closePopup()
-    void send(chat.id, content, mentions)
+    void send(chat.id, content, mentions, attachments)
     taRef.current?.focus()
   }
 
@@ -149,7 +194,65 @@ export function Composer({ chat }: Props) {
   }
 
   return (
-    <div className="composer-shell">
+    <div
+      className="composer-shell"
+      onDragOver={(e) => {
+        if (e.dataTransfer.types.includes('Files')) e.preventDefault()
+      }}
+      onDrop={(e) => {
+        if (e.dataTransfer.files.length) {
+          e.preventDefault()
+          void addImages(Array.from(e.dataTransfer.files))
+        }
+      }}
+      onPaste={(e) => {
+        const files = Array.from(e.clipboardData.files)
+        if (files.length) {
+          e.preventDefault()
+          void addImages(files)
+        }
+      }}
+    >
+      <input
+        ref={fileRef}
+        type="file"
+        multiple
+        accept="image/png,image/jpeg,image/webp,image/gif"
+        className="sr-only"
+        tabIndex={-1}
+        aria-label="选择图片"
+        onChange={(e) => {
+          void addImages(Array.from(e.target.files ?? []))
+          e.target.value = ''
+        }}
+      />
+      {!!attachments.length && (
+        <div className="composer-images">
+          {attachments.map((item, i) => (
+            <div className="composer-image" key={`${item.path}-${i}`}>
+              <ChatImage src={attachmentUrl(item.path)} alt={item.name} />
+              <button
+                type="button"
+                className="remove-image"
+                aria-label={`移除图片：${item.name}`}
+                onClick={() =>
+                  setDraft(chat.id, {
+                    attachments: attachments.filter((_, index) => index !== i),
+                  })
+                }
+              >
+                <CloseIcon width={12} height={12} />
+              </button>
+            </div>
+          ))}
+          <span className="image-count">{attachments.length}/8</span>
+        </div>
+      )}
+      {imageError && (
+        <div role="alert" className="mb-2 text-xs text-red-500">
+          {imageError}
+        </div>
+      )}
       {/* @ 成员浮层 */}
       {mentionPopup && filteredMembers.length > 0 && (
         <div className="absolute bottom-full left-4 z-30 mb-2 w-60 animate-fadeIn overflow-hidden rounded-xl border border-stone-200 bg-white shadow-lg dark:border-stone-700 dark:bg-stone-800">
@@ -181,6 +284,16 @@ export function Composer({ chat }: Props) {
       )}
 
       <div className="composer-box">
+        <button
+          type="button"
+          className="rounded-lg p-1.5 text-stone-400 hover:bg-stone-100 disabled:opacity-30 dark:hover:bg-stone-700"
+          aria-label="添加图片"
+          title="添加图片 · 支持多选、粘贴与拖放（最多8张）"
+          disabled={importing || attachments.length >= 8}
+          onClick={() => fileRef.current?.click()}
+        >
+          <PlusIcon width={20} height={20} />
+        </button>
         {/* @ 提及按钮（群聊） */}
         {isGroup && (
           <button
@@ -228,7 +341,7 @@ export function Composer({ chat }: Props) {
         ) : (
           <button
             onClick={doSend}
-            disabled={!text.trim()}
+            disabled={(!text.trim() && !attachments.length) || importing}
             className="rounded-full bg-ink p-2 text-white transition enabled:hover:bg-stone-700 disabled:opacity-30 dark:bg-stone-100 dark:text-stone-900 dark:enabled:hover:bg-stone-300"
             title="发送（Enter）"
             aria-label="发送"
@@ -239,11 +352,13 @@ export function Composer({ chat }: Props) {
       </div>
       <div className="composer-footer">
         <span>
-          {generating
-            ? '正在回复，你可以先写下一条消息'
-            : text
-              ? '草稿已在本地保存'
-              : '支持 Markdown'}
+          {importing
+            ? '正在导入图片…'
+            : generating
+              ? '正在回复，你可以先写下一条消息'
+              : text || attachments.length
+                ? '草稿已在本地保存'
+                : '支持 Markdown · 多图粘贴与拖放'}
         </span>
         <span>Enter 发送 · Shift + Enter 换行</span>
       </div>

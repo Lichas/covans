@@ -2,7 +2,19 @@
 import { app, clipboard, dialog, ipcMain, shell, BrowserWindow } from 'electron'
 import fs from 'node:fs'
 import path from 'node:path'
-import type { BotInput, MemoryKind, ProviderInput } from '../shared/types'
+import type {
+  Attachment,
+  BotInput,
+  MemoryKind,
+  ProviderInput,
+} from '../shared/types'
+import {
+  MAX_IMAGE_BYTES,
+  chatImagePath,
+  storeChatImage,
+  validateChatImages,
+} from './chatImages'
+import { randomUUID } from 'node:crypto'
 import { CH } from '../shared/ipcChannels'
 import * as db from './db'
 import { listProviderModels, testProviderConnection } from './agentRuntime'
@@ -58,6 +70,12 @@ function handle<TArgs extends unknown[], TRet>(
 // ---------- 注册 ----------
 
 export function registerIpc(): void {
+  handle(CH.importChatImage, (name: string, bytes: Uint8Array) => {
+    assertStr(name, 'name')
+    if (!(bytes instanceof Uint8Array) || bytes.byteLength > MAX_IMAGE_BYTES)
+      throw new Error('每张图片最多 16MB')
+    return storeChatImage(Buffer.from(bytes), name)
+  })
   registerContextIpc()
   handle(CH.writeClipboard, (text: string) => {
     assertStr(text, 'text', true)
@@ -208,6 +226,8 @@ export function registerIpc(): void {
     })
     if (result.canceled || !result.filePath) return null
     const messages = db.listMessages(chatId, undefined, 2147483647)
+    const assetName = `covan-images-${randomUUID()}`
+    const assetDir = path.join(path.dirname(result.filePath), assetName)
     const text =
       [
         `# ${title}`,
@@ -222,7 +242,22 @@ export function registerIpc(): void {
                   ? '系统'
                   : (m.sender_bot_id && db.getBot(m.sender_bot_id)?.name) ||
                     'Bot'
-            return `## ${who} · ${new Date(m.created_at).toLocaleString('zh-CN')}\n\n${m.content}${m.error ? `\n\n> 生成失败：${m.error}` : ''}${m.status === 'stopped' ? '\n\n> 已停止生成' : ''}`
+            const images = m.attachments
+              .map((image) => {
+                try {
+                  const source = chatImagePath(image.path)
+                  fs.mkdirSync(assetDir, { recursive: true })
+                  fs.copyFileSync(
+                    source,
+                    path.join(assetDir, path.basename(source)),
+                  )
+                  return `![${image.name.replace(/[\[\]\\\r\n]/g, '')}](${assetName}/${path.basename(source)})`
+                } catch {
+                  return '> 图片文件不可用'
+                }
+              })
+              .join('\n\n')
+            return `## ${who} · ${new Date(m.created_at).toLocaleString('zh-CN')}\n\n${m.content}${images ? `\n\n${images}` : ''}${m.error ? `\n\n> 生成失败：${m.error}` : ''}${m.status === 'stopped' ? '\n\n> 已停止生成' : ''}`
           }),
       ].join('\n\n') + '\n'
     await fs.promises.writeFile(result.filePath, text, 'utf8')
@@ -240,15 +275,23 @@ export function registerIpc(): void {
   })
   handle(
     CH.sendUserMessage,
-    (chatId: string, content: string, mentions: string[]) => {
+    (
+      chatId: string,
+      content: string,
+      mentions: string[],
+      attachments: Attachment[] = [],
+    ) => {
       assertStr(chatId, 'chatId')
-      assertStr(content, 'content')
+      assertStr(content, 'content', true)
       assertStrArray(mentions ?? [], 'mentions')
       if (!db.getChat(chatId)) throw new Error('会话不存在')
       if (isTurnRunning(chatId))
         throw new Error('当前会话正在回复，请稍后再发送')
+      const images = validateChatImages(attachments)
+      if (!content.trim() && !images.length)
+        throw new Error('请填写消息或添加图片')
       // 生成在后台推进，事件通过 CH.event 推送；这里立即返回
-      void sendUserMessage(chatId, content, mentions ?? []).catch(
+      void sendUserMessage(chatId, content, mentions ?? [], images).catch(
         () => undefined,
       )
     },

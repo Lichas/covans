@@ -185,9 +185,19 @@ export type CovanEvent =
   | { type: 'agent-thread-updated'; chatId: string; threadId: string }
   | { type: 'message-start'; chatId: string; message: Message }
   | { type: 'generation-state'; chatId: string; generating: boolean }
-  | { type: 'message-delta'; chatId: string; messageId: string; delta: string }
+  | {
+      type: 'message-delta'
+      chatId: string
+      messageId: string
+      delta: string
+    }
   | { type: 'message-done'; chatId: string; message: Message }
-  | { type: 'message-error'; chatId: string; messageId: string; error: string }
+  | {
+      type: 'message-error'
+      chatId: string
+      messageId: string
+      error: string
+    }
   | { type: 'chat-updated'; chatId: string }
   | { type: 'bot-updated'; botId: string }
   | { type: 'system-message'; chatId: string; message: Message }
@@ -199,6 +209,7 @@ export interface TestProviderResult {
 }
 
 export interface CovanApi {
+  importChatImage(name: string, bytes: Uint8Array): Promise<Attachment>
   getUserProfile(): Promise<UserProfile>
   saveUserProfile(profile: UserProfile): Promise<UserProfile>
   listUserMemories(): Promise<UserMemory[]>
@@ -262,6 +273,7 @@ export interface CovanApi {
     chatId: string,
     content: string,
     mentions: string[],
+    attachments?: Attachment[],
   ): Promise<void>
   stopChat(chatId: string): Promise<void>
 

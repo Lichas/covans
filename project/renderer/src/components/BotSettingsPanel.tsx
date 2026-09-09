@@ -64,6 +64,8 @@ function SettingsTab({ bot }: { bot: Bot }) {
   const updateBot = useBotsStore((s) => s.updateBot)
   const [temp, setTemp] = useState(bot.temperature)
   const provider = providers.find((p) => p.id === bot.provider_id)
+  const fixedTemperature =
+    provider?.kind === 'kimi' && (bot.model || provider.default_model) === 'k3'
   const tempTimer = useRef<ReturnType<typeof setTimeout>>()
   useEffect(() => setTemp(bot.temperature), [bot.id, bot.temperature])
 
@@ -210,7 +212,7 @@ function SettingsTab({ bot }: { bot: Bot }) {
               Temperature
             </span>
             <span className="text-[12px] tabular-nums text-stone-500 dark:text-stone-400">
-              {temp.toFixed(1)}
+              {fixedTemperature ? '1.0 · 模型固定' : temp.toFixed(1)}
             </span>
           </div>
           <input
@@ -218,7 +220,8 @@ function SettingsTab({ bot }: { bot: Bot }) {
             min={0}
             max={2}
             step={0.1}
-            value={temp}
+            value={fixedTemperature ? 1 : temp}
+            disabled={fixedTemperature}
             onChange={(e) => commitTemp(Number(e.target.value))}
           />
         </div>
