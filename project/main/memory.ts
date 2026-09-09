@@ -120,7 +120,11 @@ export async function extractMemories(
       '你是记忆提取器。从最近的对话中提取「关于用户的事实/偏好/约定/重要事件」。',
       '只输出一个 JSON 数组（字符串元素），不要输出任何其他文字。没有可提取内容时输出 []。',
     ].join('\n')
-    const raw = await completeOnce(bot, systemPrompt, transcript)
+    const raw = await completeOnce(bot, systemPrompt, transcript, {
+      reasoning: 'off',
+      maxTokens: 256,
+      temperature: 0,
+    })
     const jsonText = extractJsonArray(raw)
     if (!jsonText) return 0
     const arr = JSON.parse(jsonText) as unknown

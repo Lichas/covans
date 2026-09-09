@@ -251,7 +251,12 @@ async function runTurn(
       let decision: SpeakItem[] | null = null
       let raw = ''
       try {
-        raw = await completeOnce(coordinator, sysPrompt, transcript, signal)
+        raw = await completeOnce(coordinator, sysPrompt, transcript, {
+          signal,
+          reasoning: 'low',
+          maxTokens: 768,
+          temperature: 0,
+        })
         decision = parseCoordinatorDecision(raw, validIds)
         note = parseCoordinatorNote(raw)
       } catch {

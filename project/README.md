@@ -8,7 +8,7 @@
 - **群聊编排**：创建群聊、指定「协调 Bot」主持讨论（JSON 决策协议决定谁发言），支持 @提及强制发言、最多 5 人截断、失败兜底
 - **独立记忆**：每个 Bot 的长期记忆（对话中自动提取 + 手动增删），下次对话自动注入 system prompt
 - **独立工作区**：每个 Bot 一个文件目录，agent 可通过 workspace_read / workspace_write / workspace_list 工具读写（路径逃逸防护）
-- **多 LLM Provider**：OpenAI / Anthropic / Google / OpenRouter / Kimi Coding Plan / 智谱 / DeepSeek / 任意 OpenAI 兼容端点（Ollama、vLLM、公司网关）/ 内置 Mock（离线体验）；每 Bot 可绑定不同 provider 与模型
+- **多 LLM Provider**：OpenAI / Anthropic / Google / OpenRouter / Kimi Coding Plan / 智谱 / DeepSeek / LM Studio / 任意 OpenAI 兼容端点（Ollama、vLLM、公司网关）/ 内置 Mock（离线体验）；每 Bot 可绑定不同 provider 与模型
 - **流式输出 / 随时停止 / 错误重试**；主题跟随系统（浅色/深色）
 - **Markdown 阅读体验**：表格、任务列表、代码高亮与代码复制；消息时间与日期分隔；引用回复
 - **聊天效率**：独立持久草稿、中文输入法保护、⌘K 搜索、会话恢复、完整 Markdown 导出；群聊停止会取消后续成员发言
@@ -58,7 +58,7 @@ npm run pack     # electron-builder --mac --dir（产物在 release/）
 7. 点击 Bot 设置中的头像 → **设计头像**。本地插画立即可用；**设置 → 头像生成** 选择支持 Images API 的 Provider 与模型后，才能使用 AI 生图。Coding Plan 不等于生图服务
 8. 对 Bot 说「改名为小蓝，生成蓝色机器人头像」或「和设计师讨论一下方案」；也可点聊天顶部的双人图标发起咨询。私聊卡片点击后显示浮窗
 
-LM Studio：Provider 类型选 **OpenAI 兼容 / 本地模型**，点击 **LM Studio 本地服务 → 一键填写**，API Key 留空，点 **拉取模型** 后选择已加载实例。Base URL 是 `http://localhost:1234/v1`；若误贴 `/api/v1/chat` 或 `/v1/chat/completions`，保存时会自动规范成 `/v1`。Covan 需要自定义工具，所以使用 LM Studio 的 OpenAI 兼容 Chat Completions 入口，不直接使用不支持自定义 tools 的原生 `/api/v1/chat`。
+LM Studio：Provider 类型选 **LM Studio**，无需 API Key，点 **拉取模型** 后选择已加载实例。Base URL 默认是 `http://localhost:1234/v1`；若误贴 `/api/v1/chat` 或 `/v1/chat/completions`，保存时会自动规范成 `/v1`。Covan 需要自定义工具，所以使用 LM Studio 的 OpenAI 兼容 Chat Completions 入口。每个 Bot 可独立选择关闭/低/中/高/极高推理强度，并设置最大输出 Token；第三方模型未声明标准推理能力时，Covan 会加入兼容提示。日常聊天建议关闭或低推理、512–2048 输出 Token。
 
 生图使用 [Images API](https://developers.openai.com/api/reference/resources/images/methods/generate) 的 `POST /images/generations`，兼容 base64 或图片 URL 响应；不预置或猜测生图模型。自动模式未配置服务时使用本地 SVG，显式选择 AI 生图时配置不足会显示错误。生图最多等待 120 秒、下载限制 16MB。调用会消耗所选服务额度，API 兼容性需以该服务文档为准。
 

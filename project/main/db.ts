@@ -52,6 +52,7 @@ CREATE TABLE IF NOT EXISTS bots (
   model TEXT NOT NULL DEFAULT '',
   temperature REAL NOT NULL DEFAULT 0.7,
   max_tokens INTEGER NOT NULL DEFAULT 4096,
+  reasoning_effort TEXT NOT NULL DEFAULT 'off',
   workspace_dir TEXT NOT NULL DEFAULT '',
   notify INTEGER NOT NULL DEFAULT 1,
   is_coordinator INTEGER NOT NULL DEFAULT 0,
@@ -137,6 +138,21 @@ export function initDb(dir: string): Db {
   d.pragma('journal_mode = WAL')
   d.pragma('foreign_keys = ON')
   d.exec(MIGRATION)
+  const botColumns = d.pragma('table_info(bots)') as { name: string }[]
+  if (!botColumns.some((column) => column.name === 'reasoning_effort')) {
+    d.exec("ALTER TABLE bots ADD COLUMN reasoning_effort TEXT NOT NULL DEFAULT 'off'")
+    // 旧版本的 Kimi Coding Plan 固定使用 high，迁移时保留原有行为。
+    d.exec(
+      "UPDATE bots SET reasoning_effort='high' WHERE provider_id IN (SELECT id FROM providers WHERE kind='kimi')",
+    )
+  }
+  // 仅迁移明确指向 LM Studio 默认端口的旧“OpenAI 兼容”配置。
+  d.exec(
+    `UPDATE providers SET kind='lm-studio'
+     WHERE kind='openai-compatible'
+       AND (lower(base_url) LIKE 'http://localhost:1234/%'
+         OR lower(base_url) LIKE 'http://127.0.0.1:1234/%')`,
+  )
   db = d
   return d
 }
@@ -365,6 +381,7 @@ interface BotRow {
   model: string
   temperature: number
   max_tokens: number
+  reasoning_effort: Bot['reasoning_effort']
   workspace_dir: string
   notify: number
   is_coordinator: number
@@ -505,7 +522,7 @@ function normalizeProviderBaseUrl(
   if (!base) return ''
   if (!/^https?:\/\//i.test(base))
     throw new Error('Base URL 必须以 http:// 或 https:// 开头')
-  if (kind === 'openai-compatible') {
+  if (kind === 'openai-compatible' || kind === 'lm-studio') {
     base = base.replace(/\/v1\/chat\/completions$/i, '/v1')
     // LM Studio 原生 /api/v1/chat 不是 OpenAI 消息协议；切换到同服务的兼容入口。
     base = base.replace(/\/api\/v1\/chat$/i, '/v1')
@@ -548,11 +565,16 @@ export function createBot(input: BotInput): Bot {
       .prepare('SELECT COALESCE(MAX(sort_order), 0) AS m FROM bots')
       .get() as { m: number }
   ).m
+  const provider = input.provider_id ? getProvider(input.provider_id) : null
+  assertMaxTokens(input.max_tokens ?? 4096)
+  const reasoningEffort =
+    input.reasoning_effort ?? (provider?.kind === 'kimi' ? 'high' : 'off')
+  assertReasoningEffort(reasoningEffort)
   getDb()
     .prepare(
       `INSERT INTO bots (id,name,avatar,description,tags,system_prompt,provider_id,model,
-        temperature,max_tokens,workspace_dir,notify,is_coordinator,pinned,sort_order,created_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        temperature,max_tokens,reasoning_effort,workspace_dir,notify,is_coordinator,pinned,sort_order,created_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     )
     .run(
       id,
@@ -565,6 +587,7 @@ export function createBot(input: BotInput): Bot {
       input.model ?? '',
       input.temperature ?? 0.7,
       input.max_tokens ?? 4096,
+      reasoningEffort,
       id, // workspace_dir 默认用 bot id
       input.notify === false ? 0 : 1,
       input.is_coordinator ? 1 : 0,
@@ -592,6 +615,9 @@ export function updateBot(
     (!patch.name.trim() || patch.name.length > 80)
   )
     throw new Error('Bot 名称需要 1–80 字')
+  if (patch.reasoning_effort !== undefined)
+    assertReasoningEffort(patch.reasoning_effort)
+  if (patch.max_tokens !== undefined) assertMaxTokens(patch.max_tokens)
   const merged: Bot = {
     ...existing,
     name: patch.name ?? existing.name,
@@ -606,6 +632,7 @@ export function updateBot(
     model: patch.model ?? existing.model,
     temperature: patch.temperature ?? existing.temperature,
     max_tokens: patch.max_tokens ?? existing.max_tokens,
+    reasoning_effort: patch.reasoning_effort ?? existing.reasoning_effort,
     notify: patch.notify === undefined ? existing.notify : patch.notify ? 1 : 0,
     is_coordinator:
       patch.is_coordinator === undefined
@@ -618,7 +645,7 @@ export function updateBot(
   getDb()
     .prepare(
       `UPDATE bots SET name=?, avatar=?, description=?, tags=?, system_prompt=?, provider_id=?,
-       model=?, temperature=?, max_tokens=?, notify=?, is_coordinator=?, pinned=? WHERE id=?`,
+       model=?, temperature=?, max_tokens=?, reasoning_effort=?, notify=?, is_coordinator=?, pinned=? WHERE id=?`,
     )
     .run(
       merged.name,
@@ -630,6 +657,7 @@ export function updateBot(
       merged.model,
       merged.temperature,
       merged.max_tokens,
+      merged.reasoning_effort,
       merged.notify,
       merged.is_coordinator,
       merged.pinned,
@@ -637,6 +665,16 @@ export function updateBot(
     )
   emitEvent({ type: 'bot-updated', botId: id })
   return getBot(id)!
+}
+
+function assertReasoningEffort(value: string): asserts value is Bot['reasoning_effort'] {
+  if (!['off', 'low', 'medium', 'high', 'xhigh'].includes(value))
+    throw new Error('未知推理强度')
+}
+
+function assertMaxTokens(value: number): void {
+  if (!Number.isInteger(value) || value < 64 || value > 131072)
+    throw new Error('最大输出 Token 需要是 64–131072 的整数')
 }
 
 export function deleteBot(id: string): void {

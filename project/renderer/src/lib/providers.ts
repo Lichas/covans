@@ -32,8 +32,14 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     defaultModel: 'deepseek-v4-flash',
   },
   {
+    value: 'lm-studio',
+    label: 'LM Studio',
+    baseUrl: 'http://localhost:1234/v1',
+    defaultModel: '',
+  },
+  {
     value: 'openai-compatible',
-    label: 'OpenAI 兼容 / 本地模型',
+    label: 'OpenAI 兼容',
     baseUrl: '',
     defaultModel: '',
   },

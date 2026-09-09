@@ -68,9 +68,20 @@ console.log('\n[1] 建库 & migration')
 console.log('\n[2] 注入 mock provider + bot A/B/C')
 const provider = db.saveProvider({ name: 'Mock Provider', kind: 'mock' })
 assert(provider.kind === 'mock', 'mock provider 已保存')
+const lmStudio = db.saveProvider({
+  name: 'LM Studio',
+  kind: 'lm-studio',
+  base_url: 'http://localhost:1234/api/v1/chat',
+})
+assert(lmStudio.base_url === 'http://localhost:1234/v1', 'LM Studio 地址已规范化为 /v1')
+const kimi = db.saveProvider({ name: 'Kimi', kind: 'kimi' })
 const botA = db.createBot({ name: '架构师老A', description: '架构设计师', provider_id: provider.id, is_coordinator: true })
 const botB = db.createBot({ name: '测试员小B', description: '端到端测试', provider_id: provider.id })
 const botC = db.createBot({ name: '产品经理小C', description: '产品视角', provider_id: provider.id })
+const kimiBot = db.createBot({ name: 'Kimi Bot', provider_id: kimi.id })
+assert(botB.reasoning_effort === 'off', '普通 Bot 默认关闭推理')
+assert(kimiBot.reasoning_effort === 'high', 'Kimi Bot 保留高推理默认值')
+db.deleteBot(kimiBot.id)
 assert(db.listBots().length === 3, '3 个 bot 已创建')
 workspace.ensureWorkspace(botA.id)
 assert(fs.existsSync(path.join(userData, 'workspaces', botA.id)), 'bot A 工作区目录已创建')

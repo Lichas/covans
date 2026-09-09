@@ -8,8 +8,11 @@ export type ProviderKind =
   | 'kimi'
   | 'zhipu'
   | 'deepseek'
+  | 'lm-studio'
   | 'openai-compatible'
   | 'mock'
+
+export type ReasoningEffort = 'off' | 'low' | 'medium' | 'high' | 'xhigh'
 
 export interface Provider {
   id: string
@@ -41,6 +44,7 @@ export interface Bot {
   model: string
   temperature: number
   max_tokens: number
+  reasoning_effort: ReasoningEffort
   workspace_dir: string
   notify: number
   is_coordinator: number
@@ -59,6 +63,7 @@ export interface BotInput {
   model?: string
   temperature?: number
   max_tokens?: number
+  reasoning_effort?: ReasoningEffort
   notify?: boolean
   is_coordinator?: boolean
   pinned?: boolean

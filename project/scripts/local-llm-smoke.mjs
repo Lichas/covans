@@ -26,7 +26,7 @@ try {
     async ({ model }) => {
       const provider = await window.covan.saveProvider({
         name: 'LM Studio 本地回归',
-        kind: 'openai-compatible',
+        kind: 'lm-studio',
         api_key: '',
         // Intentionally paste the native endpoint: Covan should normalize it.
         base_url: 'http://localhost:1234/api/v1/chat',
@@ -38,6 +38,8 @@ try {
         name: '本地模型',
         provider_id: provider.id,
         model,
+        reasoning_effort: 'off',
+        max_tokens: 256,
       })
       const chat = await window.covan.createDm(bot.id)
       await window.covan.sendUserMessage(
@@ -56,12 +58,15 @@ try {
         baseUrl: provider.base_url,
         models,
         connection,
+        bot,
         messages,
       }
     },
     { model },
   )
   assert.equal(result.baseUrl, 'http://localhost:1234/v1')
+  assert.equal(result.bot.reasoning_effort, 'off')
+  assert.equal(result.bot.max_tokens, 256)
   assert.ok(result.models.includes(model), `模型目录中没有 ${model}`)
   assert.equal(result.connection.ok, true, result.connection.error)
   const answer = result.messages.find(

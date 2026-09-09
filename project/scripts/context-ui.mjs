@@ -218,6 +218,15 @@ try {
 
   await item('开发伙伴').click()
   await page.getByRole('button', { name: '展开设置' }).click()
+  await page.getByLabel('推理强度').selectOption('low')
+  await page.getByLabel('最大输出 Token').fill('512')
+  await page.getByLabel('最大输出 Token').press('Tab')
+  await expect.poll(async () => {
+    const bots = await page.evaluate(() => window.covan.listBots())
+    const bot = bots.find((item) => item.name === '开发伙伴')
+    return `${bot?.reasoning_effort}:${bot?.max_tokens}`
+  }).toBe('low:512')
+  console.log('✓ Per-Bot reasoning effort and output limit persist')
   await page.getByRole('button', { name: '设计头像', exact: true }).click()
   await page.getByLabel('头像画面与风格').fill('蓝色机器人')
   await page.getByRole('button', { name: '生成并应用', exact: true }).click()

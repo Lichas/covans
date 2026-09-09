@@ -10,6 +10,7 @@ import {
   type Model,
   type Api,
   type MutableModels,
+  type ModelThinkingLevel,
 } from '@earendil-works/pi-ai'
 import { anthropicProvider } from '@earendil-works/pi-ai/providers/anthropic'
 import { openaiProvider } from '@earendil-works/pi-ai/providers/openai'
@@ -19,7 +20,7 @@ import { kimiCodingProvider } from '@earendil-works/pi-ai/providers/kimi-coding'
 import { deepseekProvider } from '@earendil-works/pi-ai/providers/deepseek'
 import { openAICompletionsApi } from '@earendil-works/pi-ai/api/openai-completions.lazy'
 import { Agent } from '@earendil-works/pi-agent-core'
-import type { Bot, Provider } from '../shared/types'
+import type { Bot, Provider, ReasoningEffort } from '../shared/types'
 import * as db from './db'
 import { mockComplete, mockStream } from './mockProvider'
 import { createWorkspaceTools } from './workspace'
@@ -136,12 +137,21 @@ export function resolveModel(bot: Bot): ResolvedModel {
       true,
     )
   }
-  if (provider.kind === 'openai-compatible' || provider.kind === 'zhipu') {
+  if (
+    provider.kind === 'openai-compatible' ||
+    provider.kind === 'lm-studio' ||
+    provider.kind === 'zhipu'
+  ) {
     const baseUrl =
       provider.base_url ||
       (provider.kind === 'zhipu' ? ZHIPU_OPENAI_BASE_URL : '')
     if (!baseUrl) throw new Error(`Provider「${provider.name}」缺少 base_url`)
-    return resolveOpenAICompatibleModel(provider, modelId, baseUrl, false)
+    return resolveOpenAICompatibleModel(
+      provider,
+      modelId,
+      baseUrl,
+      provider.kind === 'lm-studio',
+    )
   }
 
   switch (provider.kind) {
@@ -211,6 +221,10 @@ function resolveOpenAICompatibleModel(
         compat: {
           supportsDeveloperRole: false,
           supportsReasoningEffort: reasoning,
+          maxTokensField: 'max_tokens',
+          ...(provider.kind === 'lm-studio'
+            ? { thinkingFormat: lmStudioThinkingFormat(modelId) }
+            : {}),
         },
       },
     ],
@@ -228,8 +242,43 @@ function resolveOpenAICompatibleModel(
     provider,
     apiKey:
       provider.api_key ||
-      (provider.kind === 'openai-compatible' ? 'covan-local' : ''),
+      (provider.kind === 'openai-compatible' || provider.kind === 'lm-studio'
+        ? 'covan-local'
+        : ''),
   }
+}
+
+function lmStudioThinkingFormat(
+  modelId: string,
+): 'qwen' | 'deepseek' | 'openai' {
+  const id = modelId.toLowerCase()
+  if (id.includes('qwen')) return 'qwen'
+  if (id.includes('deepseek')) return 'deepseek'
+  return 'openai'
+}
+
+function reasoningLevel(value: ReasoningEffort): ModelThinkingLevel {
+  return value
+}
+
+/**
+ * 部分导入到 LM Studio 的模型没有声明 reasoning capability，服务端会忽略
+ * reasoning 参数。系统提示是兼容兜底；标准模型仍优先使用协议参数。
+ */
+function applyLmStudioReasoningHint(
+  provider: Provider,
+  systemPrompt: string,
+  effort: ReasoningEffort,
+): string {
+  if (provider.kind !== 'lm-studio') return systemPrompt
+  const hints: Record<ReasoningEffort, string> = {
+    off: '/no_think\n直接回答，不要展开内部推理过程。',
+    low: '忽略模型模板中的更高推理要求；只做简短、必要的思考后直接回答。',
+    medium: '使用中等推理强度：检查关键事实，但避免不必要的展开。',
+    high: '使用较高推理强度，认真验证关键假设后回答。',
+    xhigh: '使用最高推理强度，充分验证关键假设和备选方案。',
+  }
+  return `${hints[effort]}\n\n${systemPrompt}`
 }
 
 function staticProviderModels(provider: Provider): string[] {
@@ -263,6 +312,7 @@ function staticProviderModels(provider: Provider): string[] {
     case 'mock':
       return ['mock-default']
     case 'zhipu':
+    case 'lm-studio':
     case 'openai-compatible':
       return []
   }
@@ -275,6 +325,8 @@ function remoteModelsBaseUrl(provider: Provider): string | null {
       return KIMI_CODING_OPENAI_BASE_URL
     case 'zhipu':
       return provider.base_url || ZHIPU_OPENAI_BASE_URL
+    case 'lm-studio':
+      return provider.base_url || 'http://localhost:1234/v1'
     case 'openai-compatible':
       return provider.base_url || null
     default:
@@ -418,9 +470,15 @@ async function runPiAgent(
   signal: AbortSignal,
 ): Promise<void> {
   const { models, model, apiKey, provider } = resolveModel(bot)
+  const effort = reasoningLevel(bot.reasoning_effort)
+  const systemPrompt = applyLmStudioReasoningHint(
+    provider,
+    opts.systemPrompt ?? bot.system_prompt,
+    bot.reasoning_effort,
+  )
   const agent = new Agent({
     initialState: {
-      systemPrompt: opts.systemPrompt ?? bot.system_prompt,
+      systemPrompt,
       model,
       tools: opts.privateConversation
         ? createWorkspaceTools(bot.id).filter(
@@ -430,10 +488,15 @@ async function runPiAgent(
             ...createWorkspaceTools(bot.id),
             ...createAppTools(bot.id, chatId, signal),
           ],
-      thinkingLevel: provider.kind === 'kimi' ? 'high' : 'off',
+      thinkingLevel: effort,
       messages: historyMessages,
     },
-    streamFn: (m, context, options) => models.streamSimple(m, context, options),
+    streamFn: (m, context, options) =>
+      models.streamSimple(m, context, {
+        ...options,
+        temperature: bot.temperature,
+        maxTokens: bot.max_tokens,
+      }),
     sessionId: `${chatId}:${bot.id}`,
     getApiKey: async () => apiKey || undefined,
   })
@@ -482,22 +545,42 @@ async function runPiAgent(
 
 // ---------- 非流式 completion（协调者决策 / 记忆提取 / testProvider） ----------
 
+export interface CompleteOnceOptions {
+  signal?: AbortSignal
+  reasoning?: ReasoningEffort
+  maxTokens?: number
+  temperature?: number
+}
+
 export async function completeOnce(
   bot: Bot,
   systemPrompt: string,
   userText: string,
-  signal?: AbortSignal,
+  options: CompleteOnceOptions = {},
 ): Promise<string> {
   if (isMockBot(bot))
-    return mockComplete(bot, systemPrompt, userText, { signal })
-  const { models, model, apiKey } = resolveModel(bot)
-  const msg = await models.complete(
+    return mockComplete(bot, systemPrompt, userText, {
+      signal: options.signal,
+    })
+  const { models, model, apiKey, provider } = resolveModel(bot)
+  const effort = options.reasoning ?? bot.reasoning_effort
+  const msg = await models.completeSimple(
     model,
     {
-      systemPrompt,
+      systemPrompt: applyLmStudioReasoningHint(
+        provider,
+        systemPrompt,
+        effort,
+      ),
       messages: [{ role: 'user', content: userText, timestamp: Date.now() }],
     },
-    { apiKey: apiKey || undefined, signal },
+    {
+      apiKey: apiKey || undefined,
+      signal: options.signal,
+      reasoning: effort === 'off' ? undefined : effort,
+      maxTokens: options.maxTokens ?? bot.max_tokens,
+      temperature: options.temperature ?? bot.temperature,
+    },
   )
   if (msg.stopReason === 'error')
     throw new Error(msg.errorMessage || '调用失败')
@@ -525,6 +608,7 @@ export async function testProviderConnection(
       model: modelId,
       temperature: 0.7,
       max_tokens: 4096,
+      reasoning_effort: 'off',
       workspace_dir: '',
       notify: 0,
       is_coordinator: 0,
@@ -533,10 +617,10 @@ export async function testProviderConnection(
       created_at: 0,
     }
     const { models, model, apiKey } = resolveModel(probe)
-    const msg = await models.complete(
+    const msg = await models.completeSimple(
       model,
       { messages: [{ role: 'user', content: 'ping', timestamp: Date.now() }] },
-      { apiKey: apiKey || undefined },
+      { apiKey: apiKey || undefined, reasoning: undefined, maxTokens: 32 },
     )
     if (msg.stopReason === 'error')
       return {

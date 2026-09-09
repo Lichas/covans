@@ -118,7 +118,8 @@ function ProviderForm({
 
   const set = (patch: Partial<ProviderInput>) =>
     setForm((f) => ({ ...f, ...patch }))
-  const needBaseUrl = form.kind === 'openai-compatible'
+  const needBaseUrl =
+    form.kind === 'openai-compatible' || form.kind === 'lm-studio'
   const selectedPreset = getProviderPreset(form.kind)
 
   const changeKind = (kind: ProviderKind) => {
@@ -247,7 +248,7 @@ function ProviderForm({
           </select>
         </div>
       </Field>
-      {form.kind !== 'mock' && (
+      {form.kind !== 'mock' && form.kind !== 'lm-studio' && (
         <Field
           label={`API Key${form.kind === 'openai-compatible' ? '（本地服务可留空）' : ''}`}
         >
@@ -275,28 +276,10 @@ function ProviderForm({
           }
         />
       </Field>
-      {form.kind === 'openai-compatible' && (
-        <div className="flex items-start justify-between gap-3 rounded-lg border border-dashed border-stone-300 px-3 py-2.5 dark:border-stone-600">
-          <div className="min-w-0 text-[11.5px] leading-relaxed text-stone-500 dark:text-stone-400">
-            <strong className="block text-stone-700 dark:text-stone-200">
-              LM Studio 本地服务
-            </strong>
-            使用 OpenAI 兼容入口 /v1；不要填 /api/v1/chat 完整地址。
-          </div>
-          <button
-            type="button"
-            className={btnGhostCls + ' shrink-0'}
-            onClick={() =>
-              set({
-                name: form.name.trim() || 'LM Studio 本地',
-                api_key: '',
-                base_url: 'http://localhost:1234/v1',
-                default_model: '',
-              })
-            }
-          >
-            一键填写
-          </button>
+      {form.kind === 'lm-studio' && (
+        <div className="rounded-lg border border-violet-200 bg-violet-50/70 px-3 py-2.5 text-[11.5px] leading-relaxed text-violet-700 dark:border-violet-900 dark:bg-violet-950/30 dark:text-violet-300">
+          <strong className="block">本地模型 · 无需 API Key</strong>
+          启动 LM Studio Local Server 后拉取模型。推理强度、温度和输出上限在每个 Bot 的模型配置中设置。
         </div>
       )}
       <Field label="默认模型">

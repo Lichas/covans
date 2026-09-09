@@ -69,6 +69,7 @@ CREATE TABLE bots (
   model TEXT NOT NULL DEFAULT '',    -- 空 = 用 provider 默认
   temperature REAL NOT NULL DEFAULT 0.7,
   max_tokens INTEGER NOT NULL DEFAULT 4096,
+  reasoning_effort TEXT NOT NULL DEFAULT 'off',
   workspace_dir TEXT NOT NULL DEFAULT '',  -- 相对 workspaces/ 的目录名
   notify INTEGER NOT NULL DEFAULT 1,
   is_coordinator INTEGER NOT NULL DEFAULT 0, -- 可作为群聊协调者
@@ -276,7 +277,7 @@ await agent.prompt(userText)   // agent.abort() 用于 stopChat
 
 **工作区工具（自研 3 个 AgentTool，不用 pi-coding-agent）**：`workspace_read` / `workspace_write` / `workspace_list`，参数 TypeBox `Type.Object({...})`，实现里把路径 resolve 到 `workspaces/<botId>/` 下并拒绝 `..` 逃逸。仅当 bot.system_prompt 非空标记为「工作型」或群聊场景时挂载？——简化为：**所有 bot 都挂载**，由人设决定是否使用。
 
-**Provider kind → pi 内置 provider 映射**：`openai→openAIProvider()`、`anthropic→anthropicProvider()`、`google→googleProvider()`、`openrouter→openrouterProvider()`、`kimi→createProvider(...)`（Kimi Coding Plan，模型从 `/v1/models` 动态拉取）、`zhipu→createProvider(...)`（智谱 OpenAI 兼容国内端点）、`deepseek→deepseekProvider()`、`openai-compatible→createProvider(...)`。`testProvider` 用一次 `models.complete(model, {messages:[{role:'user',content:'ping',timestamp:Date.now()}]}, {apiKey})` 验证。OpenAI-compatible 支持 API Key 留空的本地服务：模型目录请求不发送 Authorization，pi-agent-core 运行时使用不落库、无权限的占位值满足其非空校验。LM Studio 预设为 `http://localhost:1234/v1`；误填 `/api/v1/chat` 或 `/v1/chat/completions` 会规范到 `/v1`。Covan 使用支持自定义 tools 与完整历史的 `/v1/chat/completions`，不直接使用 LM Studio 原生 `/api/v1/chat`。
+**Provider kind → pi 内置 provider 映射**：`openai→openAIProvider()`、`anthropic→anthropicProvider()`、`google→googleProvider()`、`openrouter→openrouterProvider()`、`kimi→createProvider(...)`（Kimi Coding Plan，模型从 `/v1/models` 动态拉取）、`zhipu→createProvider(...)`（智谱 OpenAI 兼容国内端点）、`deepseek→deepseekProvider()`、`lm-studio→createProvider(...)`、`openai-compatible→createProvider(...)`。`testProvider` 用小输出上限的 completion 验证。LM Studio Provider 无需 API Key，模型目录请求不发送 Authorization，pi-agent-core 运行时使用不落库、无权限的占位值满足其非空校验。默认地址为 `http://localhost:1234/v1`；误填 `/api/v1/chat` 或 `/v1/chat/completions` 会规范到 `/v1`。Covan 使用支持自定义 tools 与完整历史的 `/v1/chat/completions`。Bot 的 `reasoning_effort` 支持 off/low/medium/high/xhigh；LM Studio 标准参数之外还会注入兼容提示。所有运行均传入 Bot 的 temperature/max_tokens，自动记忆固定 off、256 token，群聊协调固定 low、768 token。
 
 **进行中任务表**：Agent 层维护 `Map<chatId, Set<AbortController>>`；编排层另外维护轮次级 AbortController。stopChat 同时取消协调者决策、当前 Agent 和后续群聊发言，保留当前已生成文本为 stopped 消息。generation-state 明确表示整个轮次是否结束。
 **Mock provider（冒烟测试）**：kind='mock' 时不走 pi，直接按名字模板生成流式假回复（`main/mockProvider.ts`）。
@@ -287,7 +288,7 @@ await agent.prompt(userText)   // agent.abort() 用于 stopChat
 - 跟随系统浅色/深色主题；暖白/炭灰背景、低饱和绿点缀；用户消息为紧凑浅灰气泡，Bot 回复使用宽阅读区域；代码和表格独立滚动。
 - Sidebar：搜索框；单聊列表项右键「置顶 / 取消置顶」，最多3个 Bot，数据库层同样校验；顶部仅在有置顶时显示横排圆形头像，不显示空槽位或添加入口。会话列表项=头像(群聊显示叠头像+N角标)/名称/最后消息预览/时间/未读蓝点；底部为「关于我」「我的 Bot」「新建群聊」「设置」；顶部「+」菜单新建 Bot(⌘1) / 创建群聊(⌘2)。
 - ChatView：顶部 Bot/群名、当前模型、完整会话导出和设置入口。消息显示作者、时间、跨日分隔；支持 Markdown、代码复制、原文复制、引用回复和错误重试。上翻阅读时不强制贴底，可手动回到最新；历史分页保持阅读位置。Composer 使用浮动圆角输入框、群聊 @ 提及、独立持久草稿与中文输入法保护。Enter 发送，Shift+Enter 换行。附件与图片消息为后续功能；远程 Markdown 图片显示为可点击链接。
-- BotSettingsPanel（右栏，单聊选中时显示）：头像、名称输入、标签、描述、通知开关、人设 system prompt 编辑、模型选择（provider + model + temperature）、记忆标签页、工作区标签页。
+- BotSettingsPanel（右栏，单聊选中时显示）：头像、名称输入、标签、描述、通知开关、人设 system prompt 编辑、模型选择（provider + model + reasoning effort + max tokens + temperature）、记忆标签页、工作区标签页。
 - SettingsModal（通用）：账户占位、外观（主题跟随系统/浅色/深色、语言）、Bot（时区自动检测、自动审核开关 + 规则文本——审核规则作为自然语言注入 coordinator 决策前的检查）、Provider 管理（列表 + 新增/编辑表单 + 测试连接按钮）。
 - 新建 Bot 对话框：名称/人设模板下拉（开发分队四人、产品经理、设计师、虚拟女友「小美女」、空白自定义）/描述/provider/模型。
 - 中文 UI。

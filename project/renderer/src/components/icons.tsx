@@ -213,6 +213,7 @@ const PROVIDER_ICON_META: Record<
   kimi: { color: '#1677ff', glyph: 'K' },
   zhipu: { color: '#2563eb', glyph: '智' },
   deepseek: { color: '#0891b2', glyph: 'D' },
+  'lm-studio': { color: '#7457e8', glyph: 'LM' },
   'openai-compatible': { color: '#57534e', glyph: '↔' },
   mock: { color: '#a8a29e', glyph: 'M' },
 }
@@ -229,7 +230,7 @@ export function ProviderIcon({ kind, ...props }: P & { kind: ProviderKind }) {
         y="16"
         textAnchor="middle"
         fill="white"
-        fontSize={meta.glyph === '智' ? 10 : size <= 18 ? 12 : 13}
+        fontSize={meta.glyph === '智' || meta.glyph.length > 1 ? 8.5 : size <= 18 ? 12 : 13}
         fontFamily="-apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif"
         fontWeight="700"
       >

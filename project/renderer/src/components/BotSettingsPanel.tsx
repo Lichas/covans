@@ -1,6 +1,6 @@
 // components/BotSettingsPanel.tsx — 右栏：Bot 设定 / 记忆 / 工作区
 import { useEffect, useRef, useState } from 'react'
-import type { Bot } from '@shared/types'
+import type { Bot, ReasoningEffort } from '@shared/types'
 import { useBotsStore } from '../stores/botsStore'
 import { useActiveChat } from '../stores/chatsStore'
 import { useSettingsStore } from '../stores/settingsStore'
@@ -63,6 +63,7 @@ function SettingsTab({ bot }: { bot: Bot }) {
   const providers = useSettingsStore((s) => s.providers)
   const updateBot = useBotsStore((s) => s.updateBot)
   const [temp, setTemp] = useState(bot.temperature)
+  const provider = providers.find((p) => p.id === bot.provider_id)
   const tempTimer = useRef<ReturnType<typeof setTimeout>>()
   useEffect(() => setTemp(bot.temperature), [bot.id, bot.temperature])
 
@@ -127,7 +128,19 @@ function SettingsTab({ bot }: { bot: Bot }) {
             <select
               className={`${inputCls} min-w-0 flex-1`}
               value={bot.provider_id ?? ''}
-              onChange={(e) => save({ provider_id: e.target.value || null })}
+              onChange={(e) => {
+                const providerId = e.target.value || null
+                const nextProvider = providers.find((p) => p.id === providerId)
+                save({
+                  provider_id: providerId,
+                  reasoning_effort:
+                    nextProvider?.kind === 'kimi'
+                      ? 'high'
+                      : nextProvider?.kind === 'lm-studio'
+                        ? 'off'
+                        : bot.reasoning_effort,
+                })
+              }}
             >
               <option value="">未选择</option>
               {providers.map((p) => (
@@ -147,6 +160,50 @@ function SettingsTab({ bot }: { bot: Bot }) {
           }
           onSave={(v) => save({ model: v })}
         />
+        <Field label="推理强度">
+          <select
+            aria-label="推理强度"
+            className={inputCls}
+            value={bot.reasoning_effort}
+            onChange={(e) =>
+              save({ reasoning_effort: e.target.value as ReasoningEffort })
+            }
+          >
+            <option value="off">关闭 · 最快</option>
+            <option value="low">低 · 日常对话</option>
+            <option value="medium">中 · 分析任务</option>
+            <option value="high">高 · 复杂任务</option>
+            <option value="xhigh">极高 · 最慢</option>
+          </select>
+          <p className="mt-1.5 text-[11px] leading-relaxed text-stone-400">
+            {provider?.kind === 'lm-studio'
+              ? '同时发送标准参数和本地模型兼容提示；第三方模型是否支持全部档位取决于其模板。'
+              : '仅在当前模型支持推理控制时生效。'}
+          </p>
+        </Field>
+        <Field label="最大输出 Token">
+          <input
+            aria-label="最大输出 Token"
+            key={`${bot.id}:${bot.max_tokens}`}
+            className={inputCls}
+            type="number"
+            min={64}
+            max={131072}
+            step={64}
+            defaultValue={bot.max_tokens}
+            onBlur={(e) => {
+              const value = Math.max(
+                64,
+                Math.min(131072, Math.round(Number(e.target.value) || 4096)),
+              )
+              e.target.value = String(value)
+              if (value !== bot.max_tokens) save({ max_tokens: value })
+            }}
+          />
+          <p className="mt-1.5 text-[11px] text-stone-400">
+            日常聊天建议 512–2048；复杂长文再提高。
+          </p>
+        </Field>
         <div>
           <div className="mb-1 flex items-center justify-between">
             <span className="text-[12px] font-medium text-stone-500 dark:text-stone-400">
