@@ -7,8 +7,10 @@ import { formatFullTime } from '../lib/format'
 import { Dialog } from './Dialog'
 import { Field, inputCls, btnPrimaryCls, btnGhostCls } from './controls'
 import { MeIcon, PencilIcon, PlusIcon, TrashIcon } from './icons'
+import { Avatar } from './Avatar'
 
 const empty: UserProfile = {
+  avatar: '',
   name: '',
   role: '',
   bio: '',
@@ -105,6 +107,52 @@ export function UserProfileDialog() {
       <div className="space-y-5 p-6">
         {tab === 'profile' ? (
           <>
+            <div className="flex items-center gap-4 rounded-xl border border-stone-200 bg-stone-50/70 p-4 dark:border-stone-700 dark:bg-stone-800/50">
+              <Avatar
+                name={profile.name || '我'}
+                avatar={profile.avatar}
+                size={64}
+              />
+              <div className="min-w-0 flex-1">
+                <strong className="block text-[13px] text-stone-800 dark:text-stone-100">
+                  我的头像
+                </strong>
+                <p className="mt-1 text-[11px] leading-relaxed text-stone-500 dark:text-stone-400">
+                  保存在本机，用于侧边栏与“关于我”资料，不会发送给模型服务。
+                </p>
+              </div>
+              <div className="flex shrink-0 gap-2">
+                {profile.avatar && (
+                  <button
+                    className={btnGhostCls}
+                    disabled={busy}
+                    onClick={() =>
+                      void action(async () => {
+                        const next = await api.saveUserProfile({
+                          ...profile,
+                          avatar: '',
+                        })
+                        setProfile(next)
+                      }, '已恢复默认头像')
+                    }
+                  >
+                    恢复默认
+                  </button>
+                )}
+                <button
+                  className={btnGhostCls}
+                  disabled={busy || !loaded}
+                  onClick={() =>
+                    void action(async () => {
+                      const next = await api.pickUserAvatar()
+                      setProfile(next)
+                    }, '头像已更新')
+                  }
+                >
+                  更换头像
+                </button>
+              </div>
+            </div>
             <div className="grid grid-cols-2 gap-4">
               <Field label="怎么称呼我">
                 <input

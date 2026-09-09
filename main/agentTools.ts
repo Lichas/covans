@@ -179,11 +179,10 @@ export function createAppTools(
       label: '了解用户',
       description: '读取用户主动填写的个人资料和所有 Bot 共享的用户记忆。',
       parameters: Type.Object({}),
-      execute: async () =>
-        result({
-          profile: db.getUserProfile(),
-          memories: db.listUserMemories(60),
-        }),
+      execute: async () => {
+        const { avatar: _avatar, ...profile } = db.getUserProfile()
+        return result({ profile, memories: db.listUserMemories(60) })
+      },
     },
     {
       name: 'remember_user',

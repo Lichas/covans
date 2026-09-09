@@ -140,6 +140,7 @@ export interface WorkspaceFile {
 }
 
 export interface UserProfile {
+  avatar: string
   name: string
   role: string
   bio: string
@@ -223,6 +224,7 @@ export interface CovanApi {
   importChatImage(name: string, bytes: Uint8Array): Promise<Attachment>
   getUserProfile(): Promise<UserProfile>
   saveUserProfile(profile: UserProfile): Promise<UserProfile>
+  pickUserAvatar(): Promise<UserProfile>
   listUserMemories(): Promise<UserMemory[]>
   saveUserMemory(
     content: string,

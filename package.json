@@ -5,6 +5,14 @@
   "description": "Covan — 多 Bot 智能体聊天桌面应用",
   "main": "out/main/index.js",
   "type": "module",
+  "build": {
+    "extraResources": [
+      {
+        "from": "resources/default-avatars",
+        "to": "default-avatars"
+      }
+    ]
+  },
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",

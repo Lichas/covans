@@ -130,6 +130,7 @@ interface CovanApi {
   importChatImage(name: string, bytes: Uint8Array): Promise<Attachment>;
   getUserProfile(): Promise<UserProfile>;
   saveUserProfile(profile: UserProfile): Promise<UserProfile>;
+  pickUserAvatar(): Promise<UserProfile>;
   listUserMemories(): Promise<UserMemory[]>;
   saveUserMemory(content: string, kind?: MemoryKind, id?: string): Promise<UserMemory>;
   deleteUserMemory(id: string): Promise<void>;
@@ -326,11 +327,11 @@ await agent.prompt(userText)   // agent.abort() 用于 stopChat
 
 ## 13. 用户背景、头像与 Agent 私聊（2026-09-08）
 
-- **关于我**：settings.user_profile 保存 name/role/bio/preferences/goals/boundaries；user_memories 保存 id/content/kind/source/source_bot_id/created_at。个人资料与最近60条共同记忆注入所有 Bot 后续 system prompt；资料编辑/共同记忆增删改经独立 IPC 通道保存，user-context-updated 通知刷新。用户界面标明本机保存与对话时发送模型服务的区别。
+- **关于我**：settings.user_profile 保存 avatar/name/role/bio/preferences/goals/boundaries；user_memories 保存 id/content/kind/source/source_bot_id/created_at。资料与最近60条共同记忆注入所有 Bot 后续 system prompt，但头像路径不注入模型。资料编辑、头像上传、共同记忆增删改经独立 IPC 通道保存，user-context-updated 通知刷新。
 - **应用工具**：list_bots、update_bot、expand_avatar_prompt、generate_bot_avatar、read_user_profile、remember_user、agent_private_chat。修改以用户明确要求为依据，不向模型返回 Provider 密钥。记忆需为用户直接表达的事实，不保存猜测或密钥。
-- **头像**：默认自动生成本地 SVG（人物/机器人/猫咪/抽象，5套柔和配色）；自定义上传不被自动刷新覆盖。可选择通过已有 Provider 扩写人设提示词。图片模式由 avatar_provider / avatar_model / avatar_base_url 配置，POST /images/generations 支持 base64 或 URL，限16MB、120秒。显式 image 未配置时报错，auto 未配置时使用 local，并返回实际模式。
+- **头像**：应用随附 12 张默认头像，新 Bot 按稳定哈希分配一张；素材启动时复制到本机 userData，上传与生成头像走同一受限路径。用户可在「关于我」上传或恢复自己的头像。Bot 自定义上传不被自动刷新覆盖。可选择通过已有 Provider 扩写人设提示词。图片模式由 avatar_provider / avatar_model / avatar_base_url 配置，POST /images/generations 支持 base64 或 URL，限16MB、120秒。显式 image 未配置时报错，auto 未配置时使用 local，并返回实际模式。
 - **私聊数据**：agent_threads 关联 parent_chat_id、origin_message_id、from_bot_id、to_bot_id、subject、status 与时间；agent_private_messages 保存双方文本、状态、错误与时间。删除主会话级联删除对应私聊，关闭应用后不自动续跑网络任务。
 - **私聊执行**：一次咨询将问题发送给目标 Bot，接收方使用自己的人设/模型与工作区读取工具；不递归调用私聊或修改应用状态。每个主会话最多并发3个、每个用户轮次最多调用3次；可独立停止，也随主轮次停止。
 - **私聊界面**：自然语言工具触发后，卡片插在来源用户消息后；未加载来源消息时仍有入口。点击浮窗显示双方真实消息、Markdown、作者、时间、流式/失败/停止状态。聊天顶部双人按钮也可手动指定咨询问题，不自动转发整段主会话。
-- **IPC 契约**：getUserProfile / saveUserProfile / listUserMemories / saveUserMemory / deleteUserMemory；listAgentThreads / getAgentThread / startAgentConversation / stopAgentConversation；准确类型以 shared/types.ts 为准。
+- **IPC 契约**：getUserProfile / saveUserProfile / pickUserAvatar / listUserMemories / saveUserMemory / deleteUserMemory；listAgentThreads / getAgentThread / startAgentConversation / stopAgentConversation；准确类型以 shared/types.ts 为准。
 - **启动与验证**：根目录 start.command 一键启动；npm run typecheck、npm run smoke、npm run test:ui、npm run test:context。UI 与工具测试均使用临时 profile；真实 pi 工具循环由本地 HTTP fixture 驱动，无付费 API 调用。

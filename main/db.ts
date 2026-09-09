@@ -180,6 +180,7 @@ export function newId(): string {
 
 export function getUserProfile(): UserProfile {
   const empty: UserProfile = {
+    avatar: '',
     name: '',
     role: '',
     bio: '',

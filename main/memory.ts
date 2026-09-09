@@ -25,7 +25,7 @@ export function buildSystemPrompt(
   )
   const profile = db.getUserProfile()
   const about = Object.entries(profile)
-    .filter(([, value]) => value.trim())
+    .filter(([key, value]) => key !== 'avatar' && value.trim())
     .map(([key, value]) => `${key}: ${value}`)
     .join('\n')
   const sharedMemories = db.listUserMemories(60)

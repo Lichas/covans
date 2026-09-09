@@ -148,6 +148,10 @@ try {
     )
     return { p, bots, chats, group, slow, bad }
   }, base)
+  assert.ok(
+    fixture.bots.every((bot) => bot.avatar.startsWith('avatars/preset/')),
+    '新 Bot 应从内置头像集中获得默认头像',
+  )
   await page.reload()
   const sidebar = page.locator('aside').first()
   const item = (name) => sidebar.getByRole('button', { name, exact: true })
@@ -210,6 +214,22 @@ try {
     .fill('把 Covan 打造成有温度的多 Agent 工作台')
   await page.getByRole('button', { name: '保存资料' }).click()
   await expect(page.getByRole('status')).toContainText('资料已保存')
+  await page.evaluate(async () => {
+    const profile = await window.covan.getUserProfile()
+    await window.covan.saveUserProfile({
+      ...profile,
+      avatar: 'avatars/preset/avatar-01-original.png',
+    })
+  })
+  await expect(
+    sidebar.getByRole('img', { name: 'Lua', exact: true }),
+  ).toBeVisible()
+  assert.equal(
+    await sidebar
+      .getByRole('img', { name: 'Lua', exact: true })
+      .evaluate((image) => image.naturalWidth),
+    512,
+  )
   await page.screenshot({ path: path.join(artifacts, 'about-me.png') })
   await page.getByRole('button', { name: /对我的了解/ }).click()
   await page.getByLabel('补充一件关于我的事').fill('喜欢暖灰色、克制的界面')
@@ -293,6 +313,12 @@ try {
         r.body.model === 'test-image' &&
         r.body.prompt.includes('动漫'),
     ),
+  )
+  assert.ok(
+    !requests.some((request) =>
+      JSON.stringify(request.body).includes('avatars/preset/'),
+    ),
+    '用户头像路径不应发送给模型服务',
   )
   await page.keyboard.press('Escape')
   await page.getByRole('button', { name: '收起设置' }).click()

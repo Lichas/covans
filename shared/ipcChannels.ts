@@ -3,6 +3,7 @@ export const CH = {
   importChatImage: 'images:import',
   getUserProfile: 'user:profile',
   saveUserProfile: 'user:saveProfile',
+  pickUserAvatar: 'user:pickAvatar',
   listUserMemories: 'user:memories',
   saveUserMemory: 'user:saveMemory',
   deleteUserMemory: 'user:deleteMemory',

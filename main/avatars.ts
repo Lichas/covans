@@ -15,6 +15,46 @@ const palettes = {
   rose: ['#f0dde1', '#b87889', '#683f4e'],
 }
 
+const presetAvatarDir = () =>
+  path.join(path.dirname(getWorkspaceRoot()), 'avatars', 'preset')
+
+/**
+ * 将随应用分发的默认头像复制到 userData。渲染层仍只通过受限的
+ * covan-avatar 协议读取 userData，因此默认、上传和生成头像使用同一条安全路径。
+ */
+export function seedDefaultAvatars(sourceDir: string): void {
+  try {
+    const destination = presetAvatarDir()
+    fs.mkdirSync(destination, { recursive: true })
+    for (const name of fs.readdirSync(sourceDir).sort()) {
+      if (!/^avatar-\d+-original\.(png|jpe?g|webp)$/i.test(name)) continue
+      const source = path.join(sourceDir, name)
+      const target = path.join(destination, name)
+      if (fs.statSync(source).isFile() && !fs.existsSync(target))
+        fs.copyFileSync(source, target)
+    }
+  } catch {
+    // 素材缺失时保持本地 SVG 的既有降级行为，不能阻止应用启动。
+  }
+}
+
+/** 为未设置头像的新 Bot 稳定地分配一张内置头像。 */
+export function assignDefaultAvatar(bot: Bot): Bot {
+  if (bot.avatar) return bot
+  try {
+    const names = fs
+      .readdirSync(presetAvatarDir())
+      .filter((name) => /^avatar-\d+-original\.(png|jpe?g|webp)$/i.test(name))
+      .sort()
+    if (!names.length) return bot
+    const index = createHash('sha256').update(bot.id).digest()[0] % names.length
+    const avatar = `avatars/preset/${names[index]}`
+    return db.updateBot(bot.id, { avatar })
+  } catch {
+    return bot
+  }
+}
+
 export function localAvatarDesign(bot: Bot, direction = ''): AvatarDesign {
   const text = [
     bot.name,

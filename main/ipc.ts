@@ -21,6 +21,7 @@ import { listProviderModels, testProviderConnection } from './agentRuntime'
 import { isTurnRunning, sendUserMessage, stopTurn } from './orchestrator'
 import { registerContextIpc } from './contextIpc'
 import {
+  assignDefaultAvatar,
   generateBotAvatar,
   refreshAutomaticAvatar,
   type AvatarMode,
@@ -77,6 +78,34 @@ export function registerIpc(): void {
     return storeChatImage(Buffer.from(bytes), name)
   })
   registerContextIpc()
+  handle(CH.pickUserAvatar, async () => {
+    const win = BrowserWindow.getAllWindows()[0]
+    const result = await dialog.showOpenDialog(win!, {
+      title: '选择我的头像',
+      properties: ['openFile'],
+      filters: [
+        { name: '图片', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp'] },
+      ],
+    })
+    if (result.canceled || result.filePaths.length === 0)
+      return db.getUserProfile()
+    const source = result.filePaths[0]
+    if (fs.statSync(source).size > 16 * 1024 * 1024)
+      throw new Error('头像图片不能超过 16MB')
+    const extension = path.extname(source) || '.png'
+    const relative = path
+      .join('avatars', `user-${randomUUID()}${extension}`)
+      .split(path.sep)
+      .join('/')
+    fs.mkdirSync(path.join(app.getPath('userData'), 'avatars'), {
+      recursive: true,
+    })
+    fs.copyFileSync(source, path.join(app.getPath('userData'), relative))
+    return db.saveUserProfile({
+      ...db.getUserProfile(),
+      avatar: relative,
+    })
+  })
   handle(CH.writeClipboard, (text: string) => {
     assertStr(text, 'text', true)
     clipboard.writeText(text)
@@ -115,7 +144,7 @@ export function registerIpc(): void {
     assertStr(input.name, 'name')
     const bot = db.createBot(input)
     ensureWorkspace(bot.id)
-    return refreshAutomaticAvatar(bot)
+    return refreshAutomaticAvatar(assignDefaultAvatar(bot))
   })
   handle(CH.updateBot, (id: string, patch: Partial<BotInput>) => {
     assertStr(id, 'id')

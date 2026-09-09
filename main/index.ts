@@ -9,6 +9,7 @@ import { initWorkspace } from './workspace'
 import { initOrchestrator } from './orchestrator'
 import { registerIpc } from './ipc'
 import { chatImagePath } from './chatImages'
+import { seedDefaultAvatars } from './avatars'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -131,6 +132,11 @@ void app.whenReady().then(() => {
     )
     .run()
   initWorkspace(userData)
+  seedDefaultAvatars(
+    app.isPackaged
+      ? path.join(process.resourcesPath, 'default-avatars')
+      : path.join(app.getAppPath(), 'resources', 'default-avatars'),
+  )
   getDb()
     .prepare("UPDATE agent_threads SET status='stopped' WHERE status='running'")
     .run()

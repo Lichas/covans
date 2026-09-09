@@ -14,6 +14,7 @@ const api: CovanApi = {
     ipcRenderer.invoke(CH.importChatImage, name, bytes),
   getUserProfile: () => ipcRenderer.invoke(CH.getUserProfile),
   saveUserProfile: (profile) => ipcRenderer.invoke(CH.saveUserProfile, profile),
+  pickUserAvatar: () => ipcRenderer.invoke(CH.pickUserAvatar),
   listUserMemories: () => ipcRenderer.invoke(CH.listUserMemories),
   saveUserMemory: (content, kind, id) =>
     ipcRenderer.invoke(CH.saveUserMemory, content, kind, id),

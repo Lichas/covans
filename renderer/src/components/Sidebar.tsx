@@ -1,10 +1,11 @@
 // components/Sidebar.tsx — 左栏：+菜单 / 搜索 / 置顶头像 / 会话列表 / 底部导航
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { ChatSummary } from '@shared/types'
+import type { ChatSummary, UserProfile } from '@shared/types'
 import { useChatsStore } from '../stores/chatsStore'
 import { useUiStore } from '../stores/uiStore'
 import { useMessagesStore } from '../stores/messagesStore'
 import { Avatar } from './Avatar'
+import { api } from '../lib/api'
 import { PinnedBots } from './PinnedBots'
 import { ChatContextMenu } from './ChatContextMenu'
 import { formatChatTime } from '../lib/format'
@@ -12,7 +13,6 @@ import {
   ChatIcon,
   CloseIcon,
   GearIcon,
-  MeIcon,
   PlusIcon,
   SearchIcon,
   SparkIcon,
@@ -194,6 +194,34 @@ export function Sidebar() {
   const searchRef = useRef<HTMLInputElement>(null)
   const [menuOpen, setMenuOpen] = useState(false)
   const [query, setQuery] = useState('')
+  const [profile, setProfile] = useState<UserProfile>({
+    avatar: '',
+    name: '',
+    role: '',
+    bio: '',
+    preferences: '',
+    goals: '',
+    boundaries: '',
+  })
+
+  useEffect(() => {
+    let active = true
+    const loadProfile = () =>
+      void api
+        .getUserProfile()
+        .then((next) => {
+          if (active) setProfile(next)
+        })
+        .catch(() => undefined)
+    loadProfile()
+    const off = api.onEvent((event) => {
+      if (event.type === 'user-context-updated') loadProfile()
+    })
+    return () => {
+      active = false
+      off()
+    }
+  }, [])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -323,7 +351,11 @@ export function Sidebar() {
       {/* 底部导航占位 */}
       <button className="profile-entry" onClick={() => setProfileOpen(true)}>
         <span>
-          <MeIcon width={18} height={18} />
+          <Avatar
+            name={profile.name || '我'}
+            avatar={profile.avatar}
+            size={30}
+          />
         </span>
         <div>
           <strong>关于我</strong>
