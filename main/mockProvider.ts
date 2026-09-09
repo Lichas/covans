@@ -77,6 +77,16 @@ export async function mockComplete(
   if (opts.signal?.aborted) return ''
   await new Promise((r) => setTimeout(r, 30))
   if (systemPrompt.includes(MEMORY_EXTRACT_MARKER)) return mockMemoryExtraction(bot, userText)
+  if (systemPrompt.includes('<<group-reply-decision>>')) {
+    const round = Number(systemPrompt.match(/第 (\d+) 轮/)?.[1] ?? '1')
+    // 普通冒烟群聊只走首轮；专门标记的案例用第二轮验证延展能力。
+    if (userText.includes('五轮上限冒烟')) return round <= 5 ? 'REPLY' : 'SKIP'
+    return round === 1 || (round === 2 && userText.includes('多轮冒烟'))
+      ? 'REPLY'
+      : 'SKIP'
+  }
+  if (systemPrompt.includes('<<natural-followup-decision>>'))
+    return userText.includes('自然追问冒烟') ? 'REPLY' : 'SKIP'
   return mockPersonaReply(bot, userText)
 }
 
@@ -95,7 +105,9 @@ export function mockStream(
   callbacks: MockStreamCallbacks,
   opts: MockCompleteOptions = {},
 ): Promise<string> {
-  const full = mockPersonaReply(bot, userText)
+  const full = systemPrompt.includes('<<natural-followup-message>>')
+    ? `对了，关于「${clip(userText)}」，你更想先从哪一部分开始？`
+    : mockPersonaReply(bot, userText)
   return new Promise((resolve) => {
     let i = 0
     const timer = setInterval(() => {

@@ -455,6 +455,7 @@ function BotSection() {
   const settings = useSettingsStore((s) => s.settings)
   const setSettingValue = useSettingsStore((s) => s.setSettingValue)
   const autoReview = settings['auto_review'] === '1'
+  const naturalFollowUp = settings['natural_follow_up'] !== '0'
   const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || '未知'
 
   return (
@@ -492,6 +493,22 @@ function BotSection() {
             className={`${inputCls} resize-y leading-relaxed`}
           />
         )}
+      </div>
+      <div className="flex items-center justify-between rounded-xl border border-stone-200 px-3.5 py-3 dark:border-stone-700">
+        <div>
+          <div className="text-[13px] text-stone-700 dark:text-stone-200">
+            自然追问
+          </div>
+          <div className="mt-0.5 max-w-[350px] text-[11.5px] leading-relaxed text-stone-400">
+            私聊回复后，Bot 仅在有实际补充或自然追问时才会另发 1–2 条短消息；关闭后每次只回复一条。
+          </div>
+        </div>
+        <Toggle
+          checked={naturalFollowUp}
+          onChange={(v) =>
+            void setSettingValue('natural_follow_up', v ? '1' : '0')
+          }
+        />
       </div>
     </div>
   )

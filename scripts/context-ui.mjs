@@ -326,6 +326,21 @@ try {
     '✓ Local SVG loaded, prompt expansion, unconfigured error, model fetch, Images API fixture',
   )
 
+  await page.getByRole('button', { name: '设置', exact: true }).click()
+  await page.getByRole('button', { name: 'Bot', exact: true }).click()
+  const naturalFollowUpCard = page
+    .getByText('自然追问', { exact: true })
+    .locator('xpath=../..')
+  const naturalFollowUpSwitch = naturalFollowUpCard.getByRole('switch')
+  await expect(naturalFollowUpSwitch).toHaveAttribute('aria-checked', 'true')
+  await naturalFollowUpSwitch.click()
+  await expect(naturalFollowUpSwitch).toHaveAttribute('aria-checked', 'false')
+  await expect.poll(() => page.evaluate(() => window.covan.getSetting('natural_follow_up'))).toBe('0')
+  await naturalFollowUpSwitch.click()
+  await expect.poll(() => page.evaluate(() => window.covan.getSetting('natural_follow_up'))).toBe('1')
+  await page.keyboard.press('Escape')
+  console.log('✓ Natural follow-up setting defaults on, persists, and can be disabled')
+
   sequence = [
     {
       name: 'update_bot',

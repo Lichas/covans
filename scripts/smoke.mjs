@@ -268,6 +268,49 @@ assert(
   'dm 中 bot B 产生 done 消息',
 )
 
+console.log('\n[4b] 单聊自然追问：最多额外两条，可关闭')
+const naturalDm = db.createDm(botC.id)
+await orchestrator.sendUserMessage(naturalDm.id, '自然追问冒烟：帮我一起想想方案', [])
+const naturalReplies = db
+  .listMessages(naturalDm.id, undefined, 20)
+  .filter((m) => m.sender_type === 'bot' && m.status === 'done')
+assert(
+  naturalReplies.length === 3,
+  `自然追问把主回复拆成最多三条消息（实际 ${naturalReplies.length} 条）`,
+)
+db.setSetting('natural_follow_up', '0')
+await orchestrator.sendUserMessage(naturalDm.id, '自然追问冒烟：关闭后只要一条', [])
+assert(
+  db
+    .listMessages(naturalDm.id, undefined, 20)
+    .filter((m) => m.sender_type === 'bot' && m.status === 'done').length === 4,
+  '关闭自然追问后不再附加消息',
+)
+db.setSetting('natural_follow_up', '1')
+
+console.log('\n[4c] 群聊延展讨论：有新观点才进入下一轮，最多五轮')
+const multiRound = db.createGroup('多轮冒烟组', [botA.id, botC.id])
+await orchestrator.sendUserMessage(multiRound.id, '多轮冒烟：请大家就方案继续讨论并互相补充', [])
+const multiRoundReplies = db
+  .listMessages(multiRound.id, undefined, 30)
+  .filter((m) => m.sender_type === 'bot' && m.status === 'done')
+assert(
+  multiRoundReplies.length === 4,
+  `两位成员完成首轮和一轮延展（实际 ${multiRoundReplies.length} 条）`,
+)
+assert(
+  multiRoundReplies.length <= 2 * 5,
+  '群聊延展严格受最多五轮上限约束',
+)
+const roundCap = db.createGroup('五轮上限组', [botA.id])
+await orchestrator.sendUserMessage(roundCap.id, '五轮上限冒烟：请持续提出新的具体方案', [])
+assert(
+  db
+    .listMessages(roundCap.id, undefined, 12)
+    .filter((m) => m.sender_type === 'bot' && m.status === 'done').length === 5,
+  '即使每轮都决定回复，群聊也在第 5 轮硬停止',
+)
+
 console.log('\n[5] 记忆：手动写入 + 自动提取触发')
 const mem = db.addMemory(botA.id, '用户偏好中文交流', 'preference', 'manual')
 assert(

@@ -180,6 +180,9 @@ export async function sendUserMessage(
 }
 
 const turns = new Map<string, AbortController>()
+/** 首轮 + 最多四轮基于成员发言的延展讨论，避免群聊无限自我续聊。 */
+const MAX_GROUP_DISCUSSION_ROUNDS = 5
+const MAX_NATURAL_FOLLOW_UPS = 2
 interface ActiveGroupSession {
   revision: number
   decisions: Set<AbortController>
@@ -232,22 +235,27 @@ async function runTurn(
 
   // 1. 落库用户消息；发 chat-updated
   appendUserMessage(chatId, content, mentions, attachments)
+  let newMessageCount = 1
 
   if (chat.type === 'dm') {
     const bot =
       (chat.bot_id && members.find((b) => b.id === chat.bot_id)) || members[0]
-    await speakOne(chat.id, bot, text, '', undefined, signal)
+    const replied = await speakOne(chat.id, bot, text, '', undefined, signal)
+    if (replied) {
+      newMessageCount += 1
+      newMessageCount += await runNaturalFollowUps(chat.id, bot, text, signal)
+    }
   } else if (chat.reply_mode === 'active') {
-    await runActiveGroup(chat.id, members, signal)
+    newMessageCount += await runActiveGroup(chat.id, members, signal)
   } else {
-    await runSequentialGroup(chat.id, members, mentions, signal)
+    newMessageCount += await runSequentialGroup(chat.id, members, mentions, signal)
   }
 
   if (!signal.aborted) {
     noteNewMessages(
       chatId,
       members.map((m) => m.id),
-      1 + members.length,
+      newMessageCount,
     )
     if (chat.type === 'group') void refreshGroupSummary(chat.id, members)
   }
@@ -292,6 +300,7 @@ async function shouldReply(
   bot: Bot,
   forced: boolean,
   signal: AbortSignal,
+  round: number,
 ): Promise<boolean> {
   emit({ type: 'agent-activity', chatId, botId: bot.id, state: 'preparing' })
   try {
@@ -305,7 +314,12 @@ async function shouldReply(
             groupContext(chatId, db.listMemberBots(chatId)),
           ),
           groupReviewRules(),
+          '<<group-reply-decision>>',
           '你正在群聊中判断是否应该发言。根据前文总结和最新 5 条消息独立判断。',
+          `当前是本次话题的第 ${round} 轮（最多 ${MAX_GROUP_DISCUSSION_ROUNDS} 轮）。`,
+          round > 1
+            ? '这是一轮延展讨论。只有能补充新信息、回应其他成员的具体观点、提出有价值的异议或推进未解决问题时才回复；复述、附和或换句话重复时必须 SKIP。'
+            : '首轮请优先直接回应用户的话题。',
           '需要回应时只输出 REPLY；没有新价值、与自己无关或别人已充分回答时只输出 SKIP。',
           '被用户直接点名时必须回复。不要在判断阶段输出正式回答。',
         ].join('\n\n'),
@@ -328,13 +342,14 @@ async function speakWithActivity(
   bot: Bot,
   members: Bot[],
   signal: AbortSignal,
-): Promise<void> {
+  round: number,
+): Promise<boolean> {
   emit({ type: 'agent-activity', chatId, botId: bot.id, state: 'speaking' })
   try {
     const latestUser = [...db.listRecentMessages(chatId, 5)]
       .reverse()
       .find((message) => message.sender_type === 'user')
-    await speakOne(
+    return await speakOne(
       chatId,
       bot,
       latestUser?.content ?? '',
@@ -344,6 +359,9 @@ async function speakWithActivity(
       groupContext(chatId, members),
       signal,
       5,
+      round > 1
+        ? `这是本次话题的第 ${round} 轮延展讨论。只说能推进讨论的新内容：补充事实、回应具体观点、提出有依据的异议或收敛下一步。不要复述、客套附和或重复自己的上一轮。`
+        : '',
     )
   } finally {
     emit({ type: 'agent-activity', chatId, botId: bot.id, state: 'idle' })
@@ -355,32 +373,76 @@ async function runSequentialGroup(
   members: Bot[],
   mentions: string[],
   signal: AbortSignal,
-): Promise<void> {
+): Promise<number> {
   const forced = new Set(mentions)
+  let repliedTotal = 0
+  for (let round = 1; round <= MAX_GROUP_DISCUSSION_ROUNDS; round++) {
+    const replied = await runSequentialRound(
+      chatId,
+      members,
+      round === 1 ? forced : new Set(),
+      signal,
+      round,
+    )
+    repliedTotal += replied
+    if (signal.aborted || replied === 0) return repliedTotal
+  }
+  return repliedTotal
+}
+
+async function runSequentialRound(
+  chatId: string,
+  members: Bot[],
+  forced: Set<string>,
+  signal: AbortSignal,
+  round: number,
+): Promise<number> {
   const ordered = [
     ...members.filter((member) => forced.has(member.id)),
     ...members.filter((member) => !forced.has(member.id)),
   ]
+  let replied = 0
   for (const bot of ordered) {
-    if (signal.aborted) return
-    if (await shouldReply(chatId, bot, forced.has(bot.id), signal))
-      await speakWithActivity(chatId, bot, members, signal)
+    if (signal.aborted) return replied
+    if (await shouldReply(chatId, bot, forced.has(bot.id), signal, round)) {
+      replied += 1
+      await speakWithActivity(chatId, bot, members, signal, round)
+    }
   }
+  return replied
 }
 
 async function runActiveGroup(
   chatId: string,
   members: Bot[],
   signal: AbortSignal,
-): Promise<void> {
+): Promise<number> {
   const session = activeGroupSessions.get(chatId)
-  if (!session) return
+  if (!session) return 0
+  let repliedTotal = 0
+  for (let round = 1; round <= MAX_GROUP_DISCUSSION_ROUNDS; round++) {
+    const replied = await runActiveRound(chatId, members, signal, round)
+    repliedTotal += replied
+    if (signal.aborted || replied === 0) return repliedTotal
+  }
+  return repliedTotal
+}
+
+async function runActiveRound(
+  chatId: string,
+  members: Bot[],
+  signal: AbortSignal,
+  round: number,
+): Promise<number> {
+  const session = activeGroupSessions.get(chatId)
+  if (!session) return 0
   while (!signal.aborted) {
     const revision = session.revision
     const latestUser = [...db.listRecentMessages(chatId, 5)]
       .reverse()
       .find((message) => message.sender_type === 'user')
-    const forced = new Set(latestUser?.mentions ?? [])
+    // @ 只强制首轮回复；后续是否延展仍由每个成员基于新内容决定。
+    const forced = round === 1 ? new Set(latestUser?.mentions ?? []) : new Set()
     const decisions = await Promise.all(
       members.map(async (bot) => {
         const controller = new AbortController()
@@ -392,6 +454,7 @@ async function runActiveGroup(
             bot,
             forced.has(bot.id),
             combined,
+            round,
           )
         } catch {
           return false
@@ -400,15 +463,73 @@ async function runActiveGroup(
         }
       }),
     )
-    if (signal.aborted) return
+    if (signal.aborted) return 0
     if (session.revision !== revision) continue
-    await Promise.all(
-      members
-        .filter((_, index) => decisions[index])
-        .map((bot) => speakWithActivity(chatId, bot, members, signal)),
-    )
-    if (session.revision === revision) return
+    const speakers = members.filter((_, index) => decisions[index])
+    await Promise.all(speakers.map((bot) => speakWithActivity(chatId, bot, members, signal, round)))
+    if (session.revision === revision) return speakers.length
   }
+  return 0
+}
+
+function naturalFollowUpEnabled(): boolean {
+  // 新安装默认开启；用户显式关闭后才不续发。
+  return db.getSetting('natural_follow_up') !== '0'
+}
+
+async function shouldNaturallyFollowUp(
+  chatId: string,
+  bot: Bot,
+  signal: AbortSignal,
+): Promise<boolean> {
+  try {
+    const raw = await completeOnce(
+      bot,
+      [
+        buildSystemPrompt(bot, db.listMemories(bot.id, 30)),
+        '<<natural-followup-decision>>',
+        '你刚刚在私聊中已经回复过用户。判断是否值得再单独发一条很短的自然跟进。',
+        '只有在补充遗漏重点、自然追问用户的感受/选择，或承接一个尚未解决的问题时才输出 REPLY。',
+        '若只是寒暄、重复、泛泛地问“还有什么需要”，或前一条已经完整，就输出 SKIP。只输出 REPLY 或 SKIP。',
+      ].join('\n\n'),
+      decisionTranscript(chatId),
+      { signal, reasoning: 'low', maxTokens: 24, temperature: 0 },
+    )
+    return /^\s*REPLY\b/i.test(raw)
+  } catch {
+    // 追问是体验增强，判断失败时不影响已经完成的主回复。
+    return false
+  }
+}
+
+async function runNaturalFollowUps(
+  chatId: string,
+  bot: Bot,
+  userText: string,
+  signal: AbortSignal,
+): Promise<number> {
+  if (!naturalFollowUpEnabled()) return 0
+  let sentCount = 0
+  for (let index = 0; index < MAX_NATURAL_FOLLOW_UPS; index++) {
+    if (signal.aborted || !(await shouldNaturallyFollowUp(chatId, bot, signal)))
+      return sentCount
+    const sent = await speakOne(
+      chatId,
+      bot,
+      userText,
+      '',
+      undefined,
+      signal,
+      30,
+      [
+        '<<natural-followup-message>>',
+        '这是紧接上一条回复的独立消息，不要重复答案。用一两句自然、具体的补充或追问来承接对话；不要解释这是“追问”，不要使用空泛的客服式收尾。',
+      ].join('\n\n'),
+    )
+    if (!sent) return sentCount
+    sentCount += 1
+  }
+  return sentCount
 }
 
 async function refreshGroupSummary(
@@ -443,7 +564,8 @@ async function speakOne(
   groupContext?: GroupContext,
   signal?: AbortSignal,
   historyLimit = 30,
-): Promise<void> {
+  responseInstruction = '',
+): Promise<boolean> {
   const memories = db.listMemories(bot.id, 30)
   const ctx: GroupContext | undefined = groupContext
     ? {
@@ -454,6 +576,7 @@ async function speakOne(
   const systemPrompt = [
     buildSystemPrompt(bot, memories, ctx),
     ctx ? groupReviewRules() : '',
+    responseInstruction,
   ]
     .filter(Boolean)
     .join('\n\n')
@@ -486,6 +609,7 @@ async function speakOne(
   emit({ type: 'message-start', chatId, message: placeholder })
 
   let acc = ''
+  let completed = false
   await runAgent(
     chatId,
     bot,
@@ -517,6 +641,7 @@ async function speakOne(
         db.touchChat(chatId, Date.now(), true)
         emit({ type: 'message-done', chatId, message: msg })
         emit({ type: 'chat-updated', chatId })
+        completed = true
       },
       onError: (error) => {
         const msg = db.updateMessage(placeholder.id, {
@@ -537,4 +662,5 @@ async function speakOne(
     })
     emit({ type: 'message-done', chatId, message: msg })
   }
+  return completed
 }

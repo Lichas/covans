@@ -43,16 +43,22 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
     init: async () => {
       try {
         const get = (k: string) => api.getSetting(k).catch(() => '')
-        const [rawTheme, autoReview, reviewRules] = await Promise.all([
+        const [rawTheme, autoReview, reviewRules, naturalFollowUp] = await Promise.all([
           get('theme'),
           get('auto_review'),
           get('review_rules'),
+          get('natural_follow_up'),
         ])
         const theme = rawTheme === 'light' || rawTheme === 'dark' ? rawTheme : 'system'
         set({
           theme,
           loaded: true,
-          settings: { theme, auto_review: autoReview, review_rules: reviewRules },
+          settings: {
+            theme,
+            auto_review: autoReview,
+            review_rules: reviewRules,
+            natural_follow_up: naturalFollowUp,
+          },
         })
         applyTheme(theme)
       } catch {
