@@ -12,7 +12,12 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'covan-smoke-'))
 const userData = path.join(tmp, 'userData')
 // bundle 放在项目 node_modules 缓存目录下，保证 external 依赖（better-sqlite3/pi 包）能从项目解析
-const bundleDir = path.join(root, 'node_modules', '.cache', `covan-smoke-${process.pid}`)
+const bundleDir = path.join(
+  root,
+  'node_modules',
+  '.cache',
+  `covan-smoke-${process.pid}`,
+)
 fs.mkdirSync(bundleDir, { recursive: true })
 
 let failures = 0
@@ -43,9 +48,13 @@ await build({
   logLevel: 'warning',
 })
 
-const orchestrator = await import(pathToFileURL(path.join(bundleDir, 'orchestrator.js')).href)
+const orchestrator = await import(
+  pathToFileURL(path.join(bundleDir, 'orchestrator.js')).href
+)
 const db = await import(pathToFileURL(path.join(bundleDir, 'db.js')).href)
-const workspace = await import(pathToFileURL(path.join(bundleDir, 'workspace.js')).href)
+const workspace = await import(
+  pathToFileURL(path.join(bundleDir, 'workspace.js')).href
+)
 
 // 2. 初始化（临时目录，WAL）
 db.initDb(userData)
@@ -60,7 +69,15 @@ console.log('\n[1] 建库 & migration')
     .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
     .all()
     .map((r) => r.name)
-  for (const t of ['providers', 'bots', 'chats', 'chat_members', 'messages', 'memories', 'settings']) {
+  for (const t of [
+    'providers',
+    'bots',
+    'chats',
+    'chat_members',
+    'messages',
+    'memories',
+    'settings',
+  ]) {
     assert(tables.includes(t), `表 ${t} 已创建`)
   }
 }
@@ -73,52 +90,127 @@ const lmStudio = db.saveProvider({
   kind: 'lm-studio',
   base_url: 'http://localhost:1234/api/v1/chat',
 })
-assert(lmStudio.base_url === 'http://localhost:1234/v1', 'LM Studio 地址已规范化为 /v1')
+assert(
+  lmStudio.base_url === 'http://localhost:1234/v1',
+  'LM Studio 地址已规范化为 /v1',
+)
 const kimi = db.saveProvider({ name: 'Kimi', kind: 'kimi' })
-const botA = db.createBot({ name: '架构师老A', description: '架构设计师', provider_id: provider.id, is_coordinator: true })
-const botB = db.createBot({ name: '测试员小B', description: '端到端测试', provider_id: provider.id })
-const botC = db.createBot({ name: '产品经理小C', description: '产品视角', provider_id: provider.id })
+const botA = db.createBot({
+  name: '架构师老A',
+  description: '架构设计师',
+  provider_id: provider.id,
+  is_coordinator: true,
+})
+const botB = db.createBot({
+  name: '测试员小B',
+  description: '端到端测试',
+  provider_id: provider.id,
+})
+const botC = db.createBot({
+  name: '产品经理小C',
+  description: '产品视角',
+  provider_id: provider.id,
+})
 const kimiBot = db.createBot({ name: 'Kimi Bot', provider_id: kimi.id })
 assert(botB.reasoning_effort === 'off', '普通 Bot 默认关闭推理')
 assert(kimiBot.reasoning_effort === 'high', 'Kimi Bot 保留高推理默认值')
 db.deleteBot(kimiBot.id)
 assert(db.listBots().length === 3, '3 个 bot 已创建')
 workspace.ensureWorkspace(botA.id)
-assert(fs.existsSync(path.join(userData, 'workspaces', botA.id)), 'bot A 工作区目录已创建')
+assert(
+  fs.existsSync(path.join(userData, 'workspaces', botA.id)),
+  'bot A 工作区目录已创建',
+)
 
 console.log('\n[3] 建群（无协调者 → 全体成员发言）并发送用户消息')
 // 不设 coordinator：兜底规则 = 全体成员按 sort_order 发言，确保 A/B/C 都产生 done 消息
 const group = db.createGroup('冒烟讨论组', [botA.id, botB.id, botC.id])
 assert(group.type === 'group', '群聊已创建')
 const t0 = Date.now()
-await orchestrator.sendUserMessage(group.id, '大家觉得这个新功能怎么做比较好？', [])
-console.log(`  （3 个 mock bot 串行发言耗时 ${((Date.now() - t0) / 1000).toFixed(1)}s）`)
+await orchestrator.sendUserMessage(
+  group.id,
+  '大家觉得这个新功能怎么做比较好？',
+  [],
+)
+console.log(
+  `  （3 个 mock bot 串行发言耗时 ${((Date.now() - t0) / 1000).toFixed(1)}s）`,
+)
 
 const msgs = db.listMessages(group.id, undefined, 100)
-assert(msgs.some((m) => m.sender_type === 'user' && m.content.includes('新功能')), '用户消息已落库')
-assert(msgs.some((m) => m.sender_type === 'system'), '产生了 system 消息')
-for (const [label, bot] of [['A', botA], ['B', botB], ['C', botC]]) {
-  const done = msgs.filter((m) => m.sender_type === 'bot' && m.sender_bot_id === bot.id && m.status === 'done' && m.content.length > 0)
-  assert(done.length > 0, `bot ${label}（${bot.name}）产生 done 消息：「${done[0]?.content.slice(0, 30) ?? ''}…」`)
+assert(
+  msgs.some((m) => m.sender_type === 'user' && m.content.includes('新功能')),
+  '用户消息已落库',
+)
+assert(
+  msgs.some((m) => m.sender_type === 'system'),
+  '产生了 system 消息',
+)
+for (const [label, bot] of [
+  ['A', botA],
+  ['B', botB],
+  ['C', botC],
+]) {
+  const done = msgs.filter(
+    (m) =>
+      m.sender_type === 'bot' &&
+      m.sender_bot_id === bot.id &&
+      m.status === 'done' &&
+      m.content.length > 0,
+  )
+  assert(
+    done.length > 0,
+    `bot ${label}（${bot.name}）产生 done 消息：「${done[0]?.content.slice(0, 30) ?? ''}…」`,
+  )
 }
-assert(events.some((e) => e.type === 'system-message'), '推送了 system-message 事件')
-assert(events.some((e) => e.type === 'message-delta'), '推送了 message-delta 事件')
-assert(events.some((e) => e.type === 'message-done'), '推送了 message-done 事件')
-assert(events.some((e) => e.type === 'chat-updated'), '推送了 chat-updated 事件')
+assert(
+  events.some((e) => e.type === 'system-message'),
+  '推送了 system-message 事件',
+)
+assert(
+  events.some((e) => e.type === 'message-delta'),
+  '推送了 message-delta 事件',
+)
+assert(
+  events.some((e) => e.type === 'message-done'),
+  '推送了 message-done 事件',
+)
+assert(
+  events.some((e) => e.type === 'chat-updated'),
+  '推送了 chat-updated 事件',
+)
 const chatAfter = db.getChat(group.id)
 assert(chatAfter.last_message_at > 0, 'last_message_at 已更新')
 
 console.log('\n[3b] 协调者群 + @mention 强制首位')
 {
   events.length = 0
-  const g2 = db.createGroup('协调者冒烟组', [botA.id, botB.id, botC.id], botA.id)
+  const g2 = db.createGroup(
+    '协调者冒烟组',
+    [botA.id, botB.id, botC.id],
+    botA.id,
+  )
   assert(g2.coordinator_bot_id === botA.id, '协调者已设置')
-  await orchestrator.sendUserMessage(g2.id, '请 @测试员小B 先说下风险', [botB.id])
+  await orchestrator.sendUserMessage(g2.id, '请 @测试员小B 先说下风险', [
+    botB.id,
+  ])
   const m2 = db.listMessages(g2.id, undefined, 100)
-  assert(m2.some((m) => m.sender_type === 'system' && m.content.includes('已发消息给')), '协调者 note 落为 system 消息')
-  const botMsgs = m2.filter((m) => m.sender_type === 'bot' && m.status === 'done')
-  assert(botMsgs.length >= 2, `协调者决策后至少 2 个 bot 发言（实际 ${botMsgs.length}）`)
-  assert(botMsgs[0]?.sender_bot_id === botB.id, '@mention 的 bot B 被强制排在首位发言')
+  assert(
+    m2.some(
+      (m) => m.sender_type === 'system' && m.content.includes('已发消息给'),
+    ),
+    '协调者 note 落为 system 消息',
+  )
+  const botMsgs = m2.filter(
+    (m) => m.sender_type === 'bot' && m.status === 'done',
+  )
+  assert(
+    botMsgs.length >= 2,
+    `协调者决策后至少 2 个 bot 发言（实际 ${botMsgs.length}）`,
+  )
+  assert(
+    botMsgs[0]?.sender_bot_id === botB.id,
+    '@mention 的 bot B 被强制排在首位发言',
+  )
 }
 
 console.log('\n[4] 单聊（dm）直调')
@@ -132,7 +224,10 @@ assert(
 
 console.log('\n[5] 记忆：手动写入 + 自动提取触发')
 const mem = db.addMemory(botA.id, '用户偏好中文交流', 'preference', 'manual')
-assert(db.listMemories(botA.id).some((m) => m.id === mem.id), '记忆表手动写入成功')
+assert(
+  db.listMemories(botA.id).some((m) => m.id === mem.id),
+  '记忆表手动写入成功',
+)
 // 每个 bot 每 chat 累计 10 条新消息触发自动提取；每轮群发言 = 1(user)+3(bot) = 4 条
 // 再来 2 轮群消息（累计 4+4+4=12 >= 10）触发 mock 自动提取
 events.length = 0
@@ -145,7 +240,34 @@ assert(autoMems.length > 0, `bot B 自动记忆已写入（${autoMems.length} �
 console.log('\n[6] listChats 摘要')
 const summaries = db.listChats()
 const g = summaries.find((c) => c.id === group.id)
-assert(!!g && g.member_bots.length === 3 && g.preview.length > 0, '群聊摘要含成员与预览')
+assert(
+  !!g && g.member_bots.length === 3 && g.preview.length > 0,
+  '群聊摘要含成员与预览',
+)
+
+console.log('\n[7] 邀请 / 隐藏 / 清空聊天记录')
+const botD = db.createBot({ name: '研究员小D', provider_id: provider.id })
+db.addChatMembers(group.id, [botD.id])
+assert(
+  db.listMemberBots(group.id).some((bot) => bot.id === botD.id),
+  '邀请 Bot 加入既有群聊',
+)
+db.clearChatMessages(dm.id)
+assert(
+  db.listMessages(dm.id, undefined, 10).length === 0 &&
+    db.getChat(dm.id).last_message_at === 0,
+  '清空聊天记录不删除单聊',
+)
+db.hideChat(dm.id)
+assert(
+  !db.listChats().some((chat) => chat.id === dm.id),
+  '隐藏单聊后不在列表显示',
+)
+assert(
+  db.createDm(botB.id).id === dm.id &&
+    db.listChats().some((chat) => chat.id === dm.id),
+  '从我的 Bot 再次打开会恢复显示',
+)
 
 fs.rmSync(tmp, { recursive: true, force: true })
 fs.rmSync(bundleDir, { recursive: true, force: true })

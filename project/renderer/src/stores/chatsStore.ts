@@ -22,6 +22,9 @@ interface ChatsState {
     id: string,
     patch: { name?: string; coordinatorBotId?: string | null },
   ) => Promise<void>
+  addChatMembers: (id: string, botIds: string[]) => Promise<void>
+  hideChat: (id: string) => Promise<void>
+  clearChatMessages: (id: string) => Promise<void>
   deleteChat: (id: string) => Promise<void>
 }
 
@@ -78,6 +81,34 @@ export const useChatsStore = create<ChatsState>((set, get) => ({
 
   updateChat: async (id, patch) => {
     await api.updateChat(id, patch)
+    await get().loadChats()
+  },
+
+  addChatMembers: async (id, botIds) => {
+    await api.addChatMembers(id, botIds)
+    await get().loadChats()
+  },
+
+  hideChat: async (id) => {
+    await api.hideChat(id)
+    if (get().activeChatId === id) await get().selectChat(null)
+    useDraftsStore.getState().clearDraft(id)
+    await get().loadChats()
+  },
+
+  clearChatMessages: async (id) => {
+    await api.clearChatMessages(id)
+    useDraftsStore.getState().clearDraft(id)
+    useMessagesStore.setState((state) => ({
+      messages: { ...state.messages, [id]: [] },
+      streaming: Object.fromEntries(
+        Object.entries(state.streaming).filter(
+          ([, message]) => message.chat_id !== id,
+        ),
+      ),
+      generating: { ...state.generating, [id]: false },
+      hasOlder: { ...state.hasOlder, [id]: false },
+    }))
     await get().loadChats()
   },
 

@@ -56,6 +56,11 @@ const api: CovanApi = {
     id: string,
     patch: { name?: string; coordinatorBotId?: string | null },
   ) => ipcRenderer.invoke(CH.updateChat, id, patch),
+  addChatMembers: (chatId, botIds) =>
+    ipcRenderer.invoke(CH.addChatMembers, chatId, botIds),
+  hideChat: (chatId) => ipcRenderer.invoke(CH.hideChat, chatId),
+  clearChatMessages: (chatId) =>
+    ipcRenderer.invoke(CH.clearChatMessages, chatId),
   deleteChat: (id: string) => ipcRenderer.invoke(CH.deleteChat, id),
   markRead: (chatId: string) => ipcRenderer.invoke(CH.markRead, chatId),
   exportChat: (chatId: string) => ipcRenderer.invoke(CH.exportChat, chatId),

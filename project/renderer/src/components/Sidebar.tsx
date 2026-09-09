@@ -130,6 +130,7 @@ function ChatListItem({ chat }: { chat: ChatSummary }) {
       {menu && chat.bot_id && (
         <ChatContextMenu
           botId={chat.bot_id}
+          chatId={chat.id}
           x={menu.x}
           y={menu.y}
           onClose={() => setMenu(null)}

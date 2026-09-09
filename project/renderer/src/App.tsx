@@ -4,6 +4,7 @@ import { BotSettingsPanel } from './components/BotSettingsPanel'
 import { ChatView } from './components/ChatView'
 import { NewBotDialog } from './components/NewBotDialog'
 import { NewGroupDialog } from './components/NewGroupDialog'
+import { InviteBotsDialog } from './components/InviteBotsDialog'
 import { SettingsModal } from './components/SettingsModal'
 import { Sidebar } from './components/Sidebar'
 import { useBotsStore } from './stores/botsStore'
@@ -85,6 +86,7 @@ export default function App() {
       <SettingsModal />
       <NewBotDialog />
       <NewGroupDialog />
+      <InviteBotsDialog />
       <UserProfileDialog />
     </div>
   )

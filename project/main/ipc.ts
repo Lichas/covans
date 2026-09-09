@@ -203,6 +203,22 @@ export function registerIpc(): void {
       db.updateChat(id, patch)
     },
   )
+  handle(CH.addChatMembers, (chatId: string, botIds: string[]) => {
+    assertStr(chatId, 'chatId')
+    assertStrArray(botIds, 'botIds')
+    if (!botIds.length) throw new Error('请选择至少一个 Bot')
+    db.addChatMembers(chatId, botIds)
+  })
+  handle(CH.hideChat, (chatId: string) => {
+    assertStr(chatId, 'chatId')
+    stopTurn(chatId)
+    db.hideChat(chatId)
+  })
+  handle(CH.clearChatMessages, (chatId: string) => {
+    assertStr(chatId, 'chatId')
+    stopTurn(chatId)
+    db.clearChatMessages(chatId)
+  })
   handle(CH.deleteChat, (id: string) => {
     assertStr(id, 'id')
     stopTurn(id)

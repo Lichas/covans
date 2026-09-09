@@ -867,6 +867,18 @@ button:disabled {
   color: var(--muted);
   line-height: 1.6;
 }
+.chat-context-separator {
+  height: 1px;
+  margin: 4px 7px;
+  background: var(--line);
+}
+.chat-context-menu .chat-context-danger {
+  color: #dc2626;
+}
+.chat-context-menu .chat-context-danger:hover,
+.chat-context-menu .chat-context-danger:focus {
+  background: #fef2f2;
+}
 .profile-entry {
   display: flex;
   align-items: center;

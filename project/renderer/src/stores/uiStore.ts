@@ -10,12 +10,14 @@ interface UiState {
   setProfileOpen: (v: boolean) => void
   newBotOpen: boolean
   newGroupOpen: boolean
+  inviteChatId: string | null
   toggleRightPanel: () => void
   setRightPanelOpen: (v: boolean) => void
   inspectBot: (botId: string | null) => void
   setSettingsOpen: (v: boolean) => void
   setNewBotOpen: (v: boolean) => void
   setNewGroupOpen: (v: boolean) => void
+  setInviteChatId: (id: string | null) => void
 }
 
 export const useUiStore = create<UiState>((set, get) => ({
@@ -26,6 +28,7 @@ export const useUiStore = create<UiState>((set, get) => ({
   setProfileOpen: (v) => set({ profileOpen: v }),
   newBotOpen: false,
   newGroupOpen: false,
+  inviteChatId: null,
   toggleRightPanel: () => set({ rightPanelOpen: !get().rightPanelOpen }),
   setRightPanelOpen: (v) => set({ rightPanelOpen: v }),
   inspectBot: (botId) => {
@@ -35,4 +38,5 @@ export const useUiStore = create<UiState>((set, get) => ({
   setSettingsOpen: (v) => set({ settingsOpen: v }),
   setNewBotOpen: (v) => set({ newBotOpen: v }),
   setNewGroupOpen: (v) => set({ newGroupOpen: v }),
+  setInviteChatId: (id) => set({ inviteChatId: id }),
 }))

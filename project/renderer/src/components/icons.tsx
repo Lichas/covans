@@ -80,6 +80,20 @@ export const UsersIcon = (p: P) => (
   </svg>
 )
 
+export const UserPlusIcon = (p: P) => (
+  <svg {...base(p)}>
+    <circle cx="9" cy="8" r="3.5" />
+    <path d="M2.5 20c.8-3.2 3.4-5 6.5-5 1.7 0 3.2.5 4.3 1.5" />
+    <path d="M18 11v8m-4-4h8" />
+  </svg>
+)
+
+export const EyeOffIcon = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M3 3l18 18M10.6 10.7A2 2 0 0 0 13.3 13.4M9.9 5.2A10.6 10.6 0 0 1 12 5c5.4 0 8.7 5.1 9.5 7-.4 1-1.4 2.7-3 4.1M6.1 6.1C4.1 7.6 2.9 9.7 2.5 12c.8 1.9 4.1 7 9.5 7 1.2 0 2.4-.3 3.4-.7" />
+  </svg>
+)
+
 export const MarketIcon = (p: P) => (
   <svg {...base(p)}>
     <path d="M4 9 5.5 4h13L20 9" />
@@ -230,7 +244,13 @@ export function ProviderIcon({ kind, ...props }: P & { kind: ProviderKind }) {
         y="16"
         textAnchor="middle"
         fill="white"
-        fontSize={meta.glyph === '智' || meta.glyph.length > 1 ? 8.5 : size <= 18 ? 12 : 13}
+        fontSize={
+          meta.glyph === '智' || meta.glyph.length > 1
+            ? 8.5
+            : size <= 18
+              ? 12
+              : 13
+        }
         fontFamily="-apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif"
         fontWeight="700"
       >

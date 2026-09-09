@@ -1,20 +1,29 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useBotsStore } from '../stores/botsStore'
+import { useChatsStore } from '../stores/chatsStore'
+import { EyeOffIcon, TrashIcon } from './icons'
 
 export function ChatContextMenu({
   botId,
+  chatId,
   x,
   y,
   onClose,
 }: {
   botId: string
+  chatId: string
   x: number
   y: number
   onClose: () => void
 }) {
   const bots = useBotsStore((s) => s.bots)
   const update = useBotsStore((s) => s.updateBot)
+  const deleteBot = useBotsStore((s) => s.deleteBot)
+  const hideChat = useChatsStore((s) => s.hideChat)
+  const clearChatMessages = useChatsStore((s) => s.clearChatMessages)
+  const selectChat = useChatsStore((s) => s.selectChat)
+  const loadChats = useChatsStore((s) => s.loadChats)
   const bot = bots.find((b) => b.id === botId)
   const menu = useRef<HTMLDivElement>(null)
   const close = useRef(onClose)
@@ -49,7 +58,7 @@ export function ChatContextMenu({
       className="chat-context-menu"
       style={{
         left: Math.max(8, Math.min(x, window.innerWidth - 240)),
-        top: Math.max(8, Math.min(y, window.innerHeight - 140)),
+        top: Math.max(8, Math.min(y, window.innerHeight - 260)),
       }}
     >
       <button
@@ -78,6 +87,82 @@ export function ChatContextMenu({
         </span>
       </button>
       {full && <p>已置顶 3 个，请先取消一个</p>}
+      <div className="chat-context-separator" />
+      <button
+        role="menuitem"
+        disabled={busy}
+        onClick={async () => {
+          if (
+            !window.confirm(
+              `不再在列表显示与「${bot.name}」的聊天？Bot 和聊天记录都会保留，可在「我的 Bot」中再次打开。`,
+            )
+          )
+            return
+          setBusy(true)
+          try {
+            await hideChat(chatId)
+            onClose()
+          } catch (e) {
+            setError(String(e))
+          } finally {
+            setBusy(false)
+          }
+        }}
+      >
+        <span>不显示</span>
+        <EyeOffIcon width={15} height={15} />
+      </button>
+      <button
+        role="menuitem"
+        disabled={busy}
+        onClick={async () => {
+          if (
+            !window.confirm(
+              `确定清空与「${bot.name}」的全部聊天记录吗？此操作不可撤销。`,
+            )
+          )
+            return
+          setBusy(true)
+          try {
+            await clearChatMessages(chatId)
+            onClose()
+          } catch (e) {
+            setError(String(e))
+          } finally {
+            setBusy(false)
+          }
+        }}
+      >
+        <span>清空聊天记录</span>
+        <TrashIcon width={15} height={15} />
+      </button>
+      <button
+        role="menuitem"
+        disabled={busy}
+        onClick={async () => {
+          if (
+            !window.confirm(
+              `确定删除 Bot「${bot.name}」吗？它的单聊和记忆将无法恢复；工作区文件会保留在本机。`,
+            )
+          )
+            return
+          setBusy(true)
+          try {
+            await deleteBot(bot.id)
+            await selectChat(null)
+            await loadChats()
+            onClose()
+          } catch (e) {
+            setError(String(e))
+          } finally {
+            setBusy(false)
+          }
+        }}
+        className="chat-context-danger"
+      >
+        <span>删除 Bot</span>
+        <TrashIcon width={15} height={15} />
+      </button>
       {error && <p role="alert">{error}</p>}
     </div>,
     document.body,

@@ -79,6 +79,8 @@ export interface Chat {
   coordinator_bot_id: string | null
   last_message_at: number
   unread: number
+  /** 隐藏的单聊保留在本地，可从「我的 Bot」再次打开。 */
+  hidden: number
   created_at: number
 }
 
@@ -259,6 +261,9 @@ export interface CovanApi {
     id: string,
     patch: { name?: string; coordinatorBotId?: string | null },
   ): Promise<void>
+  addChatMembers(chatId: string, botIds: string[]): Promise<void>
+  hideChat(chatId: string): Promise<void>
+  clearChatMessages(chatId: string): Promise<void>
   deleteChat(id: string): Promise<void>
   markRead(chatId: string): Promise<void>
   exportChat(chatId: string): Promise<string | null>

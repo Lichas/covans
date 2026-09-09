@@ -80,7 +80,7 @@ function SettingsTab({ bot }: { bot: Bot }) {
   }
 
   return (
-    <div className="space-y-4 p-4">
+    <div className="flex flex-col gap-4 p-4">
       <div className="flex items-center justify-between">
         <span className="text-[13px] text-stone-600 dark:text-stone-300">
           新消息通知
@@ -108,7 +108,7 @@ function SettingsTab({ bot }: { bot: Bot }) {
         onSave={(v) => save({ system_prompt: v })}
       />
 
-      <div className="space-y-3 rounded-xl border border-stone-200 bg-stone-50 p-3.5 dark:border-stone-700 dark:bg-stone-800/50">
+      <div className="-order-1 space-y-3 rounded-xl border border-stone-200 bg-stone-50 p-3.5 dark:border-stone-700 dark:bg-stone-800/50">
         <div className="text-[12.5px] font-medium text-stone-600 dark:text-stone-300">
           模型配置
         </div>

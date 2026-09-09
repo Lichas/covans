@@ -23,15 +23,15 @@ import { WelcomeView } from './WelcomeView'
 import {
   AgentConversationCard,
   AgentConversationDialog,
-  StartAgentConversation,
   useAgentThreads,
 } from './AgentConversations'
 import {
   ArrowDownIcon,
   DownloadIcon,
-  ExpandIcon,
+  GearIcon,
   ProviderIcon,
   SparkIcon,
+  UserPlusIcon,
   UsersIcon,
 } from './icons'
 
@@ -70,7 +70,7 @@ export function ChatView() {
   const [exportState, setExportState] = useState('')
   const [exporting, setExporting] = useState(false)
   const [privateId, setPrivateId] = useState<string | null>(null)
-  const [startPrivate, setStartPrivate] = useState(false)
+  const setInviteChatId = useUiStore((s) => s.setInviteChatId)
   const privateThreads = useAgentThreads(chat?.id)
   const messages = useMemo(() => {
     if (!chat) return []
@@ -93,7 +93,6 @@ export function ChatView() {
     setShowJump(false)
     setExportState('')
     setPrivateId(null)
-    setStartPrivate(false)
   }, [chat?.id])
 
   useLayoutEffect(() => {
@@ -194,11 +193,11 @@ export function ChatView() {
         >
           <button
             className="icon-button"
-            aria-label="发起 Agent 私聊"
-            title="让 Bot 们聊一聊"
-            onClick={() => setStartPrivate(true)}
+            aria-label="邀请 Bot"
+            title={isGroup ? '邀请 Bot 加入群聊' : '邀请 Bot 组建群聊'}
+            onClick={() => setInviteChatId(chat.id)}
           >
-            <UsersIcon width={17} height={17} />
+            <UserPlusIcon width={17} height={17} />
           </button>
           <button
             className="icon-button"
@@ -225,7 +224,7 @@ export function ChatView() {
             aria-label={rightPanelOpen ? '收起设置' : '展开设置'}
             title="Bot 设置 · ⌘."
           >
-            <ExpandIcon width={17} height={17} />
+            <GearIcon width={17} height={17} />
           </button>
         </div>
       </header>
@@ -377,12 +376,6 @@ export function ChatView() {
         )}
       </div>
       <Composer key={chat.id} chat={chat} />
-      <StartAgentConversation
-        chat={chat}
-        open={startPrivate}
-        onClose={() => setStartPrivate(false)}
-        onStarted={setPrivateId}
-      />
       <AgentConversationDialog
         threadId={privateId}
         onClose={() => setPrivateId(null)}

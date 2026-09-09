@@ -68,6 +68,7 @@ CREATE TABLE IF NOT EXISTS chats (
   coordinator_bot_id TEXT REFERENCES bots(id),
   last_message_at INTEGER NOT NULL DEFAULT 0,
   unread INTEGER NOT NULL DEFAULT 0,
+  hidden INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS chat_members (
@@ -148,6 +149,9 @@ export function initDb(dir: string): Db {
       "UPDATE bots SET reasoning_effort='high' WHERE provider_id IN (SELECT id FROM providers WHERE kind='kimi')",
     )
   }
+  const chatColumns = d.pragma('table_info(chats)') as { name: string }[]
+  if (!chatColumns.some((column) => column.name === 'hidden'))
+    d.exec('ALTER TABLE chats ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0')
   // 仅迁移明确指向 LM Studio 默认端口的旧“OpenAI 兼容”配置。
   d.exec(
     `UPDATE providers SET kind='lm-studio'
@@ -399,6 +403,7 @@ interface ChatRow {
   coordinator_bot_id: string | null
   last_message_at: number
   unread: number
+  hidden: number
   created_at: number
 }
 interface MessageRow {
@@ -732,7 +737,7 @@ export function listMemberBots(chatId: string): Bot[] {
 export function listChats(): ChatSummary[] {
   const rows = getDb()
     .prepare(
-      'SELECT * FROM chats ORDER BY last_message_at DESC, created_at DESC',
+      'SELECT * FROM chats WHERE hidden=0 ORDER BY last_message_at DESC, created_at DESC',
     )
     .all() as ChatRow[]
   const previewStmt = getDb().prepare(
@@ -759,7 +764,11 @@ export function createDm(botId: string): Chat {
       "SELECT * FROM chats WHERE type='dm' AND bot_id = ? ORDER BY created_at ASC LIMIT 1",
     )
     .get(botId) as ChatRow | undefined
-  if (existing) return toChat(existing)
+  if (existing) {
+    if (existing.hidden)
+      getDb().prepare('UPDATE chats SET hidden=0 WHERE id=?').run(existing.id)
+    return getChat(existing.id)!
+  }
   const id = newId()
   const now = Date.now()
   getDb()
@@ -814,6 +823,37 @@ export function updateChat(
         : patch.coordinatorBotId,
       id,
     )
+}
+
+export function addChatMembers(chatId: string, botIds: string[]): void {
+  const chat = getChat(chatId)
+  if (!chat) throw new Error('会话不存在')
+  if (chat.type !== 'group') throw new Error('单聊不能直接邀请成员，请创建群聊')
+  const insert = getDb().prepare(
+    'INSERT OR IGNORE INTO chat_members (chat_id,bot_id,role) VALUES (?,?,?)',
+  )
+  for (const botId of botIds) {
+    if (!getBot(botId)) throw new Error('Bot 不存在')
+    insert.run(chatId, botId, 'member')
+  }
+}
+
+export function hideChat(chatId: string): void {
+  const chat = getChat(chatId)
+  if (!chat) throw new Error('会话不存在')
+  getDb().prepare('UPDATE chats SET hidden=1, unread=0 WHERE id=?').run(chatId)
+}
+
+export function clearChatMessages(chatId: string): void {
+  if (!getChat(chatId)) throw new Error('会话不存在')
+  const d = getDb()
+  d.transaction(() => {
+    d.prepare('DELETE FROM agent_threads WHERE parent_chat_id=?').run(chatId)
+    d.prepare('DELETE FROM messages WHERE chat_id=?').run(chatId)
+    d.prepare('UPDATE chats SET last_message_at=0, unread=0 WHERE id=?').run(
+      chatId,
+    )
+  })()
 }
 
 export function deleteChat(id: string): void {
