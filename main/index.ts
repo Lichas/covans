@@ -30,7 +30,7 @@ function prepareUserDataDir(userData: string): void {
   if (
     !configuredUserData &&
     legacyUserData !== userData &&
-    !fs.existsSync(userData) &&
+    !fs.existsSync(path.join(userData, 'legacy.db')) &&
     fs.existsSync(path.join(legacyUserData, 'legacy.db'))
   ) {
     try {
