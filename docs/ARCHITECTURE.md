@@ -60,7 +60,7 @@ Covan 是标准 Electron 双进程 + preload 桥接架构。所有 LLM 调用、
 
 ## 3. 数据模型
 
-SQLite 数据库位于 `app.getPath('userData')/legacy.db`，WAL 模式，启动时按版本号顺序执行 migration。表结构以 SPEC.md §3 为准，摘要如下：
+SQLite 数据库默认位于 `~/.covans/legacy.db`，WAL 模式，启动时按版本号顺序执行 migration。`~/.covans/` 也是头像、聊天图片和 Agent 工作区的统一本机根目录；不存在时创建，若尚未创建且检测到旧 userData 数据库则安全复制旧目录，绝不删除原目录。测试通过 `COVAN_USER_DATA_DIR` 隔离。表结构以 SPEC.md §3 为准，摘要如下：
 
 ```
 providers 1───n bots（provider_id，可空）
@@ -204,7 +204,7 @@ v1 采用保守的**包含关系去重**：新条目与现有记忆任一存在�
 
 ## 8. 工作区与自研工具（workspace.ts + agentRuntime.ts）
 
-- 根目录：`userData/workspaces/<botId>/`，createBot 时同步创建；删除 Bot 时目录保留与否由设置项控制（默认保留，防误删数据）。
+- 根目录：`~/.covans/workspaces/<botId>/`，createBot 时同步创建；删除 Bot 时目录保留与否由设置项控制（默认保留，防误删数据）。
 - 三个 AgentTool（TypeBox 参数定义，SPEC §8）：
   - `workspace_read({ path })`：读文本文件，超限/二进制返回错误。
   - `workspace_write({ path, content })`：写文件，自动创建父目录。
@@ -228,7 +228,7 @@ v1 采用保守的**包含关系去重**：新条目与现有记忆任一存在�
 - **ESM 注意事项**：pi-ai / pi-agent-core 为 ESM only，主进程 bundle 需以 ESM 输出；electron-vite 产物中若出现 CJS 桥接需求，使用 banner 注入 `import { createRequire } from 'module'; const require = createRequire(import.meta.url)` 的 shim，以兼容依赖树中残留的 CJS 引用。
 - **安装约束**：`npm install --ignore-scripts`（SPEC §8），规避 better-sqlite3 之外的 postinstall 联网行为；better-sqlite3 的原生绑定需在打包阶段用 electron-builder 的 rebuild 能力对齐 Electron ABI。
 - 分发产物：macOS dmg（arm64/x64）、Windows nsis、Linux AppImage；asar 打包时将 better-sqlite3 原生模块列入 asarUnpack。
-- 首启初始化：建库、跑 migration、建 workspaces/ 与 avatars/ 根目录、写入默认设置。
+- 首启初始化：创建 `~/.covans/`、建库、跑 migration、建 workspaces/ 与 avatars/ 根目录、写入默认设置；旧 userData 仅在目标不存在时复制，不做删除。
 
 ## 11. 风险与缓解
 

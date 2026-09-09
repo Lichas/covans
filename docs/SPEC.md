@@ -228,7 +228,7 @@ type CovanEvent =
 
 ## 7. 工作区（workspace.ts）
 
-- 根目录：`app.getPath('userData')/workspaces/<botId>/`，创建 bot 时自动建。
+- 根目录：默认 `~/.covans/workspaces/<botId>/`（测试可用 `COVAN_USER_DATA_DIR` 覆盖），创建 Bot 时自动建。应用数据库、头像和聊天图片同属 `~/.covans/`；目录不存在时启动自动创建。
 - agent 运行时 cwd 设为该目录（pi 的文件工具限定其中）。
 - 面板可列文件（深度 2）、预览文本文件（<=200KB）、`openWorkspace` 打开系统文件夹。
 

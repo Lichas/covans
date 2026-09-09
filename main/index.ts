@@ -1,4 +1,6 @@
 // main/index.ts — Electron 主进程入口：app 生命周期、窗口创建、模块初始化
+import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { app, BrowserWindow, net, protocol } from 'electron'
@@ -12,10 +14,47 @@ import { chatImagePath } from './chatImages'
 import { seedDefaultAvatars } from './avatars'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const legacyUserData = app.getPath('userData')
+const configuredUserData = process.env.COVAN_USER_DATA_DIR
+const defaultUserData = path.join(os.homedir(), '.covans')
 
-// Tests use an isolated data directory; keep the existing default path for installed users.
-if (process.env.COVAN_USER_DATA_DIR)
-  app.setPath('userData', process.env.COVAN_USER_DATA_DIR)
+// 测试可覆盖为临时目录；正常运行时应用数据和 Agent 工作区统一位于 ~/.covans。
+app.setPath('userData', configuredUserData || defaultUserData)
+
+/**
+ * 首次切换到 ~/.covans 时，安全复制旧应用数据，绝不删除旧目录。
+ * 只迁移数据库、头像、聊天图片和工作区；不复制 Electron 缓存或其他应用文件。
+ * 只有目标目录尚不存在且旧目录中确有数据库时才迁移，避免覆盖用户新建的数据目录。
+ */
+function prepareUserDataDir(userData: string): void {
+  if (
+    !configuredUserData &&
+    legacyUserData !== userData &&
+    !fs.existsSync(userData) &&
+    fs.existsSync(path.join(legacyUserData, 'legacy.db'))
+  ) {
+    try {
+      fs.mkdirSync(userData, { recursive: true })
+      for (const name of [
+        'legacy.db',
+        'legacy.db-wal',
+        'legacy.db-shm',
+        'avatars',
+        'chat-images',
+        'workspaces',
+      ]) {
+        const source = path.join(legacyUserData, name)
+        if (fs.existsSync(source))
+          fs.cpSync(source, path.join(userData, name), { recursive: true })
+      }
+      console.info(`已将已有本地数据复制到 ${userData}`)
+      return
+    } catch (error) {
+      console.warn('复制旧本地数据失败，将创建新的 Covan 数据目录', error)
+    }
+  }
+  fs.mkdirSync(userData, { recursive: true })
+}
 
 // 自定义头像协议：covan-avatar://local/avatars/<逐段编码的文件路径>
 // 必须在 app ready 之前注册特权
@@ -122,6 +161,7 @@ function createWindow(): void {
 
 void app.whenReady().then(() => {
   const userData = app.getPath('userData')
+  prepareUserDataDir(userData)
   registerAvatarProtocol(userData)
   initDb(userData)
   // A previous process may have exited during generation.

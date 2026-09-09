@@ -124,7 +124,7 @@ try {
       const req = createRequire(root + '/package.json')
       const Database = req('better-sqlite3')
       const database = new Database(
-        homedir() + '/Library/Application Support/covan/legacy.db',
+        homedir() + '/.covans/legacy.db',
         { readonly: true },
       )
       try {

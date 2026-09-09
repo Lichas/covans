@@ -173,7 +173,7 @@ Covan 的机会在于：**同一套「Bot（人设 + 记忆 + 工作区 + 模型
 ### 5.5 工作区
 
 **FR-WS-01 独立工作区（P1）**
-- Given Bot 创建成功，When 查看文件系统，Then `userData/workspaces/<botId>/` 目录存在；agent 运行时 cwd 限定于该目录。
+- Given Bot 创建成功，When 查看文件系统，Then `~/.covans/workspaces/<botId>/` 目录存在；Agent 运行时 cwd 限定于该目录。`~/.covans/` 不存在时应用启动自动创建。
 
 **FR-WS-02 文件浏览与预览（P1）**
 - Given Workspace 标签页，When 用户打开，Then 列出深度 2 的文件树；点击文本文件（≤200KB）可预览内容。
