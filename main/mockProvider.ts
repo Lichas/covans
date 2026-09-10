@@ -85,8 +85,25 @@ export async function mockComplete(
       ? 'REPLY'
       : 'SKIP'
   }
-  if (systemPrompt.includes('<<natural-followup-decision>>'))
-    return userText.includes('自然追问冒烟') ? 'REPLY' : 'SKIP'
+  if (systemPrompt.includes('<<natural-followup-draft>>')) {
+    if (userText.includes('自然分段冒烟')) {
+      if (userText.includes('第二段提供约束。'))
+        return 'REPLY\n第三段给出下一步。'
+      return 'REPLY\n第二段提供约束。'
+    }
+    if (userText.includes('自然追问两条上限冒烟')) {
+      if (userText.includes('你更看重速度还是稳定性？'))
+        return 'REPLY\n确认优先级后，我可以把方案收敛成一步。'
+      return 'REPLY\n你更看重速度还是稳定性？'
+    }
+    if (userText.includes('自然追问元话术防护'))
+      return 'REPLY\n下一条来了，别催。'
+    if (userText.includes('自然追问冒烟'))
+      return userText.includes('你更想先确认目标还是约束？')
+        ? 'SKIP'
+        : 'REPLY\n你更想先确认目标还是约束？'
+    return 'SKIP'
+  }
   return mockPersonaReply(bot, userText)
 }
 
@@ -105,9 +122,11 @@ export function mockStream(
   callbacks: MockStreamCallbacks,
   opts: MockCompleteOptions = {},
 ): Promise<string> {
-  const full = systemPrompt.includes('<<natural-followup-message>>')
-    ? `对了，关于「${clip(userText)}」，你更想先从哪一部分开始？`
-    : mockPersonaReply(bot, userText)
+  const full =
+    systemPrompt.includes('<<natural-followup-primary>>') &&
+    userText.includes('自然分段冒烟')
+      ? '第一段先说明目标。'
+      : mockPersonaReply(bot, userText)
   return new Promise((resolve) => {
     let i = 0
     const timer = setInterval(() => {

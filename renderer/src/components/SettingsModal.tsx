@@ -500,7 +500,7 @@ function BotSection() {
             自然追问
           </div>
           <div className="mt-0.5 max-w-[350px] text-[11.5px] leading-relaxed text-stone-400">
-            私聊回复后，Bot 仅在有实际补充或自然追问时才会另发 1–2 条短消息；关闭后每次只回复一条。
+            较长回复可按聊天节奏分成最多 3 条；内容已完整时不会重复续发。
           </div>
         </div>
         <Toggle

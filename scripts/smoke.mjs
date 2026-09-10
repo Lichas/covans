@@ -406,7 +406,7 @@ assert(
   'dm 中 bot B 产生 done 消息',
 )
 
-console.log('\n[4b] 单聊自然追问：最多额外两条，可关闭')
+console.log('\n[4b] 单聊自然追问：有价值才续发，过滤元话术，最多两条')
 const naturalDm = db.createDm(botC.id)
 await orchestrator.sendUserMessage(
   naturalDm.id,
@@ -417,19 +417,54 @@ const naturalReplies = db
   .listMessages(naturalDm.id, undefined, 20)
   .filter((m) => m.sender_type === 'bot' && m.status === 'done')
 assert(
-  naturalReplies.length === 3,
-  `自然追问把主回复拆成最多三条消息（实际 ${naturalReplies.length} 条）`,
+  naturalReplies.length === 2 &&
+    naturalReplies[1].content === '你更想先确认目标还是约束？',
+  `自然追问只追加一条具体消息并及时停止（实际 ${naturalReplies.length} 条）`,
+)
+const countDoneBotMessages = (chatId) =>
+  db
+    .listMessages(chatId, undefined, 50)
+    .filter((m) => m.sender_type === 'bot' && m.status === 'done').length
+const beforeGuarded = countDoneBotMessages(naturalDm.id)
+await orchestrator.sendUserMessage(
+  naturalDm.id,
+  '自然追问元话术防护',
+  [],
+)
+assert(
+  countDoneBotMessages(naturalDm.id) === beforeGuarded + 1,
+  '包含“下一条来了”等调度元话术的候选不会发送',
+)
+const beforeCapped = countDoneBotMessages(naturalDm.id)
+await orchestrator.sendUserMessage(
+  naturalDm.id,
+  '自然追问两条上限冒烟',
+  [],
+)
+assert(
+  countDoneBotMessages(naturalDm.id) === beforeCapped + 3,
+  `有两个具体承接点时最多追加两条（新增 ${countDoneBotMessages(naturalDm.id) - beforeCapped} 条）`,
+)
+const beforeSegmented = countDoneBotMessages(naturalDm.id)
+await orchestrator.sendUserMessage(naturalDm.id, '自然分段冒烟', [])
+const segmentedReplies = db
+  .listMessages(naturalDm.id, undefined, 3)
+  .filter((m) => m.sender_type === 'bot' && m.status === 'done')
+assert(
+  countDoneBotMessages(naturalDm.id) === beforeSegmented + 3 &&
+    segmentedReplies.map((message) => message.content).join('|') ===
+      '第一段先说明目标。|第二段提供约束。|第三段给出下一步。',
+  '较长回答按三个不重复的语义段依次发送',
 )
 db.setSetting('natural_follow_up', '0')
+const beforeDisabled = countDoneBotMessages(naturalDm.id)
 await orchestrator.sendUserMessage(
   naturalDm.id,
   '自然追问冒烟：关闭后只要一条',
   [],
 )
 assert(
-  db
-    .listMessages(naturalDm.id, undefined, 20)
-    .filter((m) => m.sender_type === 'bot' && m.status === 'done').length === 4,
+  countDoneBotMessages(naturalDm.id) === beforeDisabled + 1,
   '关闭自然追问后不再附加消息',
 )
 db.setSetting('natural_follow_up', '1')

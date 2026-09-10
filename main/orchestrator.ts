@@ -183,6 +183,7 @@ const turns = new Map<string, AbortController>()
 /** 首轮 + 最多四轮基于成员发言的延展讨论，避免群聊无限自我续聊。 */
 const MAX_GROUP_DISCUSSION_ROUNDS = 5
 const MAX_NATURAL_FOLLOW_UPS = 2
+const MAX_NATURAL_FOLLOW_UP_CHARS = 240
 interface ActiveGroupSession {
   revision: number
   decisions: Set<AbortController>
@@ -240,10 +241,24 @@ async function runTurn(
   if (chat.type === 'dm') {
     const bot =
       (chat.bot_id && members.find((b) => b.id === chat.bot_id)) || members[0]
-    const replied = await speakOne(chat.id, bot, text, '', undefined, signal)
+    const replied = await speakOne(
+      chat.id,
+      bot,
+      text,
+      '',
+      undefined,
+      signal,
+      30,
+      naturalFollowUpEnabled()
+        ? [
+            '<<natural-followup-primary>>',
+            '请用即时聊天的节奏回答。若内容较长且适合多条消息，本条只发送一个自然完整的小段，把其余非重复内容留给最多两条后续消息；不要先一次说完再复述，也不要预告或解释分段。若一条即可清楚回答，就在本条完整回答。',
+          ].join('\n\n')
+        : '',
+    )
     if (replied) {
       newMessageCount += 1
-      newMessageCount += await runNaturalFollowUps(chat.id, bot, text, signal)
+      newMessageCount += await runNaturalFollowUps(chat.id, bot, signal)
     }
   } else if (chat.reply_mode === 'active') {
     newMessageCount += await runActiveGroup(chat.id, members, signal)
@@ -477,56 +492,120 @@ function naturalFollowUpEnabled(): boolean {
   return db.getSetting('natural_follow_up') !== '0'
 }
 
-async function shouldNaturallyFollowUp(
+function normalizeForComparison(content: string): string {
+  return content.toLocaleLowerCase().replace(/[\p{P}\p{S}\s]/gu, '')
+}
+
+function substantiallyRepeatsRecentReply(
+  candidate: string,
+  recentReplies: Message[],
+): boolean {
+  const normalized = normalizeForComparison(candidate)
+  if (normalized.length < 12) return false
+  return recentReplies.some((message) => {
+    const previous = normalizeForComparison(message.content)
+    if (!previous) return false
+    if (previous.includes(normalized) || normalized.includes(previous)) return true
+    const sharedLength = Math.min(18, normalized.length)
+    for (let index = 0; index <= normalized.length - sharedLength; index++) {
+      if (previous.includes(normalized.slice(index, index + sharedLength)))
+        return true
+    }
+    return false
+  })
+}
+
+function parseNaturalFollowUpCandidate(
+  raw: string,
+  recentReplies: Message[],
+): string | null {
+  const trimmed = raw.trim()
+  if (/^SKIP\b/i.test(trimmed)) return null
+  const match = trimmed.match(/^REPLY(?:\s*[:：]\s*|\s*\n+)([\s\S]+)$/i)
+  if (!match) return null
+  const candidate = match[1].trim().replace(/\s*\n\s*/g, ' ')
+  if (!candidate || candidate.length > MAX_NATURAL_FOLLOW_UP_CHARS)
+    return null
+  if (
+    /(重新来|重发|分段回复|一段一段|下一条(?:来了|再|会|我)|(?:这|上|下)一条消息|接着发|继续发送|待续|别催|回复机制|自然追问)/i.test(
+      candidate,
+    )
+  )
+    return null
+  if (substantiallyRepeatsRecentReply(candidate, recentReplies)) return null
+  return candidate
+}
+
+async function draftNaturalFollowUp(
   chatId: string,
   bot: Bot,
   signal: AbortSignal,
-): Promise<boolean> {
+  index: number,
+): Promise<string | null> {
   try {
+    const recentReplies = db
+      .listRecentMessages(chatId, 5)
+      .filter(
+        (message) =>
+          message.sender_type === 'bot' && message.sender_bot_id === bot.id,
+      )
     const raw = await completeOnce(
       bot,
       [
         buildSystemPrompt(bot, db.listMemories(bot.id, 30)),
-        '<<natural-followup-decision>>',
-        '你刚刚在私聊中已经回复过用户。判断是否值得再单独发一条很短的自然跟进。',
-        '只有在补充遗漏重点、自然追问用户的感受/选择，或承接一个尚未解决的问题时才输出 REPLY。',
-        '若只是寒暄、重复、泛泛地问“还有什么需要”，或前一条已经完整，就输出 SKIP。只输出 REPLY 或 SKIP。',
+        '<<natural-followup-draft>>',
+        `你刚刚在私聊中已经回复过用户。现在判断是否值得发送第 ${index + 1} 条独立短跟进，并同时起草它。默认选择 SKIP。`,
+        '只有上一条明确只完成了较长回答的一部分且本条能推进新的内容、确实遗漏了一个重要具体信息，或存在必须由用户回答才能继续的明确问题时，才选择 REPLY。前一条已经完整、只能复述改写、寒暄、泛泛关心时必须 SKIP。',
+        '跟进不得复述或改写已经发送的内容，不得提到上一条、下一条、重新发送、分段、追问或任何内部回复机制。正文最多两句、240 字。',
+        '只允许输出以下两种格式之一：\nSKIP\nREPLY\n<一条可直接展示给用户的短消息>',
       ].join('\n\n'),
       decisionTranscript(chatId),
-      { signal, reasoning: 'low', maxTokens: 24, temperature: 0 },
+      { signal, reasoning: 'low', maxTokens: 180, temperature: 0 },
     )
-    return /^\s*REPLY\b/i.test(raw)
+    return parseNaturalFollowUpCandidate(raw, recentReplies)
   } catch {
     // 追问是体验增强，判断失败时不影响已经完成的主回复。
-    return false
+    return null
   }
+}
+
+function publishNaturalFollowUp(
+  chatId: string,
+  bot: Bot,
+  content: string,
+): void {
+  const placeholder = db.insertMessage({
+    chat_id: chatId,
+    sender_type: 'bot',
+    sender_bot_id: bot.id,
+    content: '',
+    status: 'streaming',
+  })
+  emit({ type: 'message-start', chatId, message: placeholder })
+  emit({
+    type: 'message-delta',
+    chatId,
+    messageId: placeholder.id,
+    delta: content,
+  })
+  const message = db.updateMessage(placeholder.id, { content, status: 'done' })
+  db.touchChat(chatId, Date.now(), true)
+  emit({ type: 'message-done', chatId, message })
+  emit({ type: 'chat-updated', chatId })
 }
 
 async function runNaturalFollowUps(
   chatId: string,
   bot: Bot,
-  userText: string,
   signal: AbortSignal,
 ): Promise<number> {
   if (!naturalFollowUpEnabled()) return 0
   let sentCount = 0
   for (let index = 0; index < MAX_NATURAL_FOLLOW_UPS; index++) {
-    if (signal.aborted || !(await shouldNaturallyFollowUp(chatId, bot, signal)))
-      return sentCount
-    const sent = await speakOne(
-      chatId,
-      bot,
-      userText,
-      '',
-      undefined,
-      signal,
-      30,
-      [
-        '<<natural-followup-message>>',
-        '这是紧接上一条回复的独立消息，不要重复答案。用一两句自然、具体的补充或追问来承接对话；不要解释这是“追问”，不要使用空泛的客服式收尾。',
-      ].join('\n\n'),
-    )
-    if (!sent) return sentCount
+    if (signal.aborted) return sentCount
+    const candidate = await draftNaturalFollowUp(chatId, bot, signal, index)
+    if (signal.aborted || !candidate || !db.getChat(chatId)) return sentCount
+    publishNaturalFollowUp(chatId, bot, candidate)
     sentCount += 1
   }
   return sentCount
