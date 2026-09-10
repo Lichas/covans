@@ -9,7 +9,7 @@ import type { Attachment, Bot, CovanEvent, Message } from '../shared/types'
 import { imageContent, validateChatImages } from './chatImages'
 import * as db from './db'
 import { abortChat, completeOnce, runAgent } from './agentRuntime'
-import { buildSystemPrompt, noteNewMessages, type GroupContext } from './memory'
+import { buildSystemPrompt, noteNewMessages, recallChatMemories, type GroupContext } from './memory'
 import { emitEvent as emit, setEventEmitter } from './events'
 import { classifyObservationError, observe } from './observability'
 
@@ -326,7 +326,7 @@ async function shouldReply(
         [
           buildSystemPrompt(
             bot,
-            db.listMemories(bot.id, 30),
+            recallChatMemories(bot.id, chatId),
             groupContext(chatId, db.listMemberBots(chatId)),
           ),
           groupReviewRules(),
@@ -567,7 +567,7 @@ async function draftNaturalFollowUp(
     const raw = await completeOnce(
       bot,
       [
-        buildSystemPrompt(bot, db.listMemories(bot.id, 30)),
+        buildSystemPrompt(bot, recallChatMemories(bot.id, chatId)),
         '<<natural-followup-draft>>',
         `你刚刚在私聊中已经回复过用户。现在判断是否值得发送第 ${index + 1} 条独立短跟进，并同时起草它。默认选择 SKIP。`,
         '只有上一条明确只完成了较长回答的一部分且本条能推进新的内容、确实遗漏了一个重要具体信息，或存在必须由用户回答才能继续的明确问题时，才选择 REPLY。前一条已经完整、只能复述改写、寒暄、泛泛关心时必须 SKIP。',
@@ -681,7 +681,7 @@ async function speakOne(
   historyLimit = 30,
   responseInstruction = '',
 ): Promise<boolean> {
-  const memories = db.listMemories(bot.id, 30)
+  const memories = recallChatMemories(bot.id, chatId)
   const ctx: GroupContext | undefined = groupContext
     ? {
         ...groupContext,
@@ -749,6 +749,9 @@ async function speakOne(
           artifacts,
         })
         emit({ type: 'message-start', chatId, message: msg })
+        emit({ type: 'workspace-updated', botId: bot.id })
+      },
+      onWorkspaceChanged: () => {
         emit({ type: 'workspace-updated', botId: bot.id })
       },
       onDelta: (delta) => {

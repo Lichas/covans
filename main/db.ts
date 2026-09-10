@@ -16,6 +16,7 @@ import type {
   ChatType,
   Memory,
   MemoryKind,
+  MemorySummaryState,
   Message,
   MessageStatus,
   Provider,
@@ -184,6 +185,7 @@ export function initDb(dir: string): Db {
          OR lower(base_url) LIKE 'http://127.0.0.1:1234/%')`,
   )
   db = d
+  migrateMemories()
   return d
 }
 
@@ -379,10 +381,13 @@ export function addAgentPrivateMessage(
     error: '',
     created_at: Date.now(),
   }
-  getDb()
-    .prepare('INSERT INTO agent_private_messages VALUES(?,?,?,?,?,?,?)')
-    .run(message.id, threadId, botId, content, status, '', message.created_at)
-  return message
+  return getDb().transaction(() => {
+    getDb()
+      .prepare('INSERT INTO agent_private_messages VALUES(?,?,?,?,?,?,?)')
+      .run(message.id, threadId, botId, content, status, '', message.created_at)
+    capturePrivateMemory(message)
+    return message
+  })()
 }
 
 export function updateAgentPrivateMessage(
@@ -391,11 +396,19 @@ export function updateAgentPrivateMessage(
   status: MessageStatus,
   error = '',
 ): void {
-  getDb()
-    .prepare(
-      'UPDATE agent_private_messages SET content=?, status=?, error=? WHERE id=?',
-    )
-    .run(content, status, error, id)
+  getDb().transaction(() => {
+    const previous = getDb().prepare('SELECT status FROM agent_private_messages WHERE id=?').get(id) as { status: MessageStatus } | undefined
+    if (!previous) return
+    getDb()
+      .prepare(
+        'UPDATE agent_private_messages SET content=?, status=?, error=? WHERE id=?',
+      )
+      .run(content, status, error, id)
+    if (status === 'done' && previous?.status !== 'done') {
+      const message = getDb().prepare('SELECT * FROM agent_private_messages WHERE id=?').get(id) as AgentPrivateMessage
+      capturePrivateMemory(message)
+    }
+  })()
 }
 
 export function finishAgentThread(
@@ -464,13 +477,9 @@ interface MessageRow {
   error: string
   created_at: number
 }
-interface MemoryRow {
-  id: string
-  bot_id: string
-  kind: string
-  content: string
-  source: string
-  created_at: number
+interface MemoryRow extends Omit<Memory, 'participants' | 'evidence'> {
+  participants: string
+  evidence: string
 }
 
 function toProvider(r: ProviderRow): Provider {
@@ -510,6 +519,8 @@ function toMemory(r: MemoryRow): Memory {
     ...r,
     kind: r.kind as MemoryKind,
     source: r.source as Memory['source'],
+    participants: safeJsonArray<string>(r.participants),
+    evidence: safeJsonArray<string>(r.evidence),
   }
 }
 
@@ -968,25 +979,29 @@ export interface InsertMessageInput {
 export function insertMessage(input: InsertMessageInput): Message {
   const id = newId()
   const now = Date.now()
-  getDb()
-    .prepare(
-      `INSERT INTO messages (id,chat_id,sender_type,sender_bot_id,content,attachments,artifacts,mentions,status,error,created_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-    )
-    .run(
-      id,
-      input.chat_id,
-      input.sender_type,
-      input.sender_bot_id ?? null,
-      input.content,
-      JSON.stringify(input.attachments ?? []),
-      JSON.stringify(input.artifacts ?? []),
-      JSON.stringify(input.mentions ?? []),
-      input.status ?? 'done',
-      input.error ?? '',
-      now,
-    )
-  return getMessage(id)!
+  return getDb().transaction(() => {
+    getDb()
+      .prepare(
+        `INSERT INTO messages (id,chat_id,sender_type,sender_bot_id,content,attachments,artifacts,mentions,status,error,created_at)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+      )
+      .run(
+        id,
+        input.chat_id,
+        input.sender_type,
+        input.sender_bot_id ?? null,
+        input.content,
+        JSON.stringify(input.attachments ?? []),
+        JSON.stringify(input.artifacts ?? []),
+        JSON.stringify(input.mentions ?? []),
+        input.status ?? 'done',
+        input.error ?? '',
+        now,
+      )
+    const message = getMessage(id)!
+    captureChatMemory(message)
+    return message
+  })()
 }
 
 export function getMessage(id: string): Message | null {
@@ -1008,19 +1023,23 @@ export function updateMessage(
 ): Message {
   const existing = getMessage(id)
   if (!existing) throw new Error('消息不存在')
-  getDb()
-    .prepare(
-      'UPDATE messages SET content=?, status=?, error=?, attachments=?, artifacts=? WHERE id=?',
-    )
-    .run(
-      patch.content ?? existing.content,
-      patch.status ?? existing.status,
-      patch.error ?? existing.error,
-      JSON.stringify(patch.attachments ?? existing.attachments),
-      JSON.stringify(patch.artifacts ?? existing.artifacts),
-      id,
-    )
-  return getMessage(id)!
+  return getDb().transaction(() => {
+    getDb()
+      .prepare(
+        'UPDATE messages SET content=?, status=?, error=?, attachments=?, artifacts=? WHERE id=?',
+      )
+      .run(
+        patch.content ?? existing.content,
+        patch.status ?? existing.status,
+        patch.error ?? existing.error,
+        JSON.stringify(patch.attachments ?? existing.attachments),
+        JSON.stringify(patch.artifacts ?? existing.artifacts),
+        id,
+      )
+    const message = getMessage(id)!
+    if (existing.status !== 'done') captureChatMemory(message)
+    return message
+  })()
 }
 
 export function listMessages(
@@ -1079,10 +1098,153 @@ export function stopStreamingMessages(chatId: string): void {
 
 // ---------- memories ----------
 
-export function listMemories(botId: string, limit = 100): Memory[] {
+const MEMORY_DAY = 86400000
+
+function migrateMemories(): void {
+  const d = getDb()
+  const columns = d.pragma('table_info(memories)') as { name: string }[]
+  const fields: Record<string, string> = {
+    layer: "TEXT NOT NULL DEFAULT 'long'",
+    source_type: "TEXT NOT NULL DEFAULT 'legacy'",
+    source_id: "TEXT NOT NULL DEFAULT ''",
+    scene_id: "TEXT NOT NULL DEFAULT ''",
+    participants: "TEXT NOT NULL DEFAULT '[]'",
+    speaker: "TEXT NOT NULL DEFAULT ''",
+    evidence: "TEXT NOT NULL DEFAULT '[]'",
+    expires_at: 'INTEGER',
+    last_recalled_at: 'INTEGER',
+    representation: "TEXT NOT NULL DEFAULT 'note'",
+    updated_at: 'INTEGER NOT NULL DEFAULT 0',
+  }
+  d.transaction(() => {
+    for (const [name, definition] of Object.entries(fields))
+      if (!columns.some((column) => column.name === name))
+        d.exec('ALTER TABLE memories ADD COLUMN ' + name + ' ' + definition)
+    d.exec('CREATE INDEX IF NOT EXISTS idx_memories_scene ON memories(bot_id, scene_id, layer)')
+    d.exec('CREATE INDEX IF NOT EXISTS idx_memories_source ON memories(bot_id, source_id)')
+    d.exec("CREATE TABLE IF NOT EXISTS memory_summary_states (bot_id TEXT NOT NULL REFERENCES bots(id) ON DELETE CASCADE, scene_id TEXT NOT NULL, status TEXT NOT NULL, source_cursor TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '', updated_at INTEGER NOT NULL, PRIMARY KEY(bot_id, scene_id))")
+    if (!columns.some((column) => column.name === 'representation')) {
+      d.exec("UPDATE memories SET representation='verbatim' WHERE source_id!='' AND evidence=json_array(source_id)")
+      d.exec("UPDATE memories SET representation='summary' WHERE source_id LIKE 'summary:%'")
+      d.exec('UPDATE memories SET updated_at=created_at WHERE updated_at=0')
+    }
+    d.exec("UPDATE memories SET layer='evidence' WHERE representation='verbatim'")
+    // Exact private-chat audience is recoverable; historical group membership is not.
+    if (!getSetting('memory_v2_private_backfill')) {
+      const rows = d.prepare("SELECT * FROM agent_private_messages WHERE status='done' ORDER BY created_at, rowid").all() as AgentPrivateMessage[]
+      for (const message of rows) capturePrivateMemory(message)
+      setSetting('memory_v2_private_backfill', '1')
+    }
+  })()
+  maintainMemories()
+}
+
+type MemoryWrite = Omit<Memory, 'id' | 'representation' | 'updated_at'> & Partial<Pick<Memory, 'representation' | 'updated_at'>>
+
+export function writeMemory(input: MemoryWrite): Memory {
+  const memory: Memory = {
+    ...input, id: newId(),
+    representation: input.representation ?? (input.source_id && input.evidence[0] === input.source_id ? 'verbatim' : input.source_id ? 'summary' : 'note'),
+    updated_at: input.updated_at ?? input.created_at,
+  }
+  getDb().prepare(
+    'INSERT INTO memories (id,bot_id,kind,content,source,created_at,layer,source_type,source_id,scene_id,participants,speaker,evidence,expires_at,last_recalled_at,representation,updated_at) VALUES (@id,@bot_id,@kind,@content,@source,@created_at,@layer,@source_type,@source_id,@scene_id,@participants,@speaker,@evidence,@expires_at,@last_recalled_at,@representation,@updated_at)',
+  ).run({ ...memory, participants: JSON.stringify(memory.participants), evidence: JSON.stringify(memory.evidence) })
+  emitEvent({ type: 'memories-updated', botId: input.bot_id })
+  return memory
+}
+
+let memoryObserver: ((botId: string, sceneId: string) => void) | undefined
+export function setMemoryObserver(observer?: typeof memoryObserver): void {
+  memoryObserver = observer
+}
+
+export function listMemorySummaryStates(botId: string): MemorySummaryState[] {
+  return getDb().prepare('SELECT * FROM memory_summary_states WHERE bot_id=? ORDER BY updated_at DESC').all(botId) as MemorySummaryState[]
+}
+
+export function setMemorySummaryState(botId: string, sceneId: string, status: MemorySummaryState['status'], cursor = '', error = ''): void {
+  if (!getBot(botId)) return
+  getDb().prepare('INSERT INTO memory_summary_states (bot_id,scene_id,status,source_cursor,error,updated_at) VALUES (?,?,?,?,?,?) ON CONFLICT(bot_id,scene_id) DO UPDATE SET status=excluded.status, source_cursor=CASE WHEN excluded.source_cursor=\'\' THEN memory_summary_states.source_cursor ELSE excluded.source_cursor END, error=excluded.error, updated_at=excluded.updated_at')
+    .run(botId, sceneId, status, cursor, error, Date.now())
+  emitEvent({ type: 'memories-updated', botId })
+}
+
+/** One stable summary card per owner's scene; evidence remains independently stored. */
+export function saveSceneSummary(botId: string, sceneId: string, content: string, evidence: Memory[], layer: 'short' | 'episodic' = 'episodic'): Memory {
+  const sourceId = (layer === 'short' ? 'working-summary:' : 'scene-summary:') + sceneId
+  const row = getDb().prepare('SELECT * FROM memories WHERE bot_id=? AND source_id=?').get(botId, sourceId) as MemoryRow | undefined
+  const now = Date.now()
+  const fields: MemoryWrite = {
+    bot_id: botId, kind: 'summary', content, source: 'auto', layer,
+    source_type: evidence[0].source_type, source_id: sourceId, scene_id: sceneId,
+    participants: [...new Set(evidence.flatMap((m) => m.participants))], speaker: '',
+    evidence: evidence.map((m) => m.source_id), expires_at: now + (layer === 'short' ? 1 : 90) * MEMORY_DAY,
+    last_recalled_at: row?.last_recalled_at ?? null, representation: 'summary',
+    created_at: row?.created_at ?? now, updated_at: now,
+  }
+  if (!row) return writeMemory(fields)
+  getDb().prepare('UPDATE memories SET content=?,participants=?,evidence=?,expires_at=?,updated_at=? WHERE id=?')
+    .run(content, JSON.stringify(fields.participants), JSON.stringify(fields.evidence), fields.expires_at, now, row.id)
+  emitEvent({ type: 'memories-updated', botId })
+  return { ...fields, id: row.id, representation: 'summary', updated_at: now }
+}
+
+/** Every completed delivery is copied to its actual Bot audience atomically. */
+function captureMemory(
+  message: { id: string; content: string; status: MessageStatus; created_at: number },
+  owners: string[], participants: string[], speaker: string,
+  sourceType: 'chat' | 'private', sceneId: string,
+): void {
+  if (message.status !== 'done' || !message.content.trim()) return
+  getDb().transaction(() => {
+    for (const botId of new Set(owners)) {
+      if (!getBot(botId)) continue
+      if (getDb().prepare("SELECT 1 FROM memories WHERE bot_id=? AND source_id=? AND representation='verbatim'").get(botId, message.id)) continue
+      writeMemory({
+        bot_id: botId, kind: 'summary', content: message.content.slice(0, 12000), source: 'auto',
+        layer: 'evidence', source_type: sourceType, source_id: message.id, scene_id: sceneId,
+        participants, speaker, evidence: [message.id], created_at: message.created_at,
+        expires_at: message.created_at + 90 * MEMORY_DAY, last_recalled_at: null,
+      })
+      memoryObserver?.(botId, sceneId)
+    }
+  })()
+}
+
+function captureChatMemory(message: Message): void {
+  if (message.sender_type === 'system') return
+  const owners = listMemberBots(message.chat_id).map((bot) => bot.id)
+  captureMemory(message, owners, ['user', ...owners], message.sender_bot_id ?? 'user', 'chat', message.chat_id)
+}
+
+function capturePrivateMemory(message: AgentPrivateMessage): void {
+  const thread = getDb().prepare('SELECT * FROM agent_threads WHERE id=?').get(message.thread_id) as AgentThread | undefined
+  if (!thread) return
+  const owners = [thread.from_bot_id, thread.to_bot_id]
+  captureMemory(message, owners, owners, message.sender_bot_id, 'private', thread.id)
+}
+
+/** Automatic records age and expire. Manual and explicit long-term memories survive. */
+export function maintainMemories(botId?: string, now = Date.now()): void {
+  const scope = botId ? ' AND bot_id=@botId' : ''
+  const params = botId ? { now, cutoff: now - MEMORY_DAY, botId } : { now, cutoff: now - MEMORY_DAY }
+  getDb().prepare("DELETE FROM memories WHERE source='auto' AND expires_at IS NOT NULL AND expires_at <= @now" + scope).run(params)
+  const owners = botId ? [{ id: botId }] : getDb().prepare('SELECT id FROM bots').all() as { id: string }[]
+  for (const owner of owners)
+    getDb().prepare("DELETE FROM memories WHERE id IN (SELECT id FROM memories WHERE bot_id=? AND source='auto' AND layer!='long' ORDER BY COALESCE(last_recalled_at, created_at) DESC, created_at DESC, rowid DESC LIMIT -1 OFFSET 2000)").run(owner.id)
+}
+
+export function markMemoriesRecalled(ids: string[]): void {
+  const update = getDb().prepare('UPDATE memories SET last_recalled_at=? WHERE id=?')
+  getDb().transaction(() => { for (const id of ids) update.run(Date.now(), id) })()
+}
+
+export function listMemories(botId: string, limit = -1): Memory[] {
+  maintainMemories(botId)
   const rows = getDb()
     .prepare(
-      'SELECT * FROM memories WHERE bot_id = ? ORDER BY created_at DESC LIMIT ?',
+      'SELECT * FROM memories WHERE bot_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?',
     )
     .all(botId, limit) as MemoryRow[]
   return rows.map(toMemory)
@@ -1094,20 +1256,25 @@ export function addMemory(
   kind: MemoryKind = 'fact',
   source: 'auto' | 'manual' = 'manual',
 ): Memory {
-  const id = newId()
-  getDb()
-    .prepare(
-      'INSERT INTO memories (id,bot_id,kind,content,source,created_at) VALUES (?,?,?,?,?,?)',
-    )
-    .run(id, botId, kind, content, source, Date.now())
-  const r = getDb()
-    .prepare('SELECT * FROM memories WHERE id = ?')
-    .get(id) as MemoryRow
-  return toMemory(r)
+  return writeMemory({
+    bot_id: botId, content: content.trim(), kind, source, layer: 'long',
+    source_type: source === 'manual' ? 'manual' : 'legacy', source_id: '', scene_id: '',
+    participants: [], speaker: '', evidence: [], expires_at: null, last_recalled_at: null,
+    created_at: Date.now(),
+  })
 }
 
 export function deleteMemory(id: string): void {
-  getDb().prepare('DELETE FROM memories WHERE id = ?').run(id)
+  const row = getDb().prepare('SELECT * FROM memories WHERE id=?').get(id) as MemoryRow | undefined
+  if (!row) return
+  const memory = toMemory(row)
+  getDb().transaction(() => {
+    getDb().prepare('DELETE FROM memories WHERE id=?').run(id)
+    // Forget the source and its summaries for this owner, without touching the peer.
+    for (const evidenceId of memory.evidence)
+      getDb().prepare('DELETE FROM memories WHERE bot_id=? AND id IN (SELECT m.id FROM memories m, json_each(m.evidence) e WHERE e.value=?)').run(memory.bot_id, evidenceId)
+  })()
+  emitEvent({ type: 'memories-updated', botId: memory.bot_id })
 }
 
 // ---------- settings ----------

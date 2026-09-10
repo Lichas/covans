@@ -473,7 +473,7 @@ export function BotSettingsPanel() {
         className="scroll-thin flex min-h-0 flex-1 flex-col overflow-y-auto"
       >
         {tab === 'settings' && <SettingsTab key={bot.id} bot={bot} />}
-        {tab === 'memory' && <MemoryPanel botId={bot.id} />}
+        {tab === 'memory' && <MemoryPanel botId={bot.id} sceneId={chat.id} />}
         {tab === 'workspace' && <WorkspacePanel botId={bot.id} />}
         {tab === 'model' && <ModelTab bot={bot} />}
         {tab === 'lifestyle' && <AvatarLifestyle bot={bot} />}

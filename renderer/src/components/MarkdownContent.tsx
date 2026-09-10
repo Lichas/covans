@@ -5,7 +5,9 @@ import ReactMarkdown, {
 } from 'react-markdown'
 import { ChatImage, safeImageUrl } from './ChatImage'
 import remarkGfm from 'remark-gfm'
+import remarkMath from 'remark-math'
 import rehypeHighlight from 'rehype-highlight'
+import rehypeKatex from 'rehype-katex'
 import { CopyButton } from './CopyButton'
 
 function CodeBlock({ children, ...props }: ComponentProps<'pre'>) {
@@ -42,10 +44,31 @@ const components: Components = {
   ),
   img: ({ src, alt }) => <ChatImage src={src || ''} alt={alt || '图片'} />,
 }
-const remarkPlugins = [remarkGfm]
+const remarkPlugins = [remarkGfm, [remarkMath, { singleDollarTextMath: true }]] as NonNullable<
+  ComponentProps<typeof ReactMarkdown>['remarkPlugins']
+>
 const rehypePlugins = [
+  [rehypeKatex, { throwOnError: false, strict: false }],
   [rehypeHighlight, { detect: false, ignoreMissing: true }],
 ] as NonNullable<ComponentProps<typeof ReactMarkdown>['rehypePlugins']>
+
+function normalizeMathBlocks(content: string) {
+  return content
+    .split(/(```[\s\S]*?```|~~~[\s\S]*?~~~)/g)
+    .map((part, index) => {
+      if (index % 2 === 1) return part
+      return part
+        .replace(
+          /(^|\n)[ \t]*\$\$[ \t]*([^\n]*?)[ \t]*\$\$[ \t]*(?=\n|$)/g,
+          '$1$$$$\n$2\n$$$$',
+        )
+        .replace(
+          /(^|\n)[ \t]*\\\[[ \t]*([^\n]*?)[ \t]*\\\][ \t]*(?=\n|$)/g,
+          '$1$$$$\n$2\n$$$$',
+        )
+    })
+    .join('')
+}
 
 export const MarkdownContent = memo(function MarkdownContent({
   content,
@@ -65,7 +88,7 @@ export const MarkdownContent = memo(function MarkdownContent({
         components={components}
         skipHtml
       >
-        {content}
+        {normalizeMathBlocks(content)}
       </ReactMarkdown>
     </div>
   )

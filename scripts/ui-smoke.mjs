@@ -21,6 +21,8 @@ const markdown = [
   '- [x] 让消息更容易阅读\n- [ ] 打磨流式回复与停止体验\n- [ ] 验证完整的聊天流程',
   '> 少一点操作负担，多一点思考空间。',
   '| 优先级 | 体验改进 | 状态 |\n| --- | --- | --- |\n| P0 | Markdown 与代码高亮 | 已完成 |\n| P1 | 独立草稿与消息时间 | 已完成 |',
+  '行内公式：$E = mc^2$，块级公式：',
+  '$$\\int_{-\\infty}^{+\\infty} e^{-x^2}\\, dx = \\sqrt{\\pi}$$',
   '### 从一小段代码开始',
   '```typescript\nconst idea = { name: "Covan", ready: true };\nconsole.log(idea.name);\n```',
   '你也可以用 `Shift + Enter` 换行，或查看 [Markdown 文档](https://commonmark.org)。',
@@ -123,6 +125,8 @@ try {
     .getByRole('button', { name: /设计搭档/ })
     .click()
   await expect(page.locator('.markdown-content table')).toBeVisible()
+  await expect(page.locator('.markdown-content .katex').first()).toBeVisible()
+  await expect(page.locator('.markdown-content .katex-display')).toBeVisible()
   await expect(
     page.locator('.markdown-content pre .hljs-keyword').first(),
   ).toBeVisible()
@@ -145,7 +149,7 @@ try {
   )
   await page.screenshot({ path: path.join(artifacts, 'chat-light.png') })
   console.log(
-    '✓ Markdown, tables, tasks, code highlighting, safe links, timestamps, code copy',
+    '✓ Markdown, tables, tasks, LaTeX, code highlighting, safe links, timestamps, code copy',
   )
 
   const exportPath = path.join(profile, 'export.md')

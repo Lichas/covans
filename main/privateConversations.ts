@@ -1,7 +1,7 @@
 import * as db from './db'
 import { emitEvent } from './events'
 import { runAgent } from './agentRuntime'
-import { buildSystemPrompt } from './memory'
+import { buildSystemPrompt, recallMemories, consolidateMemories } from './memory'
 
 const running = new Map<string, AbortController>()
 const activeParents = new Map<string, number>()
@@ -54,7 +54,7 @@ export function beginAgentConversation(
     let done = false
     let lastFlush = 0
     try {
-      const context = buildSystemPrompt(to, db.listMemories(to.id, 30))
+      const context = buildSystemPrompt(to, recallMemories(to.id, { query: question, sceneId: thread.id, participants: [from.id, to.id] }))
       await runAgent(
         chatId,
         to,
@@ -98,6 +98,10 @@ export function beginAgentConversation(
             : 'done'
       db.updateAgentPrivateMessage(reply.id, content, status, error)
       db.finishAgentThread(thread.id, status)
+      if (status === 'done') {
+        void consolidateMemories(from, thread.id, true).catch(() => {})
+        void consolidateMemories(to, thread.id, true).catch(() => {})
+      }
       if (error) return `对方未完成回复：${error}`
       return status === 'stopped' ? `私聊已停止。已有回复：${content}` : content
     } catch (e) {

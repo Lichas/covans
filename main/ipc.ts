@@ -19,6 +19,7 @@ import { CH } from '../shared/ipcChannels'
 import * as db from './db'
 import { listProviderModels, testProviderConnection } from './agentRuntime'
 import { isTurnRunning, sendUserMessage, stopTurn } from './orchestrator'
+import { refreshMemorySummaries } from './memory'
 import { registerContextIpc } from './contextIpc'
 import {
   assignDefaultAvatar,
@@ -366,6 +367,14 @@ export function registerIpc(): void {
   handle(CH.listMemories, (botId: string) => {
     assertStr(botId, 'botId')
     return db.listMemories(botId)
+  })
+  handle(CH.listMemorySummaryStates, (botId: string) => {
+    assertStr(botId, 'botId')
+    return db.listMemorySummaryStates(botId)
+  })
+  handle(CH.refreshMemorySummaries, (botId: string) => {
+    assertStr(botId, 'botId')
+    refreshMemorySummaries(botId)
   })
   handle(CH.addMemory, (botId: string, content: string, kind?: MemoryKind) => {
     assertStr(botId, 'botId')

@@ -14,6 +14,7 @@ import { renderWebPage } from './tools/browser'
 import { registerIpc } from './ipc'
 import { chatImagePath } from './chatImages'
 import { initObservability } from './observability'
+import { startMemorySummaries, stopMemorySummaries } from './memory'
 import {
   canReadLifestylePhoto,
   seedDefaultAvatars,
@@ -188,6 +189,7 @@ void app.whenReady().then(() => {
   prepareUserDataDir(userData)
   registerAvatarProtocol(userData)
   initDb(userData)
+  startMemorySummaries()
   initObservability(userData)
   // A previous process may have exited during generation.
   // Recovery never resumes a network request automatically.
@@ -231,4 +233,8 @@ void app.whenReady().then(() => {
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
+})
+
+app.on('before-quit', () => {
+  stopMemorySummaries()
 })

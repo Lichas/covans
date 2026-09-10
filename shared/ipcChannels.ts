@@ -44,6 +44,8 @@ export const CH = {
   stopChat: 'messages:stop',
 
   listMemories: 'memories:list',
+  listMemorySummaryStates: 'memories:summaryStates',
+  refreshMemorySummaries: 'memories:refreshSummaries',
   addMemory: 'memories:add',
   deleteMemory: 'memories:delete',
 

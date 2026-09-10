@@ -44,9 +44,16 @@ const server = http.createServer(async (req, res) => {
         .join('\n') || ''
     let content = '已完成，我已经更新设定、记住你的偏好，并咨询了设计伙伴。'
     let tool
-    if (system.includes('当前为 Agent 私聊'))
+    if (system.includes('<<memory-scene-summary>>')) {
+      const input = JSON.parse(body.messages?.find((message) => message.role === 'user')?.content || '[]')
+      const latest = input.at(-1)
+      content = JSON.stringify({ short_summary: '当前围绕：' + String(latest?.content || '').slice(0, 68), summary: '围绕当前话题整理了参与者的最新信息，等待后续确认。', evidence_ids: input.map((item) => item.source_id), memories: [] })
+    } else if (system.includes('当前为 Agent 私聊'))
       content =
         '## 设计建议\n采用清晰层级与柔和留白。\n\n- 顶部只显示已置顶 Bot\n- 私聊放在轻量浮窗中'
+    else if (system.includes('橙色的天空来自意大利') &&
+      body.messages?.some((message) => message.role === 'user' && JSON.stringify(message.content).includes('橙色的天空来自哪里')))
+      content = '小蓝曾在私聊里告诉我：橙色的天空来自意大利。这是他转达的说法。'
     else if (system.includes('头像艺术指导'))
       content = JSON.stringify({
         prompt: '蓝色机器人，柔和的编辑插画，简洁背景，圆形裁切，无文字',
@@ -435,6 +442,10 @@ try {
       args: { path: 'notes/tool-check.md', offset: 1, limit: 20 },
     },
     {
+      name: 'bash',
+      args: { command: "printf 'bash-loop-ok' > notes/bash-check.txt" },
+    },
+    {
       name: 'web_fetch',
       args: { url: 'http://public.test/article' },
     },
@@ -480,6 +491,20 @@ try {
     ),
     '# Tool check\n\n文件读写与精确编辑已连通。',
   )
+  assert.equal(
+    fs.readFileSync(
+      path.join(
+        profile,
+        'workspaces',
+        fixture.bots[0].id,
+        'notes',
+        'bash-check.txt',
+      ),
+      'utf8',
+    ),
+    'bash-loop-ok',
+    '真实 Agent tool-call/result 循环应执行 Bash 命令',
+  )
   const normalToolRequest = requests.find((r) =>
     r.body.tools?.some((tool) => tool.function?.name === 'web_search'),
   )
@@ -495,6 +520,7 @@ try {
       'workspace_write',
       'workspace_edit',
       'workspace_list',
+      'bash',
       'web_search',
       'web_fetch',
     ].every((name) =>
@@ -534,7 +560,7 @@ try {
   )
   assert.ok(
     !peerRequest.body.tools.some((t) =>
-      ['workspace_write', 'workspace_edit'].includes(t.function.name),
+      ['workspace_write', 'workspace_edit', 'bash'].includes(t.function.name),
     ),
   )
   const memories = await page.evaluate(() => window.covan.listUserMemories())
@@ -629,6 +655,54 @@ try {
   await page.screenshot({ path: path.join(artifacts, 'shared-memory.png') })
   await page.getByRole('button', { name: '删除记忆' }).first().click()
   await expect(page.locator('.user-memory-row')).toHaveCount(1)
+  await page.keyboard.press('Escape')
+  const memoryThread = await page.evaluate(async (f) => {
+    await window.covan.setSetting('natural_follow_up', '0')
+    return window.covan.startAgentConversation(f.chats[0].id, f.bots[0].id, f.bots[1].id, '橙色的天空来自意大利')
+  }, fixture)
+  await expect.poll(() => page.evaluate(async (id) => (await window.covan.getAgentThread(id)).thread.status, memoryThread)).toBe('done')
+  const memoriesByOwner = await page.evaluate(async (f) => Promise.all(f.bots.slice(0, 3).map((bot) => window.covan.listMemories(bot.id))), fixture)
+  for (const owner of memoriesByOwner.slice(0, 2)) {
+    const record = owner.find((m) => m.scene_id === memoryThread && m.content === '橙色的天空来自意大利')
+    assert.equal(record.layer, 'evidence')
+    assert.equal(record.representation, 'verbatim')
+    assert.equal(record.speaker, fixture.bots[0].id)
+    assert.deepEqual(record.participants, [fixture.bots[0].id, fixture.bots[1].id])
+  }
+  assert.ok(!memoriesByOwner[2].some((m) => m.scene_id === memoryThread))
+  const requestStart = requests.length
+  await page.evaluate((id) => window.covan.sendUserMessage(id, '橙色的天空来自哪里', []), fixture.chats[1].id)
+  await expect.poll(() => requests.slice(requestStart).some((r) => r.body.stream && r.body.messages?.some((m) => m.role === 'user' && JSON.stringify(m.content).includes('橙色的天空来自哪里')))).toBe(true)
+  const recallRequest = requests.slice(requestStart).find((r) => r.body.stream && r.body.messages?.some((m) =>
+    m.role === 'user' && JSON.stringify(m.content).includes('橙色的天空来自哪里')))
+  const recallSystem = recallRequest.body.messages.filter((m) => ['system', 'developer'].includes(m.role)).map((m) => m.content).join('\n')
+  assert.match(recallSystem, /橙色的天空来自意大利/)
+  assert.match(recallSystem, /"发言者":"小蓝"/)
+  assert.match(recallSystem, /"来源":"private"/)
+  await expect.poll(() => page.evaluate(async (id) =>
+    (await window.covan.listMessages(id)).some((message) =>
+      message.status === 'done' && message.sender_type === 'bot' && message.content.includes('这是他转达的说法')),
+  fixture.chats[1].id)).toBe(true)
+  await item('设计伙伴').click()
+  await expect(page.locator('.message-row').last()).toContainText('这是他转达的说法')
+  if (await page.getByRole('button', { name: '展开设置', exact: true }).count())
+    await page.getByRole('button', { name: '展开设置', exact: true }).click()
+  await page.getByRole('button', { name: '记忆', exact: true }).click()
+  await page.getByRole('button', { name: '原文', exact: true }).click()
+  const sourceRow = page.locator('.memory-row').filter({ hasText: '橙色的天空来自意大利' }).filter({ hasText: '小蓝说过' })
+  await expect(sourceRow).toHaveCount(1)
+  await expect(sourceRow).toContainText('Bot 私聊')
+  await page.screenshot({ path: path.join(artifacts, 'layered-memory.png') })
+  await sourceRow.getByRole('button', { name: '删除记忆' }).click()
+  await expect(sourceRow).toHaveCount(0)
+  await page.getByRole('button', { name: '长期', exact: true }).click()
+  await page.evaluate((id) => window.covan.addMemory(id, '长期面板实时刷新测试'), fixture.bots[1].id)
+  await expect(page.locator('.memory-row')).toContainText('长期面板实时刷新测试')
+  await page.reload()
+  const persistedMemories = await page.evaluate((id) => window.covan.listMemories(id), fixture.bots[1].id)
+  assert.ok(persistedMemories.some((m) => m.content === '长期面板实时刷新测试' && m.layer === 'long'))
+  assert.ok(!persistedMemories.some((m) => m.scene_id === memoryThread && m.content === '橙色的天空来自意大利'))
+  console.log('✓ 双向私聊记忆、隔离、接收方跨会话模型输入、分层 UI、实时刷新和删除持久化')
   assert.deepEqual(errors, [])
   const observationLog = fs.readFileSync(
     path.join(profile, 'logs', 'observability.jsonl'),

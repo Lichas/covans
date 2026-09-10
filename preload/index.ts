@@ -86,8 +86,10 @@ const api: CovanApi = {
     ),
   stopChat: (chatId: string) => ipcRenderer.invoke(CH.stopChat, chatId),
 
-  // memory
+  // Layered Memory metadata and memories-updated use the shared typed bridge.
   listMemories: (botId: string) => ipcRenderer.invoke(CH.listMemories, botId),
+  listMemorySummaryStates: (botId: string) => ipcRenderer.invoke(CH.listMemorySummaryStates, botId),
+  refreshMemorySummaries: (botId: string) => ipcRenderer.invoke(CH.refreshMemorySummaries, botId),
   addMemory: (botId: string, content: string, kind?: MemoryKind) =>
     ipcRenderer.invoke(CH.addMemory, botId, content, kind),
   deleteMemory: (id: string) => ipcRenderer.invoke(CH.deleteMemory, id),

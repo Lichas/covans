@@ -29,7 +29,7 @@ main/           Electron 主进程（Node）
   ipc.ts            ipcMain.handle 注册全部通道（白名单）
   agentRuntime.ts   pi-mono 封装：provider 解析、agent 会话创建、流式转发
   orchestrator.ts   群聊编排（成员判断 → 并发/顺序回复 → 落库）
-  memory.ts         记忆提取（后台摘要任务）与注入
+  memory.ts         实时短摘要、场景归纳、检索与注入
   workspace.ts      每 Bot 工作区目录管理
 preload/
   index.ts          contextBridge.exposeInMainWorld('covan', api)
@@ -116,7 +116,16 @@ CREATE TABLE memories (
   kind TEXT NOT NULL DEFAULT 'fact', -- 'fact'|'preference'|'summary'
   content TEXT NOT NULL,
   source TEXT NOT NULL DEFAULT 'auto', -- 'auto'|'manual'
-  created_at INTEGER NOT NULL
+  created_at INTEGER NOT NULL,
+  layer TEXT NOT NULL DEFAULT 'long', -- short|episodic|semantic|long
+  source_type TEXT NOT NULL DEFAULT 'legacy', -- chat|private|manual|legacy
+  source_id TEXT NOT NULL DEFAULT '',
+  scene_id TEXT NOT NULL DEFAULT '',
+  participants TEXT NOT NULL DEFAULT '[]', -- JSON [user|botId]
+  speaker TEXT NOT NULL DEFAULT '',
+  evidence TEXT NOT NULL DEFAULT '[]', -- JSON [sourceMessageId]
+  expires_at INTEGER,
+  last_recalled_at INTEGER
 );
 CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 ```
@@ -199,6 +208,7 @@ interface CovanApi {
 
 type CovanEvent =
   | { type: 'user-context-updated' }
+  | { type: 'memories-updated'; botId: string }
   | { type: 'agent-thread-updated'; chatId: string; threadId: string }
   | { type: 'message-start'; chatId: string; message: Message }
   | { type: 'generation-state'; chatId: string; generating: boolean }
@@ -220,7 +230,7 @@ type CovanEvent =
 4. `reply_mode='sequential'`：成员按群成员顺序逐个判断、回复，后面成员可以看到前面成员的输出。
 5. 首轮结束后，成员可基于刚发生的真实发言继续第 2–5 轮讨论；每轮都重新判断，只有能补充新信息、回应具体观点、提出异议或推进未决问题才 `REPLY`，无人回复立即停止。`@mention` 仅强制首轮，整次用户话题硬上限为 5 轮。
 6. 准备判断/正在输出通过 `agent-activity` 推送。回复机制不写入 system 消息，不在聊天消息区显示调度文案。
-7. 流式 delta → `message-delta`；完成 → 落库 + `message-done`。轮次完成后异步刷新群聊前文总结，并触发长期记忆提取。
+7. 流式 delta → `message-delta`；完成 → 落库 + `message-done`。轮次完成后异步刷新群聊前文总结，并触发分层记忆归纳。
 
 单聊（dm）：直接调用该 bot agent。设置项 `natural_follow_up` 默认开启；开启时主回复提示要求按即时聊天节奏输出：较长内容先发送一个自然完整的语义段，一条即可回答时仍完整回答。主回复完成后，Bot 通过轻量 completion 同时返回 `SKIP` 或 `REPLY\n<候选短消息>`；仅在仍有未完成的新内容、遗漏重要具体信息或存在必须由用户回答的明确问题时追加，最多 2 条。候选在写入消息前必须通过 240 字上限、近期回复长片段去重和调度元话术过滤；完整回答、只能复述改写、寒暄、泛泛关心、格式无效、判断失败、停止或主回复失败都不追加。跟进不再对以 assistant 消息结尾的历史调用 `agent.continue()`。
 
@@ -228,14 +238,42 @@ type CovanEvent =
 
 设置项 `local_observability` 默认关闭。开启后，主进程向 `<userData>/logs/observability.jsonl` 写入 JSON Lines 结构化事件：运行阶段、Provider/模型、匿名化后的 chat/bot/message ID、角色序列、各消息字符数、payload 最后角色及 user 索引、耗时、输出长度、HTTP 状态、续发接受/拒绝原因和归一化错误码。禁止写入消息正文、prompt、工具输入输出、API Key、Provider 完整错误文本；单文件 5MB 后轮转为 `.1`，仅保留当前文件和一份历史。`openObservabilityLogs` 只打开日志目录。
 
-## 6. 记忆系统（memory.ts）
+## 6. 分层记忆系统（memory.ts / db.ts）
 
-- **注入**：每次调用 agent 前，取该 bot 最近 30 条 memories，拼进 system prompt：
-  `\n\n## 你的长期记忆\n- …`
-- **自动提取**：每个 chat 每累计 10 条新消息触发一次（异步、失败静默）：
-  用该 bot 自己的 provider/model（无则全局默认 provider）调一次非流式 completion，prompt 要求从最近对话提取「关于用户的事实/偏好/约定/重要事件」，输出 JSON 数组字符串，去重（与现有记忆简单相似度比较：包含关系即跳过）后入库。
-- **手动管理**：右侧设置面板 Memory 标签页可增删。
-- 伴侣场景强化：人设模板里要求 bot 主动记住用户喜好、纪念日。
+### 6.1 归属与即时写入
+
+- 消息状态进入 `done` 时同步写入实际参与 Bot 的记忆：人和 Bot 单聊写入该 Bot；群消息写入当时全部成员（含未发言成员）；Bot 私聊问题和成功回复分别写入双方。`system`、流式中间态、失败与停止的残缺回复不提取为事实。已送达的问题在接收方失败时仍保留。
+- 消息与所有参与 Bot 记忆副本在一个 SQLite transaction 中写入并一起回滚，使用 source_id 幂等去重；不自动共享给未参与的 Bot，不把私聊转述写进全局 user_memories。用户侧保留原始聊天记录；显式的「关于我」共同记忆维持原接口。
+- 升级使用 additive migration，旧 memories 原样归入长期层。首次升级按已存 agent_threads 的真实双方补入已完成的私聊记录（过期记录随后清理）；不猜测历史群成员，不读取外部 profile。
+
+### 6.2 层级、归纳与淘汰
+
+| 层级 | 内容与进入方式 | 保留规则 |
+| --- | --- | --- |
+| short 短时 | 每个场景的极短工作摘要（约 80 字：当前话题、结论、待办/未决） | 每次新消息后 0.8 秒防抖更新；摘要失败保留上一次 |
+| evidence 原文证据 | 已送达消息原文，最多 12000 字，仅供引用与审计 | 原文从消息时间起 90 天，不作为短时摘要直接注入 |
+| episodic 场景 | 带参与者、时间和来源的场景归纳，约 500 字 | 摘要从生成起 90 天 |
+| semantic 语义 | 后台归纳的事实、偏好、人物关系，附原话证据 | 生成起 180 天 |
+| long 长期 | 手动记忆、旧记忆，或用户明确要求记住的后台归纳 | 不自动过期 |
+
+- 每条完整消息送达后，按 Bot/场景启动实时摘要调度；连续消息以 0.8 秒防抖、最迟 5 秒触发一次，使用该 Bot 自己的 Provider/Model 同时生成约 80 字 short_summary 和约 500 字场景 summary。每批最多 30 条、18000 字原文、4 项稳定记忆，单次调用 60 秒超时。Bot 私聊成功结束后同样更新双方摘要。每 Bot 同时最多一个摘要任务，进程全局最多两个；忙碌时场景合并排队，失败时保留上一次摘要并标记 error，原文证据仍可召回，用户可手动重试。
+- 输出须为 `{content, layer, source_id, quote}[]`；验证来源属于该 Bot、来源仍在记忆中、quote 为原文连续摘录。归纳保留发言者与原话，转述不升级为用户亲口确认；长期层还要求来源是用户且包含明确记住意图。模型归纳不是事实验证。
+- 相同发言者、相同层级、归纳及原话完全归一化相等才去重，不使用包含关系，避免吞掉否定和纠正。冲突并存并注明来源/时间，回答以当前明确表达优先。
+- 启动、读取与检索时维护 TTL；每 Bot 普通自动记忆最多保留 2000 条，按最近召回/创建时间淘汰。手动和长期记忆不进入容量淘汰。淘汰记忆不删除聊天原文。
+
+### 6.3 实时检索与上下文
+
+- 单聊回复、自然跟进、群聊判断/回复、Bot 私聊回复都先检索自己的保留记忆。结合最新用户问题、当前场景、参与 Bot、文本提及的 Bot 名称进行本地检索；中文双字词与英文单词匹配，加上人物、场景、时效与长期权重。无网络/embedding 依赖。
+- 检索最多返回 30 条，优先当前场景的 short/episodic 摘要，再补充语义/长期记忆；evidence 原文只在命中具体话题或作为摘要证据时带入。JSON 记忆正文预算 6500 字符；长原文选择靠近查询词的片段。不能只从最近 30 条候选中查找；未命中话题或人物的背景补充最多 3 条。普通人的名字可按文本命中，Bot 名称额外解析为稳定 ID；尚无通用别名/人名实体库。
+- 注入内容按层级、时间、发言者、参与者、来源、场景 ID 和证据 ID 编码为 JSON 行，明确是历史资料而非指令/新授权。允许依据来源说「某人曾告诉我」，不得把历史记录说成本轮新执行的咨询。
+- 验收案例：猛男私聊 ds 说「橙色的天空来自意大利」，用户立即在另一个会话问 ds「橙色的天空来自哪里」，ds 的模型输入应包含这条原话、猛男身份和私聊来源；第三位未参与 Bot 的检索不可返回该私聊。
+
+### 6.4 数据与管理
+
+- `Memory` 在既有字段上新增 layer/representation/source_type/source_id/scene_id/participants/speaker/evidence/expires_at/last_recalled_at/updated_at；participants/evidence 在 SQLite 为 JSON，在共享类型与 IPC 为数组。旧客户端增删接口不变，手动添加默认长期。另有 `memory_summary_states` 保存每个 Bot/场景摘要状态、游标和错误。
+- 记忆 IPC 在原有 `listMemories/addMemory/deleteMemory` 外增加 `listMemorySummaryStates(botId)` 和 `refreshMemorySummaries(botId)`；摘要状态通过 `memories-updated` 事件驱动右栏更新。
+- 记忆面板按全部/短时/场景/语义/长期筛选，显示来源、作者、参与者和时间；支持分页展示、手动添加和删除。`memories-updated {botId}` 经现有 typed preload 事件通道即时刷新。
+- 删除带证据记忆会同时删除该 Bot 对同一来源的原文与归纳，避免删后仍从摘要召回；另一位 Bot 的副本独立保留。不会从原聊天定期重建已删除记忆。删除聊天不等同于忘记已保存的记忆，需在记忆面板删除。
 
 ## 7. 工作区（workspace.ts）
 
@@ -302,11 +340,13 @@ const unsub = agent.subscribe((event) => {
 await agent.prompt(userText)   // agent.abort() 用于 stopChat
 ```
 
-**工作区工具（自研 4 个 AgentTool，不用 pi-coding-agent）**：`workspace_read` / `workspace_write` / `workspace_edit` / `workspace_list`。读取支持 offset/limit 分页，写入有 1MB 上限，精确编辑要求 `old_text` 唯一匹配。所有路径先限制在 `workspaces/<botId>/` 下，再用最近已存在父目录的 realpath 拒绝符号链接逃逸。
+**工作区工具（自研 AgentTool，不用 pi-coding-agent）**：`workspace_read` / `workspace_write` / `workspace_edit` / `workspace_list`。读取支持 offset/limit 分页，写入有 1MB 上限，精确编辑要求 `old_text` 唯一匹配。所有路径先限制在 `workspaces/<botId>/` 下，再用最近已存在父目录的 realpath 拒绝符号链接逃逸。
+
+**Bash 工具（macOS 普通主会话）**：`bash({ command, cwd?, timeout_seconds? })` 在当前 Bot 工作区启动 `/bin/bash --noprofile --norc -c`，可选 cwd 必须是工作区内已有目录。默认30秒、最长120秒，超时或用户停止时终止独立进程组；stdout/stderr 各保留前40KB并标记截断。子进程只接收 HOME/PATH/LANG/LC_ALL/TMPDIR/COVAN_WORKSPACE 最小环境，HOME/TMPDIR 指向工作区，不继承 Provider Key 等宿主变量；PATH 会排除用户目录、外接卷和临时用户目录中的可执行项。macOS 使用 `sandbox-exec`：系统文件可供命令运行，但用户目录、外接卷及临时用户目录的文件正文只有当前 Bot 工作区例外；写入只允许发生在工作区，网络可用于依赖安装与测试。Agent 私聊不挂载 Bash；当前非 macOS 平台明确返回不支持。Bash 完成后刷新工作区文件树，但变更不自动生成交付文件卡。
 
 **网页工具（只读）**：`web_search` 通过可替换的搜索 provider 返回标题/摘要/URL，当前默认为 Bing RSS；`web_fetch` 获取 HTTP(S) 文本页并把 HTML 简化为可读文本。Electron 主进程注入 Chromium `net.fetch` 传输，继承系统代理并兼容 Clash 等 Fake-IP 模式。`web_fetch.render` 支持 `auto|always|never`（默认 `auto`）：静态内容过少且页面明显依赖脚本，或静态请求失败时，自动改用隐藏、沙箱化、无 Node 权限的 BrowserWindow 执行 JavaScript，等待 DOM 稳定后提取正文与链接。静态抓取限制 20 秒总超时、1MB 直连传输/2MB 解码内容和 5 次跳转；浏览器渲染限制 30 秒；每轮最多 5 次搜索/10 次抓取。当前不做 SSRF/内网地址拦截。网页内容作为不可信数据回灌 Agent，不得覆盖 system/user 指令。
 
-**装配策略**：`main/tools/toolset.ts` 是唯一能力装配入口。普通会话挂载完整工作区、网页与应用工具；Agent 私聊只挂载 `workspace_read` / `workspace_list` 和只读网页工具，禁止文件写入、应用状态修改与递归私聊。装配层向 system prompt 动态注入实际可用工具名和「必须真实执行，不得伪造结果」规则。
+**装配策略**：`main/tools/toolset.ts` 是唯一能力装配入口。普通会话挂载完整工作区、Bash、网页与应用工具；Agent 私聊只挂载 `workspace_read` / `workspace_list` 和只读网页工具，禁止 Bash、文件写入、应用状态修改与递归私聊。装配层向 system prompt 动态注入实际可用工具名和「必须真实执行，不得伪造结果」规则。
 
 **Provider kind → pi 内置 provider 映射**：`openai→openAIProvider()`、`anthropic→anthropicProvider()`、`google→googleProvider()`、`openrouter→openrouterProvider()`、`kimi→createProvider(...)`（Kimi Coding Plan，模型从 `/v1/models` 动态拉取）、`zhipu→createProvider(...)`（智谱 OpenAI 兼容国内端点）、`deepseek→deepseekProvider()`、`openai-compatible→createProvider(...)`。`testProvider` 用一次 `models.complete(model, {messages:[{role:'user',content:'ping',timestamp:Date.now()}]}, {apiKey})` 验证。OpenAI-compatible 支持 API Key 留空的本地服务：模型目录请求不发送 Authorization，pi-agent-core 运行时使用不落库、无权限的占位值满足其非空校验。LM Studio 预设为 `http://localhost:1234/v1`；误填 `/api/v1/chat` 或 `/v1/chat/completions` 会规范到 `/v1`。Covan 使用支持自定义 tools 与完整历史的 `/v1/chat/completions`，不直接使用 LM Studio 原生 `/api/v1/chat`。
 
@@ -316,9 +356,9 @@ await agent.prompt(userText)   // agent.abort() 用于 stopChat
 ## 9. UI 规范（复刻参考截图）
 
 - 三栏：Sidebar 256px / ChatView 自适应 / BotSettingsPanel 320px（默认收起）。
-- 跟随系统浅色/深色主题；暖白/炭灰背景、低饱和绿点缀；用户消息为紧凑浅灰气泡，Bot 回复使用宽阅读区域；代码和表格独立滚动。
+- 跟随系统浅色/深色主题；暖白/炭灰背景、低饱和绿点缀；用户消息为紧凑浅灰气泡，Bot 回复使用宽阅读区域；代码、表格和块级公式独立滚动。
 - Sidebar：搜索框；单聊列表项右键「置顶 / 取消置顶」，最多3个 Bot，数据库层同样校验；群聊列表项右键提供经确认的「删除群聊」，永久删除群及关联记录。顶部仅在有置顶时显示横排圆形头像，不显示空槽位或添加入口。会话列表项=头像(群聊显示叠头像+N角标)/名称/最后消息预览/时间/未读蓝点；底部为「关于我」「我的 Bot」「新建群聊」「设置」；顶部「+」菜单新建 Bot(⌘1) / 创建群聊(⌘2)。
-- ChatView：顶部 Bot/群名、完整会话导出和设置入口；群聊齿轮打开回复机制设置。消息显示作者、时间、跨日分隔；支持 Markdown、多图、代码复制、原文复制、引用回复和错误重试。Bot 本轮真实写入或编辑工作区文件时，回复下方显示结构化交付卡，不从回复文本猜测文件名；卡片支持预览、定位和打开文件夹。Composer 支持群聊 @ 提及、独立持久草稿与中文输入法保护；上方以动画小头像显示正在思考/回复的成员。主动回复中可继续发送新消息。
+- ChatView：顶部 Bot/群名、完整会话导出和设置入口；群聊齿轮打开回复机制设置。消息显示作者、时间、跨日分隔；支持 Markdown（含行内/块级 LaTeX 公式）、多图、代码复制、原文复制、引用回复和错误重试。Bot 本轮真实写入或编辑工作区文件时，回复下方显示结构化交付卡，不从回复文本猜测文件名；卡片支持预览、定位和打开文件夹。Composer 支持群聊 @ 提及、独立持久草稿与中文输入法保护；上方以动画小头像显示正在思考/回复的成员。主动回复中可继续发送新消息。
 - BotSettingsPanel（右栏，单聊选中时显示）：头像与身份信息；生活照、设定、记忆、工作区、模型五个标签页（按从左到右排列）。模型页独立管理 provider、model、temperature、reasoning effort 与 max tokens。
 - SettingsModal（通用）：账户占位、外观（主题跟随系统/浅色/深色、语言）、Bot（时区自动检测、自然追问开关、自动审核开关 + 规则文本——审核规则作为自然语言注入各成员的判断与回复）、Provider 管理（列表 + 新增/编辑表单 + 测试连接按钮）。
 - 新建 Bot 对话框：名称/人设模板下拉（开发分队四人、产品经理、设计师、虚拟女友「小美女」、虚拟男友「小帅哥」、空白自定义）/描述/provider/模型。

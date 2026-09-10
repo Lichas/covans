@@ -40,6 +40,7 @@ import {
 export interface AgentCallbacks {
   onImages?(images: Attachment[]): void
   onArtifact?(artifact: WorkspaceArtifact): void
+  onWorkspaceChanged?(): void
   onDelta(delta: string): void
   onDone(fullText: string): void
   onError(error: string): void
@@ -634,6 +635,12 @@ async function runPiAgent(
           // 工具结果已经成功返回；卡片元数据读取失败不应中断 Agent 回复。
         }
       }
+    } else if (
+      event.type === 'tool_execution_end' &&
+      !event.isError &&
+      event.toolName === 'bash'
+    ) {
+      callbacks.onWorkspaceChanged?.()
     }
   })
   const onAbort = () => agent.abort()

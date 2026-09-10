@@ -148,6 +148,7 @@ export interface Message {
 }
 
 export type MemoryKind = 'fact' | 'preference' | 'summary'
+export type MemoryLayer = 'short' | 'episodic' | 'semantic' | 'long'
 
 export interface Memory {
   id: string
@@ -155,7 +156,27 @@ export interface Memory {
   kind: MemoryKind
   content: string
   source: 'auto' | 'manual'
+  layer: MemoryLayer | 'evidence'
+  source_type: 'manual' | 'chat' | 'private' | 'legacy'
+  source_id: string
+  scene_id: string
+  participants: string[]
+  speaker: string
+  evidence: string[]
+  expires_at: number | null
+  last_recalled_at: number | null
+  representation: 'verbatim' | 'summary' | 'note'
+  updated_at: number
   created_at: number
+}
+
+export interface MemorySummaryState {
+  bot_id: string
+  scene_id: string
+  status: 'pending' | 'running' | 'ready' | 'error'
+  source_cursor: string
+  error: string
+  updated_at: number
 }
 
 export interface WorkspaceFile {
@@ -216,6 +237,7 @@ export interface AvatarDesign {
 
 export type CovanEvent =
   | { type: 'user-context-updated' }
+  | { type: 'memories-updated'; botId: string }
   | { type: 'agent-thread-updated'; chatId: string; threadId: string }
   | { type: 'message-start'; chatId: string; message: Message }
   | { type: 'generation-state'; chatId: string; generating: boolean }
@@ -329,6 +351,8 @@ export interface CovanApi {
   stopChat(chatId: string): Promise<void>
 
   listMemories(botId: string): Promise<Memory[]>
+  listMemorySummaryStates(botId: string): Promise<MemorySummaryState[]>
+  refreshMemorySummaries(botId: string): Promise<void>
   addMemory(botId: string, content: string, kind?: MemoryKind): Promise<Memory>
   deleteMemory(id: string): Promise<void>
 

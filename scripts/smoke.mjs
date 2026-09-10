@@ -7,6 +7,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { build } from 'esbuild'
+import { runMemoryRegression } from './memory-regression.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'covan-smoke-'))
@@ -40,6 +41,7 @@ await build({
     memory: path.join(root, 'main/memory.ts'),
     personas: path.join(root, 'renderer/src/lib/personaTemplates.ts'),
     webTools: path.join(root, 'main/tools/web.ts'),
+    bashTools: path.join(root, 'main/tools/bash.ts'),
   },
   outdir: bundleDir,
   bundle: true,
@@ -67,6 +69,9 @@ const personas = await import(
 )
 const webTools = await import(
   pathToFileURL(path.join(bundleDir, 'webTools.js')).href
+)
+const bashTools = await import(
+  pathToFileURL(path.join(bundleDir, 'bashTools.js')).href
 )
 
 // 2. 初始化（临时目录，WAL）
@@ -208,6 +213,78 @@ console.log('\n[1c] 可替换网页搜索 provider')
       result.details.results[0].snippet.length === 1_200,
     'provider 返回值由核心层过滤非 HTTP URL 并截断输出',
   )
+}
+
+console.log('\n[1d] Bash 工作区沙箱')
+{
+  const bot = db.createBot({ name: 'Bash 测试' })
+  workspace.ensureWorkspace(bot.id)
+  const bash = bashTools
+    .createBashTools(bot.id)
+    .find((tool) => tool.name === 'bash')
+  const signal = new AbortController().signal
+  process.env.COVAN_SMOKE_BASH_SECRET = 'MUST_NOT_REACH_BASH'
+  const run = await bash.execute(
+    'bash-basic',
+    {
+      command:
+        "mkdir -p nested && printf 'bash-ok' > nested/result.txt && printf 'stdout-ok' && printf 'stderr-ok' >&2 && printf \"$COVAN_SMOKE_BASH_SECRET\"",
+    },
+    signal,
+  )
+  delete process.env.COVAN_SMOKE_BASH_SECRET
+  assert(
+    run.details.exitCode === 0 &&
+      run.content[0].text.includes('stdout-ok') &&
+      run.content[0].text.includes('stderr-ok') &&
+      !run.content[0].text.includes('MUST_NOT_REACH_BASH') &&
+      fs.readFileSync(
+        path.join(workspace.botWorkspaceDir(bot.id), 'nested', 'result.txt'),
+        'utf8',
+      ) === 'bash-ok',
+    'Bash 在 Bot 工作区执行并使用不含宿主密钥的最小环境',
+  )
+  const nested = await bash.execute(
+    'bash-cwd',
+    { command: 'pwd', cwd: 'nested' },
+    signal,
+  )
+  assert(
+    nested.details.cwd === 'nested' &&
+      nested.content[0].text.includes('/nested'),
+    'Bash cwd 只能选择工作区内已有目录',
+  )
+  const outside = path.join(tmp, 'bash-private.txt')
+  fs.writeFileSync(outside, 'OUTSIDE_WORKSPACE_SECRET')
+  const denied = await bash.execute(
+    'bash-outside-read',
+    { command: `cat ${JSON.stringify(outside)}` },
+    signal,
+  )
+  assert(
+    denied.details.exitCode !== 0 &&
+      !denied.content[0].text.includes('OUTSIDE_WORKSPACE_SECRET'),
+    'macOS 沙箱拒绝 Bash 读取 Bot 工作区外的文件内容',
+  )
+  const timedOut = await bash.execute(
+    'bash-timeout',
+    { command: 'sleep 5', timeout_seconds: 1 },
+    signal,
+  )
+  assert(
+    timedOut.details.timedOut && timedOut.details.durationMs < 4_000,
+    'Bash 超时会终止进程组',
+  )
+  const truncated = await bash.execute(
+    'bash-truncate',
+    { command: "head -c 100000 /dev/zero | tr '\\0' x" },
+    signal,
+  )
+  assert(
+    truncated.details.truncated && truncated.content[0].text.length < 50_000,
+    'Bash 输出按流限制为40KB并标记截断',
+  )
+  db.deleteBot(bot.id)
 }
 
 console.log('\n[2] 注入 mock provider + bot A/B/C')
@@ -550,6 +627,8 @@ assert(
     db.listChats().some((chat) => chat.id === dm.id),
   '从我的 Bot 再次打开会恢复显示',
 )
+
+await runMemoryRegression(db, memory, assert, userData)
 
 fs.rmSync(tmp, { recursive: true, force: true })
 fs.rmSync(bundleDir, { recursive: true, force: true })

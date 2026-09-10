@@ -40,9 +40,12 @@
     "@earendil-works/pi-agent-core": "^0.85.0",
     "@earendil-works/pi-ai": "^0.85.0",
     "better-sqlite3": "^11.10.0",
+    "katex": "^0.18.7",
     "react-markdown": "^10.1.0",
     "rehype-highlight": "^7.0.2",
-    "remark-gfm": "^4.0.1"
+    "rehype-katex": "^7.0.1",
+    "remark-gfm": "^4.0.1",
+    "remark-math": "^6.0.0"
   },
   "devDependencies": {
     "@playwright/test": "^1.63.0",

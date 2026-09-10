@@ -4,6 +4,7 @@ import type { Bot } from '../shared/types'
 
 /** 记忆提取 prompt 中的标记（memory 注入，mock 识别后输出 JSON 数组） */
 export const MEMORY_EXTRACT_MARKER = '<<memory-extract>>'
+export const MEMORY_SUMMARY_MARKER = '<<memory-scene-summary>>'
 
 const PERSONA_REPLIES: { match: RegExp; style: (bot: Bot, user: string) => string }[] = [
   {
@@ -59,8 +60,22 @@ export function mockPersonaReply(bot: Bot, userText: string): string {
 
 /** mock 记忆提取：输出确定性的 JSON 数组字符串 */
 export function mockMemoryExtraction(bot: Bot, prompt: string): string {
-  const snippet = clip(prompt, 18)
-  return JSON.stringify([`用户最近聊到「${snippet}」（mock 自动记忆）`])
+  try {
+    const messages = JSON.parse(prompt) as { source_id: string; content: string }[]
+    const first = messages[0]
+    return first ? JSON.stringify([{ content: first.content.slice(0, 100), layer: 'semantic', source_id: first.source_id, quote: first.content.slice(0, 100) }]) : '[]'
+  } catch { return '[]' }
+}
+
+export function mockSceneSummary(prompt: string): string {
+  try {
+    const messages = JSON.parse(prompt) as { source_id: string; content: string }[]
+    const latest = messages.at(-1)
+    if (!latest) return '{}'
+    const short = `当前围绕：${latest.content.replace(/\s+/g, ' ').slice(0, 68)}`
+    const summary = `围绕“${latest.content.replace(/\s+/g, ' ').slice(0, 180)}”进行交流；当前保留这条最新信息，后续待结合更多上下文确认。`
+    return JSON.stringify({ short_summary: short, summary, evidence_ids: messages.map((m) => m.source_id), memories: [] })
+  } catch { return '{}' }
 }
 
 export interface MockCompleteOptions {
@@ -76,6 +91,7 @@ export async function mockComplete(
 ): Promise<string> {
   if (opts.signal?.aborted) return ''
   await new Promise((r) => setTimeout(r, 30))
+  if (systemPrompt.includes(MEMORY_SUMMARY_MARKER)) return mockSceneSummary(userText)
   if (systemPrompt.includes(MEMORY_EXTRACT_MARKER)) return mockMemoryExtraction(bot, userText)
   if (systemPrompt.includes('<<group-reply-decision>>')) {
     const round = Number(systemPrompt.match(/第 (\d+) 轮/)?.[1] ?? '1')

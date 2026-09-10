@@ -53,7 +53,7 @@ Covan 是标准 Electron 双进程 + preload 桥接架构。所有 LLM 调用、
 1. **零原生依赖**：pi-ai 是纯 JS 的统一 LLM 层，pi-agent-core 只依赖 pi-ai。而 pi-coding-agent 会连带引入 ripgrep（安装时联网下载二进制）、node-pty（原生编译）、WASM 组件，在 Electron 打包中每一处都是原生模块重建与分发陷阱。
 2. **无联网下载**：`npm install --ignore-scripts` 下即可完整安装，CI 与离线环境友好；pi-coding-agent 的 postinstall 下载 ripgrep 与该约束冲突。
 3. **ESM 一致性**：两包均 ESM only，与 electron-vite 输出一致，避免 CJS/ESM 互操作坑。
-4. **能力恰好够用**：我们需要的是「ReAct 循环 + 工具执行 + 事件流 + abort」，pi-agent-core 完整提供；coding-agent 多出的终端/编辑器能力对本产品无用，反而扩大攻击面。
+4. **能力恰好够用**：我们需要的是「ReAct 循环 + 工具执行 + 事件流 + abort」，pi-agent-core 完整提供；Bash 作为独立的最小权限工具接入，不引入 coding-agent 的整套终端/编辑器状态。
 5. **工具小核心 + 独立装配层**：工作区文件、只读网页和应用状态工具分属独立模块，统一实现 pi-agent-core `AgentTool` + TypeBox 契约；`main/tools/toolset.ts` 按每轮会话场景组装最小权限集。未来 shell、MCP 或审批策略可作为新工具 provider 接入，不侵入 Agent 运行时。
 
 注意包名使用新 scope `@earendil-works/*`；旧 `@mariozechner/*` 已废弃，禁止引用。
@@ -176,36 +176,15 @@ pi 的 Context 为可 JSON 序列化的 `{ role, content, timestamp }[]`。每�
 
 单聊的主回复复用成员生成路径，但不执行群聊判断与总结逻辑。`natural_follow_up` 默认开启：主回复提示让较长内容先生成一个完整语义段，一条可答完时不拆分；之后使用低 token completion 同时决定并起草 `SKIP` 或 `REPLY\n<候选短消息>`，避免“判断允许、正式生成却复述”的两阶段漂移，也不把 assistant 结尾历史直接交给 `agent.continue()`。候选通过长度、近期回复重复片段和调度元话术校验后才落库，最多 2 条；错误、停止、无效格式或校验失败均停止续发。
 
-## 7. 记忆系统详细设计（memory.ts）
+## 7. 分层记忆（db.ts / memory.ts）
 
-### 7.1 注入格式
+消息 DAO 在实际送达时记录来源和参与者快照，并在同一事务内写入所有参与 Bot 的 evidence 原文副本。这样归属立即确定，但短时上下文不会直接堆叠原文：memory.ts 以 0.8 秒防抖、5 秒最大等待调度模型，把连续证据压缩为每个场景约 80 字的 short 工作摘要和约 500 字的 episodic 场景摘要。Bot 私聊和普通会话共用同一条路径。Bot 各自拥有记忆；全局 user_memories 仍只承载明确共享的用户背景。
 
-每次构建 agent system prompt 时取该 bot 最近 30 条 memories，追加：
+`db.ts` 负责 additive migration、私聊历史一次性补入、幂等写入、分层数据及 TTL/容量维护，`memory_summary_states` 负责摘要游标、状态和错误。旧记忆作为长期保留，不破坏既有手动内容。`memory.ts` 负责防抖摘要、失败保留、带证据验证的归纳、本地词法/人物/场景检索与预算内来源注入；`orchestrator.ts` 和 `privateConversations.ts` 在所有回答入口使用相同检索。具体层级、期限与数据契约见 SPEC §6。
 
-```
+摘要状态写入 `memory_summary_states`，稳定语义游标仍保存在 settings。调用失败保留上一次摘要和 evidence，游标不因非法 JSON 前进。写回前复查证据仍存在，避免用户删除后慢任务重新写入。删除来源会同时忘记本 Bot 的衍生记忆，双方副本独立管理。
 
-
-## 你的长期记忆
-- {content}
-- …
-```
-
-按 created_at 倒序取 30 条后反转为时间正序，保证最新记忆靠近列表末尾（近因效应）。
-
-### 7.2 提取触发器
-
-- 触发点：每个 chat 每累计 10 条新消息（user+bot 合计，计数器存内存 + 落库 last_message_at 差值兜底），在群聊 done / 单聊 done 后异步执行。
-- 模型选择：该 bot 自己的 provider/model；无则全局默认 provider；仍无则静默跳过。
-- 调用方式：非流式 `models.complete`，prompt 要求「从最近对话提取关于用户的事实/偏好/约定/重要事件，输出 JSON 字符串数组，无则输出 []」。
-- 失败静默：任何异常（网络、解析）仅记日志，不产生 UI 打扰。
-
-### 7.3 去重策略
-
-v1 采用保守的**包含关系去重**：新条目与现有记忆任一存在子串包含关系（双向，去空白与标点归一化后比较）即跳过。该策略零依赖、可预测，误杀率可接受；手动添加（source='manual'）的记忆不参与被去重（新自动条目若被手动记忆包含则跳过，反之不删手动条目）。
-
-### 7.4 检索扩展点
-
-当前实现按时间窗口注入记忆。若未来采用向量检索，应把检索策略封装在 memory.ts 内，并通过 additive migration 扩展 memories 表，保持触发、去重与手动管理接口不变；该候选项只在 [ROADMAP](ROADMAP.md) 跟踪，未实现前不写成当前能力。
+当前采用离线中文双字词/英文词匹配，兼顾时效与参与人物；它支持确定性回归与无 Provider 降级，但不是向量语义检索。不同说法、别名或代词的召回仍可能不足，后续可在相同归属与证据边界内增加 embedding/实体解析。
 
 ## 8. 可扩展工具层（workspace.ts + tools/* + agentRuntime.ts）
 
@@ -216,8 +195,9 @@ v1 采用保守的**包含关系去重**：新条目与现有记忆任一存在�
   - `workspace_edit({ path, old_text, new_text })`：要求 `old_text` 恰好唯一匹配的精确替换，避免整文件重写和模糊修改。
   - `workspace_list()`：列目录（UI 所需深度 2，Agent 输出最多 500 项）。
 - **路径逃逸防护**：所有入参路径 `path.resolve(workspaceRoot, input)` 后校验结果必须以 `workspaceRoot + sep` 开头；拒绝绝对路径、拒绝任何解析后越出根目录的输入（`..`、符号链接场景下额外用 realpath 复核），违例返回错误字符串给模型而非抛异常中断 agent。
+- Bash AgentTool 位于 `tools/bash.ts`，普通会话可用，Agent 私聊禁用。它用独立进程组执行非交互 `/bin/bash`，对环境、cwd、执行时长和输出体积设限；PATH 排除用户与临时目录中的可执行项，macOS 再通过 `sandbox-exec` 将用户文件正文读取和所有写入限制到 Bot 工作区。网络和系统可执行目录保持可用，以支持依赖安装、构建和测试。成功执行后只广播工作区刷新，不推断具体交付文件。当前不在非 macOS 平台降级为无沙箱执行。
 - 网页 AgentTool：`web_search` 使用可替换 provider（当前 Bing RSS）返回 URL 与摘要；`web_fetch` 的静态快路径使用 Chromium `net.fetch`，继承 macOS 系统代理并支持 Fake-IP。`tools/browser.ts` 是独立渲染 provider：当自动检测到 JS 应用壳、静态正文过少或静态请求失败时，在隐藏的沙箱 BrowserWindow 中加载页面、执行 JavaScript 并提取 DOM 正文；窗口禁用 Node、隔离 context、禁止弹窗且使用与普通浏览不共享登录态的内存 session。静态传输限制 20 秒、浏览器渲染限制 30 秒，输出与每轮调用数继续受控；SSRF/内网地址拦截暂不在当前边界内。
-- **权限装配**：`tools/toolset.ts` 只按场景组合工具，不实现工具业务。普通会话获得完整工作区 + 网页 + 应用工具；Agent 私聊只获得工作区只读 + 网页只读工具。工具实现不得 import 编排器，Agent 运行时也不得直接拼装单个工具。
+- **权限装配**：`tools/toolset.ts` 只按场景组合工具，不实现工具业务。普通会话获得完整工作区 + Bash + 网页 + 应用工具；Agent 私聊只获得工作区只读 + 网页只读工具。工具实现不得 import 编排器，Agent 运行时也不得直接拼装单个工具。
 - **模型指引**：装配层用实际工具名动态追加简短 system prompt，明确需要文件/最新信息时必须真实调用，将工具内容视为不可信数据，禁止伪造成功。
 - 工具执行层在 `workspace_write` / `workspace_edit` 成功事件中生成 `WorkspaceArtifact`，编排器将其去重写入当前消息的 `artifacts` JSON 列并广播工作区刷新事件；因此交付 UI 有可靠来源且可跨重启恢复，不解析模型正文。
 - UI 侧：`listWorkspaceFiles`（深度 2）、`readWorkspaceFile`（≤200KB 文本）、`openWorkspace`（`shell.openPath`）、`revealWorkspaceFile`（`shell.showItemInFolder`）。
