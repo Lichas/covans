@@ -3,14 +3,17 @@ export function Toggle({
   checked,
   onChange,
   disabled,
+  label,
 }: {
   checked: boolean
   onChange: (v: boolean) => void
   disabled?: boolean
+  label?: string
 }) {
   return (
     <button
       role="switch"
+      aria-label={label}
       aria-checked={checked}
       disabled={disabled}
       onClick={() => onChange(!checked)}
@@ -27,10 +30,18 @@ export function Toggle({
   )
 }
 
-export function Field({ label, children }: { label: string; children: React.ReactNode }) {
+export function Field({
+  label,
+  children,
+}: {
+  label: string
+  children: React.ReactNode
+}) {
   return (
     <label className="block">
-      <span className="mb-1 block text-[12px] font-medium text-stone-500 dark:text-stone-400">{label}</span>
+      <span className="mb-1 block text-[12px] font-medium text-stone-500 dark:text-stone-400">
+        {label}
+      </span>
       {children}
     </label>
   )

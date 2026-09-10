@@ -1,9 +1,14 @@
 import { useEffect, useState } from 'react'
-import type { Bot } from '@shared/types'
+import type { Bot, BotGender } from '@shared/types'
 import { api } from '../lib/api'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useBotsStore } from '../stores/botsStore'
 import { Avatar } from './Avatar'
+import {
+  GenderPicker,
+  PresetAvatarPicker,
+  usePresetAvatars,
+} from './PresetAvatarPicker'
 import { Dialog } from './Dialog'
 import { Field, inputCls, btnGhostCls, btnPrimaryCls } from './controls'
 import { SparkIcon } from './icons'
@@ -71,8 +76,12 @@ export function AvatarSettingsSection() {
         先在 Provider 页添加服务。聊天模型或 Coding Plan 不一定支持生图。
       </p>
       {providers.find((p) => p.id === provider)?.kind === 'kimi' && !base && (
-        <p role="status" className="rounded-lg bg-amber-50 p-3 text-[12px] text-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
-          当前选择的是 Kimi Coding Plan。识图与生图是两种能力：聊天中的 k3 可看图；生成图片需配置支持 /images/generations 的服务和生图模型。
+        <p
+          role="status"
+          className="rounded-lg bg-amber-50 p-3 text-[12px] text-amber-800 dark:bg-amber-950/30 dark:text-amber-200"
+        >
+          当前选择的是 Kimi Coding Plan。识图与生图是两种能力：聊天中的 k3
+          可看图；生成图片需配置支持 /images/generations 的服务和生图模型。
         </p>
       )}
       <Field label="生图模型">
@@ -169,17 +178,28 @@ export function AvatarDialog({
   onClose: () => void
 }) {
   const loadBots = useBotsStore((s) => s.loadBots)
-  const [mode, setMode] = useState<'local' | 'image'>('local')
+  const { presets, error: presetError } = usePresetAvatars()
+  const [source, setSource] = useState<'preset' | 'upload' | 'generate'>(
+    'preset',
+  )
+  const [gender, setGender] = useState<BotGender>(bot.gender)
+  const [selected, setSelected] = useState(bot.avatar)
+  const [mode, setMode] = useState<'local' | 'image'>('image')
   const [prompt, setPrompt] = useState('')
   const [busy, setBusy] = useState('')
   const [status, setStatus] = useState('')
   useEffect(() => {
     if (open) {
+      setSource('preset')
+      setGender(bot.gender)
+      setSelected(bot.avatar)
+      setMode('image')
       setPrompt('')
       setStatus('')
     }
   }, [open, bot.id])
   const run = async (label: string, work: () => Promise<void>) => {
+    if (busy) return
     setBusy(label)
     setStatus('')
     try {
@@ -191,115 +211,230 @@ export function AvatarDialog({
       setBusy('')
     }
   }
+  const selection = presets.find((p) => p.avatar === selected)
   return (
-    <Dialog open={open} title="设计头像" onClose={onClose}>
-      <div className="space-y-5 p-6">
-        <div className="flex items-center gap-4">
-          <Avatar name={bot.name} avatar={bot.avatar} size={80} />
-          <div>
-            <h3 className="text-[15px] font-semibold">{bot.name}</h3>
-            <p className="mt-1 text-[12px] text-stone-400">
-              让名字、人设和形象，成为一体。
+    <Dialog
+      open={open}
+      title="更换头像"
+      width="w-[620px]"
+      onClose={() => {
+        if (!busy) onClose()
+      }}
+    >
+      <div className="avatar-editor">
+        <div className="avatar-editor-preview">
+          <Avatar
+            name={bot.name}
+            avatar={source === 'preset' ? selected : bot.avatar}
+            size={88}
+          />
+          <div className="min-w-0">
+            <h3 className="truncate text-base font-semibold">{bot.name}</h3>
+            <p className="mt-1 text-xs text-stone-500 dark:text-stone-400">
+              {source === 'preset' && selected !== bot.avatar
+                ? '预览新形象 · 应用后生效'
+                : '为你的 Bot 选择一个喜欢的形象'}
             </p>
+            {source === 'preset' && selection && (
+              <span className="avatar-collection-label">
+                {selection.label} · 内置形象
+              </span>
+            )}
           </div>
         </div>
-        <div className="avatar-modes">
-          {(['local', 'image'] as const).map((m) => (
+        <div className="avatar-source-tabs" role="group" aria-label="头像来源">
+          {(
+            [
+              ['preset', '内置头像'],
+              ['upload', '自定义上传'],
+              ['generate', 'AI 生图'],
+            ] as const
+          ).map(([id, label]) => (
             <button
-              key={m}
+              key={id}
+              type="button"
               disabled={!!busy}
-              className={mode === m ? 'active' : ''}
+              aria-pressed={source === id}
               onClick={() => {
-                setMode(m)
+                setSource(id)
                 setStatus('')
               }}
             >
-              <strong>{m === 'local' ? '本地插画' : 'AI 生图'}</strong>
-              <small>
-                {m === 'local'
-                  ? '即时生成 · 无需 Key'
-                  : '真人 / 动漫 · 需配置服务'}
-              </small>
+              {label}
             </button>
           ))}
         </div>
-        <Field label="头像画面与风格">
-          <textarea
-            rows={4}
-            maxLength={4000}
-            className={inputCls}
-            value={prompt}
-            disabled={!!busy}
-            onChange={(e) => setPrompt(e.target.value)}
-            placeholder={
-              mode === 'local'
-                ? '可留空，自动结合名称与人设。支持人物、机器人、猫咪、抽象风格，以及蓝色、绿色等配色。'
-                : '描述你想要的形象，如：温暖的动漫设计师，柔和光线，简洁背景。'
-            }
-          />
-        </Field>
-        <button
-          className={btnGhostCls}
-          disabled={!!busy}
-          onClick={() =>
-            void run('正在扩写…', async () => {
-              const design = await api.expandAvatarPrompt(
-                bot.id,
-                prompt.slice(0, 2000),
-              )
-              setPrompt(design.prompt)
-              setStatus('已根据名称与人设扩写，可继续调整')
-            })
-          }
-        >
-          <SparkIcon width={14} height={14} className="mr-1 inline" />
-          根据人设扩写
-        </button>
-        <div className="flex justify-between gap-2">
-          <button
-            className={btnGhostCls}
-            disabled={!!busy}
-            onClick={() =>
-              void run('正在上传…', async () => {
-                const p = await api.pickAvatar(bot.id)
-                if (p) setStatus('已应用上传的头像')
-              })
-            }
-          >
-            上传图片
-          </button>
-          <button
-            className={btnPrimaryCls}
-            disabled={!!busy}
-            onClick={() =>
-              void run(
-                mode === 'local' ? '正在生成…' : '正在生图，请稍候…',
-                async () => {
-                  await api.generateAvatar(bot.id, prompt, mode)
-                  setStatus(
-                    mode === 'local'
-                      ? '已生成并应用本地插画头像'
-                      : '已生成并应用 AI 图片头像',
-                  )
-                },
-              )
-            }
-          >
-            {busy || '生成并应用'}
-          </button>
+        <div className="avatar-editor-content">
+          {source === 'preset' && (
+            <>
+              <div className="mb-4 flex items-center justify-between gap-3">
+                <p className="text-xs text-stone-500">精选形象，随时切换</p>
+                <GenderPicker
+                  value={gender}
+                  disabled={!!busy}
+                  onChange={(next) => {
+                    setGender(next)
+                    setSelected(
+                      presets.find((p) => p.gender === next)?.avatar || '',
+                    )
+                    setStatus('')
+                  }}
+                />
+              </div>
+              <PresetAvatarPicker
+                presets={presets}
+                gender={gender}
+                value={selected}
+                disabled={!!busy}
+                onChange={(p) => {
+                  setSelected(p.avatar)
+                  setStatus('')
+                }}
+              />
+              {presetError && (
+                <p role="alert" className="text-xs text-red-500">
+                  {presetError}
+                </p>
+              )}
+            </>
+          )}
+          {source === 'upload' && (
+            <div className="avatar-upload-card">
+              <span className="avatar-upload-symbol" aria-hidden="true">
+                ↑
+              </span>
+              <h3 className="text-sm font-medium">用你喜欢的照片</h3>
+              <p>建议使用清晰的正方形图片，主体居中。</p>
+              <p className="text-[11px]">PNG、JPG、GIF、WebP · 最大 16 MB</p>
+              <button
+                className={btnPrimaryCls}
+                disabled={!!busy}
+                onClick={() =>
+                  void run('正在上传…', async () => {
+                    const path = await api.pickAvatar(bot.id)
+                    if (path) setStatus('已应用上传的头像')
+                  })
+                }
+              >
+                {busy || '选择图片并应用'}
+              </button>
+            </div>
+          )}
+          {source === 'generate' && (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-xs text-stone-500">从想象开始，创造新形象</p>
+                <select
+                  aria-label="生成方式"
+                  className={`${inputCls} !w-auto`}
+                  value={mode}
+                  disabled={!!busy}
+                  onChange={(e) => {
+                    setMode(e.target.value as 'local' | 'image')
+                    setStatus('')
+                  }}
+                >
+                  <option value="image">AI 图片</option>
+                  <option value="local">本地插画</option>
+                </select>
+              </div>
+              <Field label="头像画面与风格">
+                <textarea
+                  rows={4}
+                  maxLength={4000}
+                  className={inputCls}
+                  value={prompt}
+                  disabled={!!busy}
+                  onChange={(e) => setPrompt(e.target.value)}
+                  placeholder="描述形象、穿着、背景与画风，例如：温暖的动漫设计师，柔和光线，简洁背景。"
+                />
+              </Field>
+              <div className="flex items-center justify-between gap-4">
+                <button
+                  className={btnGhostCls}
+                  disabled={!!busy}
+                  onClick={() =>
+                    void run('正在扩写…', async () => {
+                      const design = await api.expandAvatarPrompt(
+                        bot.id,
+                        prompt.slice(0, 2000),
+                      )
+                      setPrompt(design.prompt)
+                      setStatus('已根据名称与人设扩写，可继续调整')
+                    })
+                  }
+                >
+                  <SparkIcon width={14} height={14} className="mr-1 inline" />
+                  根据人设扩写
+                </button>
+                <p className="text-[11px] text-stone-400">
+                  {mode === 'image'
+                    ? '需在设置 → 头像生成中配置服务'
+                    : '本地风格化插画 · 无需生图服务'}
+                </p>
+              </div>
+            </div>
+          )}
         </div>
-        <p className="text-[11px] leading-relaxed text-stone-400">
-          也可以在聊天中直接说「改名为小蓝，并生成一个蓝色机器人头像」。AI
-          生图配置位于设置 → 头像生成。
-        </p>
-        {status && (
+        <div className="avatar-editor-footer">
           <p
             role="status"
-            className="text-[12px] leading-relaxed text-stone-500 dark:text-stone-300"
+            className="min-w-0 flex-1 text-xs leading-relaxed text-stone-500 dark:text-stone-400"
           >
-            {status}
+            {busy ||
+              status ||
+              (source === 'preset'
+                ? selection?.lifestyle.length
+                  ? '应用后，可在「生活照」中欣赏配套照片。'
+                  : '选择后点击应用，保存新的头像。'
+                : source === 'upload'
+                  ? '选择文件后直接应用为头像。'
+                  : mode === 'image'
+                    ? '生成会使用所选服务的额度。'
+                    : '按名称与人设生成本地插画。')}
           </p>
-        )}
+          {source === 'preset' && (
+            <button
+              className={btnPrimaryCls}
+              disabled={
+                !!busy ||
+                !selection ||
+                (selected === bot.avatar && gender === bot.gender)
+              }
+              onClick={() =>
+                void run('正在应用…', async () => {
+                  await api.updateBot(bot.id, { avatar: selected, gender })
+                  setStatus('已应用内置头像')
+                })
+              }
+            >
+              {selected === bot.avatar && gender === bot.gender
+                ? '当前头像'
+                : '应用头像'}
+            </button>
+          )}
+          {source === 'generate' && (
+            <button
+              className={btnPrimaryCls}
+              disabled={!!busy}
+              onClick={() =>
+                void run(
+                  mode === 'local' ? '正在生成…' : '正在生图，请稍候…',
+                  async () => {
+                    await api.generateAvatar(bot.id, prompt, mode)
+                    setStatus(
+                      mode === 'local'
+                        ? '已生成并应用本地插画头像'
+                        : '已生成并应用 AI 图片头像',
+                    )
+                  },
+                )
+              }
+            >
+              生成并应用
+            </button>
+          )}
+        </div>
       </div>
     </Dialog>
   )

@@ -37,6 +37,9 @@ await build({
     orchestrator: path.join(root, 'main/orchestrator.ts'),
     db: path.join(root, 'main/db.ts'),
     workspace: path.join(root, 'main/workspace.ts'),
+    memory: path.join(root, 'main/memory.ts'),
+    personas: path.join(root, 'renderer/src/lib/personaTemplates.ts'),
+    webTools: path.join(root, 'main/tools/web.ts'),
   },
   outdir: bundleDir,
   bundle: true,
@@ -54,6 +57,16 @@ const orchestrator = await import(
 const db = await import(pathToFileURL(path.join(bundleDir, 'db.js')).href)
 const workspace = await import(
   pathToFileURL(path.join(bundleDir, 'workspace.js')).href
+)
+
+const memory = await import(
+  pathToFileURL(path.join(bundleDir, 'memory.js')).href
+)
+const personas = await import(
+  pathToFileURL(path.join(bundleDir, 'personas.js')).href
+)
+const webTools = await import(
+  pathToFileURL(path.join(bundleDir, 'webTools.js')).href
 )
 
 // 2. 初始化（临时目录，WAL）
@@ -80,6 +93,114 @@ console.log('\n[1] 建库 & migration')
   ]) {
     assert(tables.includes(t), `表 ${t} 已创建`)
   }
+}
+
+console.log('\n[1b] 成熟内容偏好与伴侣模板')
+{
+  db.setSetting('user_profile', JSON.stringify({ name: '旧资料测试' }))
+  assert(
+    db.getUserProfile().accept_mature_content === false,
+    '旧资料默认关闭成熟内容',
+  )
+  const profile = db.getUserProfile()
+  db.saveUserProfile({ ...profile, accept_mature_content: true })
+  assert(
+    db.getUserProfile().accept_mature_content === true,
+    '成熟偏好按布尔值持久化',
+  )
+  let rejected = false
+  try {
+    db.saveUserProfile({ ...profile, accept_mature_content: 'true' })
+  } catch {
+    rejected = true
+  }
+  assert(
+    rejected && db.getUserProfile().accept_mature_content,
+    '非法偏好拒绝且不覆盖原值',
+  )
+  const { accept_mature_content, ...legacy } = profile
+  db.saveUserProfile(legacy)
+  assert(
+    db.getUserProfile().accept_mature_content,
+    '旧客户端省略新字段时保留偏好',
+  )
+  for (const id of ['girlfriend', 'boyfriend']) {
+    assert(
+      personas.personaTemplateById(id, true).prompt.includes('轻度调情'),
+      id + ' 模板支持成熟风格',
+    )
+    assert(
+      personas
+        .personaTemplateById(id, false)
+        .prompt.includes('用户未开启成熟内容偏好'),
+      id + ' 默认模板为日常陪伴',
+    )
+  }
+  assert(
+    personas.personaTemplateById('fullstack', true).prompt ===
+      personas.personaTemplateById('fullstack', false).prompt,
+    '工作型模板不受偏好影响',
+  )
+  const bot = db.createBot({
+    name: '偏好测试',
+    system_prompt: personas.personaTemplateById('boyfriend', true).prompt,
+  })
+  assert(
+    memory.buildSystemPrompt(bot, []).includes('用户已开启成熟内容偏好'),
+    '运行时注入开启偏好，布尔字段不导致文本拼接崩溃',
+  )
+  db.saveUserProfile({ ...profile, accept_mature_content: false })
+  const prompt = memory.buildSystemPrompt(db.getBot(bot.id), [])
+  assert(
+    prompt.includes(
+      '当前内容偏好（优先于人设中的旧偏好）\n用户未开启成熟内容偏好',
+    ),
+    '关闭状态覆盖旧模板偏好，无需改写人设',
+  )
+  assert(
+    !prompt.includes('accept_mature_content:'),
+    '原始布尔字段不作为用户资料文本发送',
+  )
+  db.deleteBot(bot.id)
+  db.setSetting('user_profile', '')
+}
+
+console.log('\n[1c] 可替换网页搜索 provider')
+{
+  let received
+  const tools = webTools.createWebTools({
+    searchProvider: {
+      id: 'smoke-search',
+      async search(request) {
+        received = request
+        return [
+          { title: '', url: 'https://empty.example/', snippet: '无标题' },
+          { title: '非 HTTP', url: 'file:///tmp/private', snippet: '必须过滤' },
+          {
+            title: '有效结果',
+            url: 'https://example.com/path?q=1',
+            snippet: 'x'.repeat(2_000),
+          },
+        ]
+      },
+    },
+  })
+  const search = tools.find((tool) => tool.name === 'web_search')
+  const result = await search.execute(
+    'smoke-search-call',
+    { query: 'Covan 工具层', limit: 3, language: 'zh-CN' },
+    new AbortController().signal,
+  )
+  assert(
+    received.query === 'Covan 工具层' && received.limit === 3,
+    '搜索请求通过 provider 接口注入',
+  )
+  assert(
+    result.details.provider === 'smoke-search' &&
+      result.details.results.length === 1 &&
+      result.details.results[0].snippet.length === 1_200,
+    'provider 返回值由核心层过滤非 HTTP URL 并截断输出',
+  )
 }
 
 console.log('\n[2] 注入 mock provider + bot A/B/C')
@@ -121,6 +242,35 @@ assert(
   fs.existsSync(path.join(userData, 'workspaces', botA.id)),
   'bot A 工作区目录已创建',
 )
+{
+  const tools = workspace.createWorkspaceTools(botA.id)
+  const read = tools.find((tool) => tool.name === 'workspace_read')
+  const write = tools.find((tool) => tool.name === 'workspace_write')
+  const signal = new AbortController().signal
+  let absoluteRejected = false
+  try {
+    await write.execute(
+      'absolute-path',
+      { path: path.join(tmp, 'escape.txt'), content: '不应写入' },
+      signal,
+    )
+  } catch {
+    absoluteRejected = true
+  }
+  assert(absoluteRejected, '工作区工具拒绝绝对路径')
+
+  const outside = path.join(tmp, 'outside.txt')
+  const link = path.join(workspace.botWorkspaceDir(botA.id), 'outside-link.txt')
+  fs.writeFileSync(outside, '工作区外的内容')
+  fs.symlinkSync(outside, link)
+  let symlinkRejected = false
+  try {
+    await read.execute('symlink-path', { path: 'outside-link.txt' }, signal)
+  } catch {
+    symlinkRejected = true
+  }
+  assert(symlinkRejected, '工作区工具拒绝符号链接逃逸')
+}
 
 console.log('\n[3] 建群（默认顺序回复）并发送用户消息')
 const group = db.createGroup('冒烟讨论组', [botA.id, botB.id, botC.id])
@@ -218,11 +368,7 @@ console.log('\n[3b] 顺序回复 + @mention 强制首位')
 console.log('\n[3c] 主动回复：并发判断 + 思考中插入新消息')
 {
   events.length = 0
-  const active = db.createGroup('主动回复冒烟组', [
-    botA.id,
-    botB.id,
-    botC.id,
-  ])
+  const active = db.createGroup('主动回复冒烟组', [botA.id, botB.id, botC.id])
   db.updateChat(active.id, { replyMode: 'active' })
   assert(db.getChat(active.id).reply_mode === 'active', '可切换为主动回复')
   const running = orchestrator.sendUserMessage(
@@ -231,11 +377,7 @@ console.log('\n[3c] 主动回复：并发判断 + 思考中插入新消息')
     [],
   )
   await sleep(5)
-  await orchestrator.sendUserMessage(
-    active.id,
-    '补充：请优先考虑可靠性。',
-    [],
-  )
+  await orchestrator.sendUserMessage(active.id, '补充：请优先考虑可靠性。', [])
   await running
   const activeMessages = db.listMessages(active.id, undefined, 100)
   assert(
@@ -245,18 +387,14 @@ console.log('\n[3c] 主动回复：并发判断 + 思考中插入新消息')
   )
   assert(
     activeMessages.filter(
-      (message) =>
-        message.sender_type === 'bot' && message.status === 'done',
+      (message) => message.sender_type === 'bot' && message.status === 'done',
     ).length === 3,
     '三位成员并发判断后完成回复',
   )
   const preparing = events.filter(
     (event) => event.type === 'agent-activity' && event.state === 'preparing',
   )
-  assert(
-    preparing.length >= 6,
-    '新消息使尚未完成的三个判断重新开始',
-  )
+  assert(preparing.length >= 6, '新消息使尚未完成的三个判断重新开始')
 }
 
 console.log('\n[4] 单聊（dm）直调')
@@ -270,7 +408,11 @@ assert(
 
 console.log('\n[4b] 单聊自然追问：最多额外两条，可关闭')
 const naturalDm = db.createDm(botC.id)
-await orchestrator.sendUserMessage(naturalDm.id, '自然追问冒烟：帮我一起想想方案', [])
+await orchestrator.sendUserMessage(
+  naturalDm.id,
+  '自然追问冒烟：帮我一起想想方案',
+  [],
+)
 const naturalReplies = db
   .listMessages(naturalDm.id, undefined, 20)
   .filter((m) => m.sender_type === 'bot' && m.status === 'done')
@@ -279,7 +421,11 @@ assert(
   `自然追问把主回复拆成最多三条消息（实际 ${naturalReplies.length} 条）`,
 )
 db.setSetting('natural_follow_up', '0')
-await orchestrator.sendUserMessage(naturalDm.id, '自然追问冒烟：关闭后只要一条', [])
+await orchestrator.sendUserMessage(
+  naturalDm.id,
+  '自然追问冒烟：关闭后只要一条',
+  [],
+)
 assert(
   db
     .listMessages(naturalDm.id, undefined, 20)
@@ -290,7 +436,11 @@ db.setSetting('natural_follow_up', '1')
 
 console.log('\n[4c] 群聊延展讨论：有新观点才进入下一轮，最多五轮')
 const multiRound = db.createGroup('多轮冒烟组', [botA.id, botC.id])
-await orchestrator.sendUserMessage(multiRound.id, '多轮冒烟：请大家就方案继续讨论并互相补充', [])
+await orchestrator.sendUserMessage(
+  multiRound.id,
+  '多轮冒烟：请大家就方案继续讨论并互相补充',
+  [],
+)
 const multiRoundReplies = db
   .listMessages(multiRound.id, undefined, 30)
   .filter((m) => m.sender_type === 'bot' && m.status === 'done')
@@ -298,12 +448,13 @@ assert(
   multiRoundReplies.length === 4,
   `两位成员完成首轮和一轮延展（实际 ${multiRoundReplies.length} 条）`,
 )
-assert(
-  multiRoundReplies.length <= 2 * 5,
-  '群聊延展严格受最多五轮上限约束',
-)
+assert(multiRoundReplies.length <= 2 * 5, '群聊延展严格受最多五轮上限约束')
 const roundCap = db.createGroup('五轮上限组', [botA.id])
-await orchestrator.sendUserMessage(roundCap.id, '五轮上限冒烟：请持续提出新的具体方案', [])
+await orchestrator.sendUserMessage(
+  roundCap.id,
+  '五轮上限冒烟：请持续提出新的具体方案',
+  [],
+)
 assert(
   db
     .listMessages(roundCap.id, undefined, 12)

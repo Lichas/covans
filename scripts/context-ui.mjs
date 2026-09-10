@@ -13,6 +13,7 @@ const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'covan-context-ui-'))
 const artifacts = path.join(root, 'artifacts', 'context')
 fs.mkdirSync(artifacts, { recursive: true })
 const requests = []
+const proxyRequests = []
 const errors = []
 let sequence = []
 let app, page
@@ -110,9 +111,38 @@ const server = http.createServer(async (req, res) => {
 })
 await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
 const base = `http://127.0.0.1:${server.address().port}/v1`
+const proxyServer = http.createServer((req, res) => {
+  try {
+    const target = new URL(req.url)
+    proxyRequests.push(target.toString())
+    if (target.hostname !== 'public.test' || target.pathname !== '/article') {
+      res.statusCode = 502
+      res.end('unexpected proxy target')
+      return
+    }
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
+    res.end(
+      `<html><head><title>动态代理网页</title></head><body><main id="root"></main><script>
+        setTimeout(() => {
+          document.querySelector('#root').innerHTML = '<h1>代理网页</h1><p>COVAN_BROWSER_JS_OK</p>'
+        }, 100)
+      </script></body></html>`,
+    )
+  } catch (error) {
+    errors.push(String(error))
+    res.statusCode = 500
+    res.end('proxy fixture failure')
+  }
+})
+await new Promise((resolve) => proxyServer.listen(0, '127.0.0.1', resolve))
+const proxyPort = proxyServer.address().port
 try {
   app = await electron.launch({
-    args: [root],
+    args: [
+      root,
+      `--proxy-server=http://127.0.0.1:${proxyPort}`,
+      '--host-resolver-rules=MAP public.test 198.18.0.42',
+    ],
     env: {
       ...process.env,
       ELECTRON_RENDERER_URL: '',
@@ -214,21 +244,24 @@ try {
     .fill('把 Covan 打造成有温度的多 Agent 工作台')
   await page.getByRole('button', { name: '保存资料' }).click()
   await expect(page.getByRole('status')).toContainText('资料已保存')
-  await page.evaluate(async () => {
-    const profile = await window.covan.getUserProfile()
-    await window.covan.saveUserProfile({
-      ...profile,
-      avatar: 'avatars/preset/avatar-01-original.png',
-    })
-  })
+  const userPresets = await page.evaluate(() =>
+    window.covan.listUserPresetAvatars(),
+  )
+  assert.equal(userPresets.length, 9, '应提供 9 张用户默认头像')
+  assert.ok(
+    userPresets.every((preset) => fs.existsSync(path.join(profile, preset.avatar))),
+    '用户默认头像应复制进隔离 profile',
+  )
+  await page.getByRole('button', { name: '选择默认头像 1' }).click()
+  await expect(page.getByRole('status')).toContainText('默认头像 1已应用')
   await expect(
     sidebar.getByRole('img', { name: 'Lua', exact: true }),
   ).toBeVisible()
-  assert.equal(
-    await sidebar
+  assert.ok(
+    (await sidebar
       .getByRole('img', { name: 'Lua', exact: true })
-      .evaluate((image) => image.naturalWidth),
-    512,
+      .evaluate((image) => image.naturalWidth)) > 0,
+    '侧边栏应能读取已选中的用户默认头像',
   )
   await page.screenshot({ path: path.join(artifacts, 'about-me.png') })
   await page.getByRole('button', { name: /对我的了解/ }).click()
@@ -265,7 +298,9 @@ try {
     return `${bot?.reasoning_effort}:${bot?.max_tokens}`
   }).toBe('low:512')
   console.log('✓ Per-Bot reasoning effort and output limit persist')
-  await page.getByRole('button', { name: '设计头像', exact: true }).click()
+  await page.getByRole('button', { name: '更换头像', exact: true }).click()
+  await page.getByRole('button', { name: 'AI 生图', exact: true }).click()
+  await page.getByLabel('生成方式').selectOption('local')
   await page.getByLabel('头像画面与风格').fill('蓝色机器人')
   await page.getByRole('button', { name: '生成并应用', exact: true }).click()
   await expect(page.getByRole('dialog').getByRole('status')).toContainText(
@@ -285,6 +320,7 @@ try {
   await expect(page.getByLabel('头像画面与风格')).toHaveValue(/蓝色机器人/)
   await page.screenshot({ path: path.join(artifacts, 'avatar-local.png') })
   await page.getByRole('button', { name: /AI 生图/ }).click()
+  await page.getByLabel('生成方式').selectOption('image')
   await page.getByRole('button', { name: '生成并应用', exact: true }).click()
   await expect(page.getByRole('dialog').getByRole('status')).toContainText(
     '配置生图',
@@ -299,8 +335,9 @@ try {
   await page.getByRole('button', { name: '保存生图设置' }).click()
   await expect(page.getByRole('status')).toContainText('已保存')
   await page.keyboard.press('Escape')
-  await page.getByRole('button', { name: '设计头像', exact: true }).click()
+  await page.getByRole('button', { name: '更换头像', exact: true }).click()
   await page.getByRole('button', { name: /AI 生图/ }).click()
+  await page.getByLabel('生成方式').selectOption('image')
   await page.getByLabel('头像画面与风格').fill('动漫角色，柔和光线')
   await page.getByRole('button', { name: '生成并应用', exact: true }).click()
   await expect(page.getByRole('dialog').getByRole('status')).toContainText(
@@ -363,6 +400,30 @@ try {
         message: '请给 Covan 的私聊浮窗一些设计建议',
       },
     },
+    {
+      name: 'workspace_write',
+      args: {
+        path: 'notes/tool-check.md',
+        content: '# Tool check\n\n文件工具已连通。',
+      },
+    },
+    {
+      name: 'workspace_edit',
+      args: {
+        path: 'notes/tool-check.md',
+        old_text: '文件工具已连通。',
+        new_text: '文件读写与精确编辑已连通。',
+      },
+    },
+    { name: 'workspace_list', args: {} },
+    {
+      name: 'workspace_read',
+      args: { path: 'notes/tool-check.md', offset: 1, limit: 20 },
+    },
+    {
+      name: 'web_fetch',
+      args: { url: 'http://public.test/article' },
+    },
   ]
   await page
     .getByRole('textbox', { name: '输入消息' })
@@ -383,7 +444,54 @@ try {
   await expect(
     page.locator('article[data-status="done"] .markdown-content'),
   ).toContainText('已完成')
+  const artifactCard = page.locator('.artifact-card')
+  await expect(artifactCard).toHaveCount(1)
+  await expect(artifactCard).toContainText('已交付 1 个文件')
+  await expect(artifactCard).toContainText('tool-check.md')
+  await artifactCard.getByRole('button', { name: '预览' }).click()
+  await expect(artifactCard.locator('.artifact-preview')).toContainText(
+    '文件读写与精确编辑已连通。',
+  )
   assert.equal(sequence.length, 0)
+  assert.equal(
+    fs.readFileSync(
+      path.join(
+        profile,
+        'workspaces',
+        fixture.bots[0].id,
+        'notes',
+        'tool-check.md',
+      ),
+      'utf8',
+    ),
+    '# Tool check\n\n文件读写与精确编辑已连通。',
+  )
+  const normalToolRequest = requests.find((r) =>
+    r.body.tools?.some((tool) => tool.function?.name === 'web_search'),
+  )
+  assert.ok(normalToolRequest, '普通 Agent 请求应挂载网页工具')
+  assert.ok(
+    [
+      'workspace_read',
+      'workspace_write',
+      'workspace_edit',
+      'workspace_list',
+      'web_search',
+      'web_fetch',
+    ].every((name) =>
+      normalToolRequest.body.tools.some((tool) => tool.function?.name === name),
+    ),
+  )
+  assert.ok(
+    requests.some((r) =>
+      JSON.stringify(r.body.messages || []).includes('COVAN_BROWSER_JS_OK'),
+    ),
+    'Fake-IP 动态页执行 JavaScript 后的内容应回灌模型',
+  )
+  assert.ok(
+    proxyRequests.includes('http://public.test/article'),
+    'web_fetch 应通过 Electron 系统代理传输',
+  )
   assert.ok(
     requests.some(
       (r) =>
@@ -397,7 +505,17 @@ try {
   assert.ok(peerRequest)
   assert.ok(
     peerRequest.body.tools.every((t) =>
-      ['workspace_list', 'workspace_read'].includes(t.function.name),
+      [
+        'workspace_list',
+        'workspace_read',
+        'web_search',
+        'web_fetch',
+      ].includes(t.function.name),
+    ),
+  )
+  assert.ok(
+    !peerRequest.body.tools.some((t) =>
+      ['workspace_write', 'workspace_edit'].includes(t.function.name),
     ),
   )
   const memories = await page.evaluate(() => window.covan.listUserMemories())
@@ -413,6 +531,10 @@ try {
     (id) => window.covan.listMessages(id),
     fixture.chats[0].id,
   )
+  const delivered = messages.find((m) => m.artifacts?.length)
+  assert.equal(delivered.artifacts.length, 1)
+  assert.equal(delivered.artifacts[0].relPath, 'notes/tool-check.md')
+  assert.equal(delivered.artifacts[0].operation, 'edit')
   assert.equal(
     threads[0].origin_message_id,
     messages.find((m) => m.sender_type === 'user').id,
@@ -427,7 +549,7 @@ try {
   await page.reload()
   await expect(page.locator('.agent-conversation-card')).toHaveCount(1)
   console.log(
-    '✓ Real tool loop: rename, avatar, shared memory, peer consultation; anchored card and persisted transcript',
+    '✓ Real tool loop: app actions, workspace tools, automatic Chromium JS fallback through Fake-IP proxy',
   )
 
   await page.evaluate(
@@ -502,5 +624,6 @@ try {
 } finally {
   await app?.close()
   await new Promise((resolve) => server.close(resolve))
+  await new Promise((resolve) => proxyServer.close(resolve))
   fs.rmSync(profile, { recursive: true, force: true })
 }

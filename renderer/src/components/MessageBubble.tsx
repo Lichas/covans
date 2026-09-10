@@ -6,6 +6,7 @@ import { CopyButton } from './CopyButton'
 import { MarkdownContent } from './MarkdownContent'
 import { ChatImage, attachmentUrl } from './ChatImage'
 import { formatFullTime, formatMessageTime } from '../lib/format'
+import { ArtifactCard } from './ArtifactCard'
 
 interface Props {
   message: Message
@@ -96,6 +97,13 @@ export const MessageBubble = memo(function MessageBubble({
             <span className="text-stone-500">未能完成这次回复</span>
           ) : null}
         </div>
+        {!isUser && bot && message.artifacts.length > 0 && (
+          <ArtifactCard
+            artifacts={message.artifacts}
+            botId={bot.id}
+            streaming={streaming}
+          />
+        )}
         {isError && (
           <div className="message-error-info" role="alert">
             <WarnIcon width={14} height={14} />

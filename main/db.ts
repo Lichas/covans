@@ -1,6 +1,7 @@
 // main/db.ts — SQLite 打开、migration、DAO（SPEC §3）
 // 注意：本模块不 import electron，以便冒烟脚本在纯 Node 下复用。
 // 由 index.ts 调用 initDb(app.getPath('userData')) 完成初始化。
+import { PRESET_AVATARS } from '../shared/presetAvatars'
 import Database from 'better-sqlite3'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -24,6 +25,7 @@ import type {
   UserMemory,
   AgentThread,
   AgentPrivateMessage,
+  WorkspaceArtifact,
 } from '../shared/types'
 import { emitEvent } from './events'
 
@@ -45,6 +47,7 @@ CREATE TABLE IF NOT EXISTS bots (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
   avatar TEXT NOT NULL DEFAULT '',
+  gender TEXT NOT NULL DEFAULT 'female',
   description TEXT NOT NULL DEFAULT '',
   tags TEXT NOT NULL DEFAULT '',
   system_prompt TEXT NOT NULL DEFAULT '',
@@ -86,6 +89,7 @@ CREATE TABLE IF NOT EXISTS messages (
   sender_bot_id TEXT,
   content TEXT NOT NULL,
   attachments TEXT NOT NULL DEFAULT '[]',
+  artifacts TEXT NOT NULL DEFAULT '[]',
   mentions TEXT NOT NULL DEFAULT '[]',
   status TEXT NOT NULL DEFAULT 'done',
   error TEXT NOT NULL DEFAULT '',
@@ -151,13 +155,27 @@ export function initDb(dir: string): Db {
       "UPDATE bots SET reasoning_effort='high' WHERE provider_id IN (SELECT id FROM providers WHERE kind='kimi')",
     )
   }
+  if (!botColumns.some((column) => column.name === 'gender')) {
+    d.exec("ALTER TABLE bots ADD COLUMN gender TEXT NOT NULL DEFAULT 'female'")
+    for (const preset of PRESET_AVATARS.filter((p) => p.gender === 'male'))
+      d.prepare("UPDATE bots SET gender='male' WHERE avatar=?").run(
+        preset.avatar,
+      )
+  }
   const chatColumns = d.pragma('table_info(chats)') as { name: string }[]
   if (!chatColumns.some((column) => column.name === 'hidden'))
     d.exec('ALTER TABLE chats ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0')
   if (!chatColumns.some((column) => column.name === 'reply_mode'))
-    d.exec("ALTER TABLE chats ADD COLUMN reply_mode TEXT NOT NULL DEFAULT 'sequential'")
+    d.exec(
+      "ALTER TABLE chats ADD COLUMN reply_mode TEXT NOT NULL DEFAULT 'sequential'",
+    )
   if (!chatColumns.some((column) => column.name === 'context_summary'))
-    d.exec("ALTER TABLE chats ADD COLUMN context_summary TEXT NOT NULL DEFAULT ''")
+    d.exec(
+      "ALTER TABLE chats ADD COLUMN context_summary TEXT NOT NULL DEFAULT ''",
+    )
+  const messageColumns = d.pragma('table_info(messages)') as { name: string }[]
+  if (!messageColumns.some((column) => column.name === 'artifacts'))
+    d.exec("ALTER TABLE messages ADD COLUMN artifacts TEXT NOT NULL DEFAULT '[]'")
   // 仅迁移明确指向 LM Studio 默认端口的旧“OpenAI 兼容”配置。
   d.exec(
     `UPDATE providers SET kind='lm-studio'
@@ -178,6 +196,16 @@ export function newId(): string {
   return randomUUID()
 }
 
+const profileTextKeys = [
+  'avatar',
+  'name',
+  'role',
+  'bio',
+  'preferences',
+  'goals',
+  'boundaries',
+] as const
+
 export function getUserProfile(): UserProfile {
   const empty: UserProfile = {
     avatar: '',
@@ -187,12 +215,14 @@ export function getUserProfile(): UserProfile {
     preferences: '',
     goals: '',
     boundaries: '',
+    accept_mature_content: false,
   }
   try {
     const saved = JSON.parse(getSetting('user_profile') || '{}')
-    for (const key of Object.keys(empty) as (keyof UserProfile)[])
+    for (const key of profileTextKeys)
       if (typeof saved?.[key] === 'string')
         empty[key] = saved[key].slice(0, 5000)
+    empty.accept_mature_content = saved?.accept_mature_content === true
     return empty
   } catch {
     return empty
@@ -201,10 +231,15 @@ export function getUserProfile(): UserProfile {
 
 export function saveUserProfile(value: UserProfile): UserProfile {
   const profile = getUserProfile()
-  for (const key of Object.keys(profile) as (keyof UserProfile)[]) {
+  for (const key of profileTextKeys) {
     if (typeof value[key] !== 'string' || value[key].length > 5000)
       throw new Error('用户资料字段须为不超过 5000 字的文本')
     profile[key] = value[key].trim()
+  }
+  if (value.accept_mature_content !== undefined) {
+    if (typeof value.accept_mature_content !== 'boolean')
+      throw new Error('成熟内容偏好必须为布尔值')
+    profile.accept_mature_content = value.accept_mature_content
   }
   setSetting('user_profile', JSON.stringify(profile))
   emitEvent({ type: 'user-context-updated' })
@@ -384,6 +419,7 @@ interface ProviderRow {
   created_at: number
 }
 interface BotRow {
+  gender: Bot['gender']
   id: string
   name: string
   avatar: string
@@ -422,6 +458,7 @@ interface MessageRow {
   sender_bot_id: string | null
   content: string
   attachments: string
+  artifacts: string
   mentions: string
   status: string
   error: string
@@ -461,6 +498,7 @@ function toMessage(r: MessageRow): Message {
     sender_bot_id: r.sender_bot_id,
     content: r.content,
     attachments: safeJsonArray<Attachment>(r.attachments),
+    artifacts: safeJsonArray<WorkspaceArtifact>(r.artifacts),
     mentions: safeJsonArray<string>(r.mentions),
     status: r.status as MessageStatus,
     error: r.error,
@@ -572,6 +610,7 @@ export function getBot(id: string): Bot | null {
 }
 
 export function createBot(input: BotInput): Bot {
+  assertGender(input.gender ?? 'female')
   if (input.pinned && listBots().filter((b) => b.pinned).length >= 3)
     throw new Error('最多置顶 3 个 Bot，请先取消一个置顶')
   const id = newId()
@@ -588,14 +627,15 @@ export function createBot(input: BotInput): Bot {
   assertReasoningEffort(reasoningEffort)
   getDb()
     .prepare(
-      `INSERT INTO bots (id,name,avatar,description,tags,system_prompt,provider_id,model,
+      `INSERT INTO bots (id,name,avatar,gender,description,tags,system_prompt,provider_id,model,
         temperature,max_tokens,reasoning_effort,workspace_dir,notify,is_coordinator,pinned,sort_order,created_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     )
     .run(
       id,
       input.name,
       input.avatar ?? '',
+      input.gender ?? 'female',
       input.description ?? '',
       input.tags ?? '',
       input.system_prompt ?? '',
@@ -631,6 +671,7 @@ export function updateBot(
     (!patch.name.trim() || patch.name.length > 80)
   )
     throw new Error('Bot 名称需要 1–80 字')
+  if (patch.gender !== undefined) assertGender(patch.gender)
   if (patch.reasoning_effort !== undefined)
     assertReasoningEffort(patch.reasoning_effort)
   if (patch.max_tokens !== undefined) assertMaxTokens(patch.max_tokens)
@@ -638,6 +679,7 @@ export function updateBot(
     ...existing,
     name: patch.name ?? existing.name,
     avatar: patch.avatar ?? existing.avatar,
+    gender: patch.gender ?? existing.gender,
     description: patch.description ?? existing.description,
     tags: patch.tags ?? existing.tags,
     system_prompt: patch.system_prompt ?? existing.system_prompt,
@@ -660,12 +702,13 @@ export function updateBot(
   }
   getDb()
     .prepare(
-      `UPDATE bots SET name=?, avatar=?, description=?, tags=?, system_prompt=?, provider_id=?,
+      `UPDATE bots SET name=?, avatar=?, gender=?, description=?, tags=?, system_prompt=?, provider_id=?,
        model=?, temperature=?, max_tokens=?, reasoning_effort=?, notify=?, is_coordinator=?, pinned=? WHERE id=?`,
     )
     .run(
       merged.name,
       merged.avatar,
+      merged.gender,
       merged.description,
       merged.tags,
       merged.system_prompt,
@@ -681,6 +724,10 @@ export function updateBot(
     )
   emitEvent({ type: 'bot-updated', botId: id })
   return getBot(id)!
+}
+
+function assertGender(value: string): void {
+  if (value !== 'female' && value !== 'male') throw new Error('未知 Bot 性别')
 }
 
 function assertReasoningEffort(
@@ -828,7 +875,9 @@ export function updateChat(
   const existing = getChat(id)
   if (!existing) throw new Error('会话不存在')
   getDb()
-    .prepare('UPDATE chats SET name=?, coordinator_bot_id=?, reply_mode=? WHERE id=?')
+    .prepare(
+      'UPDATE chats SET name=?, coordinator_bot_id=?, reply_mode=? WHERE id=?',
+    )
     .run(
       patch.name ?? existing.name,
       patch.coordinatorBotId === undefined
@@ -910,6 +959,7 @@ export interface InsertMessageInput {
   sender_bot_id?: string | null
   content: string
   attachments?: Attachment[]
+  artifacts?: WorkspaceArtifact[]
   mentions?: string[]
   status?: MessageStatus
   error?: string
@@ -920,8 +970,8 @@ export function insertMessage(input: InsertMessageInput): Message {
   const now = Date.now()
   getDb()
     .prepare(
-      `INSERT INTO messages (id,chat_id,sender_type,sender_bot_id,content,attachments,mentions,status,error,created_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?)`,
+      `INSERT INTO messages (id,chat_id,sender_type,sender_bot_id,content,attachments,artifacts,mentions,status,error,created_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
     )
     .run(
       id,
@@ -930,6 +980,7 @@ export function insertMessage(input: InsertMessageInput): Message {
       input.sender_bot_id ?? null,
       input.content,
       JSON.stringify(input.attachments ?? []),
+      JSON.stringify(input.artifacts ?? []),
       JSON.stringify(input.mentions ?? []),
       input.status ?? 'done',
       input.error ?? '',
@@ -952,19 +1003,21 @@ export function updateMessage(
     status?: MessageStatus
     error?: string
     attachments?: Attachment[]
+    artifacts?: WorkspaceArtifact[]
   },
 ): Message {
   const existing = getMessage(id)
   if (!existing) throw new Error('消息不存在')
   getDb()
     .prepare(
-      'UPDATE messages SET content=?, status=?, error=?, attachments=? WHERE id=?',
+      'UPDATE messages SET content=?, status=?, error=?, attachments=?, artifacts=? WHERE id=?',
     )
     .run(
       patch.content ?? existing.content,
       patch.status ?? existing.status,
       patch.error ?? existing.error,
       JSON.stringify(patch.attachments ?? existing.attachments),
+      JSON.stringify(patch.artifacts ?? existing.artifacts),
       id,
     )
   return getMessage(id)!

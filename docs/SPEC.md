@@ -62,6 +62,7 @@ CREATE TABLE bots (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
   avatar TEXT NOT NULL DEFAULT '',   -- 相对 userData 的路径或内置 emoji 头像 id
+  gender TEXT NOT NULL DEFAULT 'female', -- female|male；旧库按已有内置头像迁移，否则 female
   description TEXT NOT NULL DEFAULT '',
   tags TEXT NOT NULL DEFAULT '',     -- 逗号分隔
   system_prompt TEXT NOT NULL DEFAULT '',
@@ -103,6 +104,7 @@ CREATE TABLE messages (
   sender_bot_id TEXT,               -- bot 消息必填
   content TEXT NOT NULL,
   attachments TEXT NOT NULL DEFAULT '[]', -- JSON [{path,name,mime}]
+  artifacts TEXT NOT NULL DEFAULT '[]',   -- JSON [{relPath,name,size,mtime,operation}]
   mentions TEXT NOT NULL DEFAULT '[]',    -- JSON [botId]
   status TEXT NOT NULL DEFAULT 'done',    -- 'streaming'|'done'|'error'|'stopped'
   error TEXT NOT NULL DEFAULT '',
@@ -131,6 +133,7 @@ interface CovanApi {
   getUserProfile(): Promise<UserProfile>;
   saveUserProfile(profile: UserProfile): Promise<UserProfile>;
   pickUserAvatar(): Promise<UserProfile>;
+  listUserPresetAvatars(): Promise<UserPresetAvatar[]>; // 仅返回实际随附的用户默认头像
   listUserMemories(): Promise<UserMemory[]>;
   saveUserMemory(content: string, kind?: MemoryKind, id?: string): Promise<UserMemory>;
   deleteUserMemory(id: string): Promise<void>;
@@ -151,6 +154,7 @@ interface CovanApi {
   createBot(input: BotInput): Promise<Bot>;
   updateBot(id: string, patch: Partial<BotInput>): Promise<Bot>;
   deleteBot(id: string): Promise<void>;
+  listPresetAvatars(): Promise<PresetAvatar[]>;        // id/label/gender/avatar/lifestyle，只返回实际随附的素材
   pickAvatar(botId: string): Promise<string>;          // 打开文件对话框，拷贝进 avatars/，返回路径
   generateAvatar(botId: string, prompt: string, mode?: 'local'|'image'|'auto'): Promise<string>; // 返回保存路径；失败 reject
   expandAvatarPrompt(botId: string, direction?: string): Promise<AvatarDesign>;
@@ -181,6 +185,7 @@ interface CovanApi {
   // workspace
   listWorkspaceFiles(botId: string): Promise<WorkspaceFile[]>;
   openWorkspace(botId: string): Promise<void>;         // shell.openPath
+  revealWorkspaceFile(botId: string, relPath: string): Promise<void>; // shell.showItemInFolder
   readWorkspaceFile(botId: string, relPath: string): Promise<string>;
 
   // settings
@@ -230,8 +235,9 @@ type CovanEvent =
 ## 7. 工作区（workspace.ts）
 
 - 根目录：默认 `~/.covans/workspaces/<botId>/`（测试可用 `COVAN_USER_DATA_DIR` 覆盖），创建 Bot 时自动建。应用数据库、头像和聊天图片同属 `~/.covans/`；目录不存在时启动自动创建。
-- agent 运行时 cwd 设为该目录（pi 的文件工具限定其中）。
+- Agent 的文件工具只能使用该目录内的相对路径，词法路径检查后还要用 realpath 防止符号链接逃逸。
 - 面板可列文件（深度 2）、预览文本文件（<=200KB）、`openWorkspace` 打开系统文件夹。
+- `workspace_write` / `workspace_edit` 成功后，把文件元数据结构化记录在当前 Bot 消息的 `artifacts` 中；同一路径在一轮内去重并保留最后操作。聊天内显示独立交付卡，支持文本预览、打开工作区和在系统文件夹中定位；记录随消息持久化，重启后仍可见。写入时广播 `workspace-updated`，已打开的右侧工作区即时刷新。
 
 ## 8. Agent Runtime 集成（agentRuntime.ts）— 基于 pi-mono 调研结论（2026-09，已确认）
 
@@ -291,7 +297,11 @@ const unsub = agent.subscribe((event) => {
 await agent.prompt(userText)   // agent.abort() 用于 stopChat
 ```
 
-**工作区工具（自研 3 个 AgentTool，不用 pi-coding-agent）**：`workspace_read` / `workspace_write` / `workspace_list`，参数 TypeBox `Type.Object({...})`，实现里把路径 resolve 到 `workspaces/<botId>/` 下并拒绝 `..` 逃逸。仅当 bot.system_prompt 非空标记为「工作型」或群聊场景时挂载？——简化为：**所有 bot 都挂载**，由人设决定是否使用。
+**工作区工具（自研 4 个 AgentTool，不用 pi-coding-agent）**：`workspace_read` / `workspace_write` / `workspace_edit` / `workspace_list`。读取支持 offset/limit 分页，写入有 1MB 上限，精确编辑要求 `old_text` 唯一匹配。所有路径先限制在 `workspaces/<botId>/` 下，再用最近已存在父目录的 realpath 拒绝符号链接逃逸。
+
+**网页工具（只读）**：`web_search` 通过可替换的搜索 provider 返回标题/摘要/URL，当前默认为 Bing RSS；`web_fetch` 获取 HTTP(S) 文本页并把 HTML 简化为可读文本。Electron 主进程注入 Chromium `net.fetch` 传输，继承系统代理并兼容 Clash 等 Fake-IP 模式。`web_fetch.render` 支持 `auto|always|never`（默认 `auto`）：静态内容过少且页面明显依赖脚本，或静态请求失败时，自动改用隐藏、沙箱化、无 Node 权限的 BrowserWindow 执行 JavaScript，等待 DOM 稳定后提取正文与链接。静态抓取限制 20 秒总超时、1MB 直连传输/2MB 解码内容和 5 次跳转；浏览器渲染限制 30 秒；每轮最多 5 次搜索/10 次抓取。当前不做 SSRF/内网地址拦截。网页内容作为不可信数据回灌 Agent，不得覆盖 system/user 指令。
+
+**装配策略**：`main/tools/toolset.ts` 是唯一能力装配入口。普通会话挂载完整工作区、网页与应用工具；Agent 私聊只挂载 `workspace_read` / `workspace_list` 和只读网页工具，禁止文件写入、应用状态修改与递归私聊。装配层向 system prompt 动态注入实际可用工具名和「必须真实执行，不得伪造结果」规则。
 
 **Provider kind → pi 内置 provider 映射**：`openai→openAIProvider()`、`anthropic→anthropicProvider()`、`google→googleProvider()`、`openrouter→openrouterProvider()`、`kimi→createProvider(...)`（Kimi Coding Plan，模型从 `/v1/models` 动态拉取）、`zhipu→createProvider(...)`（智谱 OpenAI 兼容国内端点）、`deepseek→deepseekProvider()`、`openai-compatible→createProvider(...)`。`testProvider` 用一次 `models.complete(model, {messages:[{role:'user',content:'ping',timestamp:Date.now()}]}, {apiKey})` 验证。OpenAI-compatible 支持 API Key 留空的本地服务：模型目录请求不发送 Authorization，pi-agent-core 运行时使用不落库、无权限的占位值满足其非空校验。LM Studio 预设为 `http://localhost:1234/v1`；误填 `/api/v1/chat` 或 `/v1/chat/completions` 会规范到 `/v1`。Covan 使用支持自定义 tools 与完整历史的 `/v1/chat/completions`，不直接使用 LM Studio 原生 `/api/v1/chat`。
 
@@ -303,20 +313,22 @@ await agent.prompt(userText)   // agent.abort() 用于 stopChat
 - 三栏：Sidebar 256px / ChatView 自适应 / BotSettingsPanel 320px（默认收起）。
 - 跟随系统浅色/深色主题；暖白/炭灰背景、低饱和绿点缀；用户消息为紧凑浅灰气泡，Bot 回复使用宽阅读区域；代码和表格独立滚动。
 - Sidebar：搜索框；单聊列表项右键「置顶 / 取消置顶」，最多3个 Bot，数据库层同样校验；群聊列表项右键提供经确认的「删除群聊」，永久删除群及关联记录。顶部仅在有置顶时显示横排圆形头像，不显示空槽位或添加入口。会话列表项=头像(群聊显示叠头像+N角标)/名称/最后消息预览/时间/未读蓝点；底部为「关于我」「我的 Bot」「新建群聊」「设置」；顶部「+」菜单新建 Bot(⌘1) / 创建群聊(⌘2)。
-- ChatView：顶部 Bot/群名、完整会话导出和设置入口；群聊齿轮打开回复机制设置。消息显示作者、时间、跨日分隔；支持 Markdown、多图、代码复制、原文复制、引用回复和错误重试。Composer 支持群聊 @ 提及、独立持久草稿与中文输入法保护；上方以动画小头像显示正在思考/回复的成员。主动回复中可继续发送新消息。
-- BotSettingsPanel（右栏，单聊选中时显示）：头像与身份信息；设定、记忆、工作区、模型四个标签页。模型页独立管理 provider、model、temperature、reasoning effort 与 max tokens。
+- ChatView：顶部 Bot/群名、完整会话导出和设置入口；群聊齿轮打开回复机制设置。消息显示作者、时间、跨日分隔；支持 Markdown、多图、代码复制、原文复制、引用回复和错误重试。Bot 本轮真实写入或编辑工作区文件时，回复下方显示结构化交付卡，不从回复文本猜测文件名；卡片支持预览、定位和打开文件夹。Composer 支持群聊 @ 提及、独立持久草稿与中文输入法保护；上方以动画小头像显示正在思考/回复的成员。主动回复中可继续发送新消息。
+- BotSettingsPanel（右栏，单聊选中时显示）：头像与身份信息；生活照、设定、记忆、工作区、模型五个标签页（按从左到右排列）。模型页独立管理 provider、model、temperature、reasoning effort 与 max tokens。
 - SettingsModal（通用）：账户占位、外观（主题跟随系统/浅色/深色、语言）、Bot（时区自动检测、自然追问开关、自动审核开关 + 规则文本——审核规则作为自然语言注入各成员的判断与回复）、Provider 管理（列表 + 新增/编辑表单 + 测试连接按钮）。
-- 新建 Bot 对话框：名称/人设模板下拉（开发分队四人、产品经理、设计师、虚拟女友「小美女」、空白自定义）/描述/provider/模型。
+- 新建 Bot 对话框：名称/人设模板下拉（开发分队四人、产品经理、设计师、虚拟女友「小美女」、虚拟男友「小帅哥」、空白自定义）/描述/provider/模型。
 - 中文 UI。
 
 ## 10. 人设模板（内置常量 personaTemplates.ts）
 
 - 高级全栈（Go 后端为主，也懂 React/Flutter）、架构设计师（分层/性能/可靠/可扩展）、Code Reviewer（正确性与 bug）、测试员（端到端）、产品经理、设计师。
+- 虚拟男友「小帅哥」：21 岁成年角色，温柔、有主见、分享日常并记住明确偏好；选中模板同步男性头像池。
+- 伴侣模板通过 `personaTemplateById` 读取当前成熟内容偏好，关闭时为日常陪伴，开启时支持非露骨暧昧、轻度调情、浪漫张力和成人玩笑，尊重成年人双方自愿及当下边界；普通工作模板不受影响。选择女友/男友分别同步 female/male，模板预览可编辑；切换偏好只刷新未手改的预览，不重写已创建 Bot 的人设。主进程每轮注入当前偏好，关闭状态优先于旧模板中的开启提示。
 - 虚拟伴侣「小美女」：21 岁女朋友人设，好看聪明、生活化陪伴、爱夸赞、会记住你的喜好与纪念日；语气亲昵口语化。（成人 consenting 陪伴闲聊，不含露骨性内容生成义务。）
 
 ## 11. 非功能需求
 
-- 无任何网络遥测；API key 仅存本地 SQLite（README 注明明文风险 + 后续 safeStorage 路线图）。
+- 无任何网络遥测；除用户配置的 LLM/生图 Provider 外，仅在 Agent 为完成当前请求显式调用网页工具时访问搜索服务或目标公开 URL。API key 仅存本地 SQLite（README 注明明文风险 + 后续 safeStorage 路线图）。
 - 所有外部调用可中断；生成中 UI 可继续浏览其他会话。
 - 错误（key 无效/超时/限流）在气泡内联显示并可重试。
 - 代码质量：`tsc --noEmit` 通过、`electron-vite build` 通过。
@@ -328,11 +340,14 @@ await agent.prompt(userText)   // agent.abort() 用于 stopChat
 
 ## 13. 用户背景、头像与 Agent 私聊（2026-09-08）
 
-- **关于我**：settings.user_profile 保存 avatar/name/role/bio/preferences/goals/boundaries；user_memories 保存 id/content/kind/source/source_bot_id/created_at。资料与最近60条共同记忆注入所有 Bot 后续 system prompt，但头像路径不注入模型。资料编辑、头像上传、共同记忆增删改经独立 IPC 通道保存，user-context-updated 通知刷新。
+- **关于我**：settings.user_profile 保存 avatar/name/role/bio/preferences/goals/boundaries 文本与 accept_mature_content 布尔值（默认 false，旧资料/无效存储值按 false 读取；保存时拒绝非布尔值，旧客户端省略该字段则保留现值）；user_memories 保存 id/content/kind/source/source_bot_id/created_at。资料与最近60条共同记忆注入所有 Bot 后续 system prompt，但头像路径不注入模型。资料编辑、用户默认头像选择、头像上传、共同记忆增删改经独立 IPC 通道保存，user-context-updated 通知刷新。
 - **应用工具**：list_bots、update_bot、expand_avatar_prompt、generate_bot_avatar、read_user_profile、remember_user、agent_private_chat。修改以用户明确要求为依据，不向模型返回 Provider 密钥。记忆需为用户直接表达的事实，不保存猜测或密钥。
-- **头像**：应用随附 12 张默认头像，新 Bot 按稳定哈希分配一张；素材启动时复制到本机 userData，上传与生成头像走同一受限路径。用户可在「关于我」上传或恢复自己的头像。Bot 自定义上传不被自动刷新覆盖。可选择通过已有 Provider 扩写人设提示词。图片模式由 avatar_provider / avatar_model / avatar_base_url 配置，POST /images/generations 支持 base64 或 URL，限16MB、120秒。显式 image 未配置时报错，auto 未配置时使用 local，并返回实际模式。
+- **头像**：应用随附 12 张 Bot 默认头像（6 女 / 6 男）及 9 张用户默认头像。创建页可选 ♀ / ♂，默认 female；先选择对应性别的内置头像，未指定头像的 API 创建按性别池稳定哈希分配。gender 随 Bot/创建/更新 IPC 持久化，非法值拒绝；旧 Bot 保留头像，按已有内置头像匹配性别，其余默认 female。素材启动时复制到本机 userData，上传与生成头像走同一受限路径。用户可在「关于我」直接选择用户默认头像、上传自定义头像或恢复文字头像。Bot 自定义上传不被自动刷新覆盖。可选择通过已有 Provider 扩写人设提示词。图片模式由 avatar_provider / avatar_model / avatar_base_url 配置，POST /images/generations 支持 base64 或 URL，限16MB、120秒。显式 image 未配置时报错，auto 未配置时使用 local，并返回实际模式。
+- **内容偏好**：「关于我」每次打开默认进入「我的资料」，内容偏好卡放在资料页首位，960×640 窗口无需滚动即可看到默认关闭的「接受成熟内容 · 18+」开关，独立立即保存；开启显示泳装等成熟风格生活照，并影响新建成年伴侣模板及后续对话。此开关不承诺露骨内容生成，也不改变普通工作型 Bot 的用途；头像路径与原始布尔字段不作为资料文本拼接，当前偏好以明确指令注入。
+- **头像选择与生活照**：点击右侧 Bot 头像打开「更换头像」，移除重复文字链接。来源依次为内置头像、自定义上传、AI 生图；内置头像先预览、点击应用后保存头像与所选性别，取消不修改；上传使用系统文件选择器、选定即应用，取消保留当前头像。AI 页默认图片生图，保留本地插画选项；忙碌时阻止重复提交与关闭。内置头像和生活照由主进程 `listPresetAvatars` 目录提供，renderer 经 preload 与既有受限图片协议读取。
+- **生活照素材约定**：`resources/avatar-lifestyle/avatar-NN-<场景>.png|jpg|jpeg|webp` 按 `avatar-NN-` 精确前缀关联默认头像（原素材来自 `artifacts/avatar-lifestyle`），按文件名排序，随安装包分发并复制至 `avatars/preset/lifestyle/avatar-NN/`。当前随附 42 张照片：31 张日常、11 张成熟风格（6 张泳装及 5 张睡袍/浴衣）。分级依据逐张查看后的衣着与场景：普通服装、常规浴衣和穿衣海边照为 general，泳装及偏私密的睡袍/低领浴衣照为 mature；不是按文件名关键词自动识别。`resources/avatar-lifestyle/catalog.json` 按完整文件名显式标记 general/mature；未分类图片按 mature 处理。Electron 回归校验打包文件与清单一一对应；本地原素材目录存在时还校验文件名及 SHA-256 完整一致，防止漏搬。关闭成熟内容时，目录 IPC 过滤 mature，图片协议同时拒绝其直接读取；生活照协议响应禁用缓存，偏好变更通过 user-context-updated 即时刷新橱窗和选图数量。只有当前 avatar 精确匹配内置头像且有照片时，独立「生活照」标签页从顶部显示照片橱窗，「设定」页只显示配置字段。生活照标签始终可见；上传/生成头像及无配套照片时显示简洁空态。切换标签重置内容滚动位置，离开生活照标签即卸载轮播并停止计时。每 5 秒轮播，支持前后按钮、圆点、方向键和暂停；悬停、焦点进入、页面隐藏时暂缓播放，减少动效偏好下仅手动切换。切换 Bot/头像重置首张，加载失败的照片跳过，全部失败隐藏橱窗。
 - **私聊数据**：agent_threads 关联 parent_chat_id、origin_message_id、from_bot_id、to_bot_id、subject、status 与时间；agent_private_messages 保存双方文本、状态、错误与时间。删除主会话级联删除对应私聊，关闭应用后不自动续跑网络任务。
 - **私聊执行**：一次咨询将问题发送给目标 Bot，接收方使用自己的人设/模型与工作区读取工具；不递归调用私聊或修改应用状态。每个主会话最多并发3个、每个用户轮次最多调用3次；可独立停止，也随主轮次停止。
 - **私聊界面**：自然语言工具触发后，卡片插在来源用户消息后；未加载来源消息时仍有入口。点击浮窗显示双方真实消息、Markdown、作者、时间、流式/失败/停止状态。聊天顶部双人按钮也可手动指定咨询问题，不自动转发整段主会话。
-- **IPC 契约**：getUserProfile / saveUserProfile / pickUserAvatar / listUserMemories / saveUserMemory / deleteUserMemory；listAgentThreads / getAgentThread / startAgentConversation / stopAgentConversation；准确类型以 shared/types.ts 为准。
-- **启动与验证**：根目录 start.command 一键启动；npm run typecheck、npm run smoke、npm run test:ui、npm run test:context。UI 与工具测试均使用临时 profile；真实 pi 工具循环由本地 HTTP fixture 驱动，无付费 API 调用。
+- **IPC 契约**：getUserProfile / saveUserProfile / pickUserAvatar / listUserPresetAvatars / listUserMemories / saveUserMemory / deleteUserMemory；listAgentThreads / getAgentThread / startAgentConversation / stopAgentConversation；准确类型以 shared/types.ts 为准。
+- **启动与验证**：根目录 start.command 一键启动；npm run typecheck、npm run smoke、npm run test:ui、npm run test:context、npm run test:avatars。UI 与工具测试均使用临时 profile；真实 pi 工具循环由本地 HTTP fixture 驱动，无付费 API 调用。

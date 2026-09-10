@@ -25,14 +25,16 @@ import type {
   Bot,
   Provider,
   ReasoningEffort,
+  WorkspaceArtifact,
 } from '../shared/types'
 import * as db from './db'
 import { mockComplete, mockStream } from './mockProvider'
-import { createWorkspaceTools } from './workspace'
-import { createAppTools } from './agentTools'
+import { appendToolGuidance, createAgentToolset } from './tools/toolset'
+import { describeWorkspaceArtifact } from './workspace'
 
 export interface AgentCallbacks {
   onImages?(images: Attachment[]): void
+  onArtifact?(artifact: WorkspaceArtifact): void
   onDelta(delta: string): void
   onDone(fullText: string): void
   onError(error: string): void
@@ -488,23 +490,26 @@ async function runPiAgent(
       '当前模型不支持图片输入，请在 Bot 设置中切换到支持视觉的模型',
     )
   const effort = reasoningLevel(bot.reasoning_effort)
-  const systemPrompt = applyLmStudioReasoningHint(
-    provider,
-    opts.systemPrompt ?? bot.system_prompt,
-    bot.reasoning_effort,
+  const tools = createAgentToolset({
+    botId: bot.id,
+    chatId,
+    signal,
+    privateConversation: opts.privateConversation,
+    onImages: callbacks.onImages,
+  })
+  const systemPrompt = appendToolGuidance(
+    applyLmStudioReasoningHint(
+      provider,
+      opts.systemPrompt ?? bot.system_prompt,
+      bot.reasoning_effort,
+    ),
+    tools,
   )
   const agent = new Agent({
     initialState: {
       systemPrompt,
       model,
-      tools: opts.privateConversation
-        ? createWorkspaceTools(bot.id).filter(
-            (tool) => tool.name !== 'workspace_write',
-          )
-        : [
-            ...createWorkspaceTools(bot.id),
-            ...createAppTools(bot.id, chatId, signal, callbacks.onImages),
-          ],
+      tools,
       thinkingLevel: effort,
       messages: historyMessages,
     },
@@ -533,6 +538,26 @@ async function runPiAgent(
     } else if (event.type === 'message_end') {
       const m = event.message
       if (m.role === 'assistant') assistants.push(m)
+    } else if (
+      event.type === 'tool_execution_end' &&
+      !event.isError &&
+      (event.toolName === 'workspace_write' ||
+        event.toolName === 'workspace_edit')
+    ) {
+      const relPath = event.result?.details?.path
+      if (typeof relPath === 'string') {
+        try {
+          callbacks.onArtifact?.(
+            describeWorkspaceArtifact(
+              bot.id,
+              relPath,
+              event.toolName === 'workspace_edit' ? 'edit' : 'write',
+            ),
+          )
+        } catch {
+          // 工具结果已经成功返回；卡片元数据读取失败不应中断 Agent 回复。
+        }
+      }
     }
   })
   const onAbort = () => agent.abort()
@@ -620,6 +645,7 @@ export async function testProviderConnection(
       }
     const probe: Bot = {
       id: '__probe__',
+      gender: 'female',
       name: provider.name,
       avatar: '',
       description: '',

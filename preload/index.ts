@@ -15,6 +15,7 @@ const api: CovanApi = {
   getUserProfile: () => ipcRenderer.invoke(CH.getUserProfile),
   saveUserProfile: (profile) => ipcRenderer.invoke(CH.saveUserProfile, profile),
   pickUserAvatar: () => ipcRenderer.invoke(CH.pickUserAvatar),
+  listUserPresetAvatars: () => ipcRenderer.invoke(CH.listUserPresetAvatars),
   listUserMemories: () => ipcRenderer.invoke(CH.listUserMemories),
   saveUserMemory: (content, kind, id) =>
     ipcRenderer.invoke(CH.saveUserMemory, content, kind, id),
@@ -36,6 +37,7 @@ const api: CovanApi = {
   testProvider: (id: string) => ipcRenderer.invoke(CH.testProvider, id),
 
   // bots
+  listPresetAvatars: () => ipcRenderer.invoke(CH.listPresetAvatars),
   listBots: () => ipcRenderer.invoke(CH.listBots),
   createBot: (input: BotInput) => ipcRenderer.invoke(CH.createBot, input),
   updateBot: (id: string, patch: Partial<BotInput>) =>
@@ -94,6 +96,8 @@ const api: CovanApi = {
   listWorkspaceFiles: (botId: string) =>
     ipcRenderer.invoke(CH.listWorkspaceFiles, botId),
   openWorkspace: (botId: string) => ipcRenderer.invoke(CH.openWorkspace, botId),
+  revealWorkspaceFile: (botId: string, relPath: string) =>
+    ipcRenderer.invoke(CH.revealWorkspaceFile, botId, relPath),
   readWorkspaceFile: (botId: string, relPath: string) =>
     ipcRenderer.invoke(CH.readWorkspaceFile, botId, relPath),
 

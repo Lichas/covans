@@ -10,6 +10,14 @@
       {
         "from": "resources/default-avatars",
         "to": "default-avatars"
+      },
+      {
+        "from": "resources/avatar-lifestyle",
+        "to": "avatar-lifestyle"
+      },
+      {
+        "from": "resources/user-avatars",
+        "to": "user-avatars"
       }
     ]
   },
@@ -19,6 +27,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json",
     "smoke": "node scripts/run-smoke.mjs",
     "test:ui": "npm run build && node scripts/ui-smoke.mjs",
+    "test:avatars": "npm run build && node scripts/avatar-ui.mjs",
     "test:context": "npm run build && node scripts/context-ui.mjs",
     "test:local-llm": "npm run build && node scripts/local-llm-smoke.mjs",
     "test:multimodal": "npm run build && node scripts/multimodal-ui.mjs",

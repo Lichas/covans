@@ -151,6 +151,7 @@ export const useMessagesStore = create<MessagesState>((set, get) => ({
       sender_bot_id: null,
       content: text,
       attachments,
+      artifacts: [],
       mentions,
       status: 'done',
       error: '',

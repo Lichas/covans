@@ -26,6 +26,13 @@ export function WorkspacePanel({ botId }: { botId: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [botId])
 
+  useEffect(() => {
+    return api.onEvent((event) => {
+      if (event.type === 'workspace-updated' && event.botId === botId) void load()
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [botId])
+
   const openFile = async (f: WorkspaceFile) => {
     if (f.isDir) return
     setLoadingPreview(true)

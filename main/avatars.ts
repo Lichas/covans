@@ -1,7 +1,14 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
-import type { AvatarDesign, Bot } from '../shared/types'
+import { PRESET_AVATARS } from '../shared/presetAvatars'
+import { USER_PRESET_AVATARS } from '../shared/userPresetAvatars'
+import type {
+  AvatarDesign,
+  Bot,
+  PresetAvatar,
+  UserPresetAvatar,
+} from '../shared/types'
 import * as db from './db'
 import { getWorkspaceRoot } from './workspace'
 import { completeOnce } from './agentRuntime'
@@ -17,42 +24,124 @@ const palettes = {
 
 const presetAvatarDir = () =>
   path.join(path.dirname(getWorkspaceRoot()), 'avatars', 'preset')
+const userPresetAvatarDir = () =>
+  path.join(path.dirname(getWorkspaceRoot()), 'avatars', 'user-preset')
 
 /**
  * 将随应用分发的默认头像复制到 userData。渲染层仍只通过受限的
  * covan-avatar 协议读取 userData，因此默认、上传和生成头像使用同一条安全路径。
  */
+let presetCatalog: PresetAvatar[] = []
+const matureLifestylePaths = new Set<string>()
+let userPresetCatalog: UserPresetAvatar[] = []
+
 export function seedDefaultAvatars(sourceDir: string): void {
+  presetCatalog = []
+  matureLifestylePaths.clear()
+  const destination = presetAvatarDir()
   try {
-    const destination = presetAvatarDir()
     fs.mkdirSync(destination, { recursive: true })
-    for (const name of fs.readdirSync(sourceDir).sort()) {
-      if (!/^avatar-\d+-original\.(png|jpe?g|webp)$/i.test(name)) continue
-      const source = path.join(sourceDir, name)
-      const target = path.join(destination, name)
-      if (fs.statSync(source).isFile() && !fs.existsSync(target))
-        fs.copyFileSync(source, target)
-    }
   } catch {
-    // 素材缺失时保持本地 SVG 的既有降级行为，不能阻止应用启动。
+    return
+  }
+  const lifestyleDir = path.join(path.dirname(sourceDir), 'avatar-lifestyle')
+  let ratings: Record<string, unknown> = {}
+  try {
+    ratings =
+      JSON.parse(
+        fs.readFileSync(path.join(lifestyleDir, 'catalog.json'), 'utf8'),
+      ) ?? {}
+  } catch {
+    // Unclassified images stay behind the explicit mature-content preference.
+  }
+  for (const preset of PRESET_AVATARS) {
+    const name = path.basename(preset.avatar)
+    const source = path.join(sourceDir, name)
+    const target = path.join(destination, name)
+    try {
+      if (!fs.statSync(source).isFile()) continue
+      fs.copyFileSync(source, target)
+      const lifestyle: string[] = []
+      const directory = lifestyleDir
+      if (fs.existsSync(directory)) {
+        for (const file of fs.readdirSync(directory).sort()) {
+          if (
+            !file.startsWith(`${preset.id}-`) ||
+            !/^[\w-]+\.(png|jpe?g|webp)$/i.test(file)
+          )
+            continue
+          const photo = path.join(directory, file)
+          if (!fs.lstatSync(photo).isFile()) continue
+          const relative = `avatars/preset/lifestyle/${preset.id}/${file}`
+          const output = path.join(destination, 'lifestyle', preset.id, file)
+          fs.mkdirSync(path.dirname(output), { recursive: true })
+          fs.copyFileSync(photo, output)
+          if (ratings[file] !== 'general') matureLifestylePaths.add(relative)
+          lifestyle.push(relative)
+        }
+      }
+      presetCatalog.push({ ...preset, lifestyle })
+    } catch {
+      // Missing optional assets must not prevent startup or expose broken images.
+      if (fs.existsSync(target))
+        presetCatalog.push({ ...preset, lifestyle: [] })
+    }
   }
 }
 
-/** 为未设置头像的新 Bot 稳定地分配一张内置头像。 */
+export function listPresetAvatars(): PresetAvatar[] {
+  const acceptMatureContent = db.getUserProfile().accept_mature_content
+  return presetCatalog.map((preset) => ({
+    ...preset,
+    lifestyle: preset.lifestyle.filter(
+      (photo) => acceptMatureContent || !matureLifestylePaths.has(photo),
+    ),
+  }))
+}
+
+/** Apply the same preference to direct protocol reads of bundled lifestyle photos. */
+export function canReadLifestylePhoto(relative: string): boolean {
+  return (
+    presetCatalog.some((preset) => preset.lifestyle.includes(relative)) &&
+    (db.getUserProfile().accept_mature_content ||
+      !matureLifestylePaths.has(relative))
+  )
+}
+
+/** Copy the bundled user-profile presets into the same restricted avatar root. */
+export function seedUserPresetAvatars(sourceDir: string): void {
+  userPresetCatalog = []
+  const destination = userPresetAvatarDir()
+  try {
+    fs.mkdirSync(destination, { recursive: true })
+  } catch {
+    return
+  }
+  for (const preset of USER_PRESET_AVATARS) {
+    const name = path.basename(preset.avatar)
+    const source = path.join(sourceDir, name)
+    const target = path.join(destination, name)
+    try {
+      if (!fs.statSync(source).isFile()) continue
+      fs.copyFileSync(source, target)
+      userPresetCatalog.push({ ...preset })
+    } catch {
+      // Missing optional assets must not prevent startup or expose broken images.
+    }
+  }
+}
+
+export function listUserPresetAvatars(): UserPresetAvatar[] {
+  return userPresetCatalog.map((preset) => ({ ...preset }))
+}
+
+/** Stable assignment within the selected gender; explicit avatars are preserved. */
 export function assignDefaultAvatar(bot: Bot): Bot {
   if (bot.avatar) return bot
-  try {
-    const names = fs
-      .readdirSync(presetAvatarDir())
-      .filter((name) => /^avatar-\d+-original\.(png|jpe?g|webp)$/i.test(name))
-      .sort()
-    if (!names.length) return bot
-    const index = createHash('sha256').update(bot.id).digest()[0] % names.length
-    const avatar = `avatars/preset/${names[index]}`
-    return db.updateBot(bot.id, { avatar })
-  } catch {
-    return bot
-  }
+  const choices = presetCatalog.filter((preset) => preset.gender === bot.gender)
+  if (!choices.length) return bot
+  const index = createHash('sha256').update(bot.id).digest()[0] % choices.length
+  return db.updateBot(bot.id, { avatar: choices[index].avatar })
 }
 
 export function localAvatarDesign(bot: Bot, direction = ''): AvatarDesign {

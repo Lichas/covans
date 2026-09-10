@@ -22,6 +22,8 @@ import { isTurnRunning, sendUserMessage, stopTurn } from './orchestrator'
 import { registerContextIpc } from './contextIpc'
 import {
   assignDefaultAvatar,
+  listPresetAvatars,
+  listUserPresetAvatars,
   generateBotAvatar,
   refreshAutomaticAvatar,
   type AvatarMode,
@@ -30,6 +32,7 @@ import {
   ensureWorkspace,
   listWorkspaceFiles,
   readWorkspaceFile,
+  resolveWorkspaceFile,
 } from './workspace'
 
 // ---------- 参数校验 ----------
@@ -78,6 +81,7 @@ export function registerIpc(): void {
     return storeChatImage(Buffer.from(bytes), name)
   })
   registerContextIpc()
+  handle(CH.listUserPresetAvatars, () => listUserPresetAvatars())
   handle(CH.pickUserAvatar, async () => {
     const win = BrowserWindow.getAllWindows()[0]
     const result = await dialog.showOpenDialog(win!, {
@@ -137,6 +141,7 @@ export function registerIpc(): void {
   })
 
   // bots
+  handle(CH.listPresetAvatars, () => listPresetAvatars())
   handle(CH.listBots, () => db.listBots())
   handle(CH.createBot, (input: BotInput) => {
     if (!input || typeof input !== 'object')
@@ -384,6 +389,13 @@ export function registerIpc(): void {
     const dir = ensureWorkspace(botId)
     const err = await shell.openPath(dir)
     if (err) throw new Error(err)
+  })
+  handle(CH.revealWorkspaceFile, (botId: string, relPath: string) => {
+    assertStr(botId, 'botId')
+    assertStr(relPath, 'relPath')
+    const file = resolveWorkspaceFile(botId, relPath)
+    if (!fs.existsSync(file)) throw new Error('文件不存在或已被移动')
+    shell.showItemInFolder(file)
   })
   handle(CH.readWorkspaceFile, (botId: string, relPath: string) => {
     assertStr(botId, 'botId')

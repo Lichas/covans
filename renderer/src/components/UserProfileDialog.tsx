@@ -1,11 +1,16 @@
 import { useEffect, useState } from 'react'
-import type { MemoryKind, UserMemory, UserProfile } from '@shared/types'
+import type {
+  MemoryKind,
+  UserMemory,
+  UserPresetAvatar,
+  UserProfile,
+} from '@shared/types'
 import { api } from '../lib/api'
 import { useUiStore } from '../stores/uiStore'
 import { useBotsStore } from '../stores/botsStore'
 import { formatFullTime } from '../lib/format'
 import { Dialog } from './Dialog'
-import { Field, inputCls, btnPrimaryCls, btnGhostCls } from './controls'
+import { Field, Toggle, inputCls, btnPrimaryCls, btnGhostCls } from './controls'
 import { MeIcon, PencilIcon, PlusIcon, TrashIcon } from './icons'
 import { Avatar } from './Avatar'
 
@@ -17,6 +22,7 @@ const empty: UserProfile = {
   preferences: '',
   goals: '',
   boundaries: '',
+  accept_mature_content: false,
 }
 export function UserProfileDialog() {
   const open = useUiStore((s) => s.profileOpen)
@@ -24,6 +30,7 @@ export function UserProfileDialog() {
   const bots = useBotsStore((s) => s.bots)
   const [tab, setTab] = useState<'profile' | 'memory'>('profile')
   const [profile, setProfile] = useState<UserProfile>(empty)
+  const [presetAvatars, setPresetAvatars] = useState<UserPresetAvatar[]>([])
   const [memories, setMemories] = useState<UserMemory[]>([])
   const [content, setContent] = useState('')
   const [kind, setKind] = useState<MemoryKind>('fact')
@@ -33,14 +40,20 @@ export function UserProfileDialog() {
   const [status, setStatus] = useState('')
   useEffect(() => {
     if (!open) return
+    setTab('profile')
     let active = true
     setStatus('')
     setLoaded(false)
-    Promise.all([api.getUserProfile(), api.listUserMemories()])
-      .then(([p, m]) => {
+    Promise.all([
+      api.getUserProfile(),
+      api.listUserMemories(),
+      api.listUserPresetAvatars(),
+    ])
+      .then(([p, m, presets]) => {
         if (active) {
           setProfile(p)
           setMemories(m)
+          setPresetAvatars(presets)
           setLoaded(true)
         }
       })
@@ -107,6 +120,46 @@ export function UserProfileDialog() {
       <div className="space-y-5 p-6">
         {tab === 'profile' ? (
           <>
+            <section
+              aria-label="内容偏好"
+              className="rounded-xl border border-stone-200 bg-stone-50/70 p-4 dark:border-stone-700 dark:bg-stone-900/30"
+            >
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <h4 className="text-[13px] font-medium">
+                    接受成熟内容{' '}
+                    <span className="ml-1 text-[10px] text-stone-400">18+</span>
+                  </h4>
+                  <p className="mt-1.5 max-w-[490px] text-[12px] leading-relaxed text-stone-500 dark:text-stone-400">
+                    显示泳装等成熟风格生活照；成年伴侣可以有非露骨的暧昧、轻度调情与成人玩笑。随时可以关闭，仍以你当下的边界为准。
+                  </p>
+                </div>
+                <Toggle
+                  label="接受成熟内容"
+                  checked={profile.accept_mature_content}
+                  disabled={busy || !loaded}
+                  onChange={(value) => {
+                    void action(
+                      async () => {
+                        const saved = await api.getUserProfile()
+                        await api.saveUserProfile({
+                          ...saved,
+                          accept_mature_content: value,
+                        })
+                        setProfile((draft) => ({
+                          ...draft,
+                          accept_mature_content: value,
+                        }))
+                      },
+                      value ? '已开启成熟内容偏好' : '已关闭成熟内容偏好',
+                    )
+                  }}
+                />
+              </div>
+              <p className="mt-2 text-[11px] text-stone-400">
+                开关立即保存，影响生活照、新建伴侣模板及后续对话。
+              </p>
+            </section>
             <div className="flex items-center gap-4 rounded-xl border border-stone-200 bg-stone-50/70 p-4 dark:border-stone-700 dark:bg-stone-800/50">
               <Avatar
                 name={profile.name || '我'}
@@ -149,10 +202,51 @@ export function UserProfileDialog() {
                     }, '头像已更新')
                   }
                 >
-                  更换头像
+                  上传自定义头像
                 </button>
               </div>
             </div>
+            {presetAvatars.length > 0 && (
+              <section className="user-preset-avatars" aria-label="默认头像">
+                <div>
+                  <strong>选择默认头像</strong>
+                  <p>也可以上传自己的图片；选择后立即保存。</p>
+                </div>
+                <div className="user-preset-avatar-grid" role="group">
+                  {presetAvatars.map((preset) => (
+                    <button
+                      type="button"
+                      key={preset.id}
+                      disabled={busy || !loaded}
+                      aria-label={`选择${preset.label}`}
+                      aria-pressed={profile.avatar === preset.avatar}
+                      onClick={() =>
+                        void action(async () => {
+                          const next = await api.saveUserProfile({
+                            ...profile,
+                            avatar: preset.avatar,
+                          })
+                          setProfile(next)
+                        }, `${preset.label}已应用`)
+                      }
+                    >
+                      <span className="preset-portrait">
+                        <Avatar
+                          name={preset.label}
+                          avatar={preset.avatar}
+                          size={42}
+                        />
+                        {profile.avatar === preset.avatar && (
+                          <span className="preset-check" aria-hidden="true">
+                            ✓
+                          </span>
+                        )}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </section>
+            )}
             <div className="grid grid-cols-2 gap-4">
               <Field label="怎么称呼我">
                 <input

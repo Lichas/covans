@@ -623,6 +623,19 @@ async function speakOne(
         })
         emit({ type: 'message-start', chatId, message: msg })
       },
+      onArtifact: (artifact) => {
+        const current = db.getMessage(placeholder.id)!
+        const artifacts = [
+          ...current.artifacts.filter((item) => item.relPath !== artifact.relPath),
+          artifact,
+        ]
+        const msg = db.updateMessage(placeholder.id, {
+          content: acc,
+          artifacts,
+        })
+        emit({ type: 'message-start', chatId, message: msg })
+        emit({ type: 'workspace-updated', botId: bot.id })
+      },
       onDelta: (delta) => {
         acc += delta
         emit({

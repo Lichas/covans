@@ -9,9 +9,15 @@ import { CH } from '../shared/ipcChannels'
 import { getDb, initDb } from './db'
 import { initWorkspace } from './workspace'
 import { initOrchestrator } from './orchestrator'
+import { configureWebNetworkAdapter } from './tools/web'
+import { renderWebPage } from './tools/browser'
 import { registerIpc } from './ipc'
 import { chatImagePath } from './chatImages'
-import { seedDefaultAvatars } from './avatars'
+import {
+  canReadLifestylePhoto,
+  seedDefaultAvatars,
+  seedUserPresetAvatars,
+} from './avatars'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const legacyUserData = app.getPath('userData')
@@ -102,7 +108,24 @@ function registerAvatarProtocol(userData: string): void {
       const abs = path.resolve(userData, rel)
       if (!abs.startsWith(path.resolve(userData, 'avatars') + path.sep))
         return new Response('forbidden', { status: 403 })
-      return await net.fetch(pathToFileURL(abs).toString())
+      const relative = path.relative(userData, abs).split(path.sep).join('/')
+      if (
+        relative.startsWith('avatars/preset/lifestyle/') &&
+        !canReadLifestylePhoto(relative)
+      )
+        return new Response('not found', { status: 404 })
+      const response = await net.fetch(pathToFileURL(abs).toString())
+      if (relative.startsWith('avatars/preset/lifestyle/'))
+        return new Response(response.body, {
+          status: response.status,
+          headers: {
+            'Content-Type':
+              response.headers.get('Content-Type') ||
+              'application/octet-stream',
+            'Cache-Control': 'no-store',
+          },
+        })
+      return response
     } catch {
       return new Response('not found', { status: 404 })
     }
@@ -172,10 +195,20 @@ void app.whenReady().then(() => {
     )
     .run()
   initWorkspace(userData)
+  configureWebNetworkAdapter({
+    fetch: (url, init) =>
+      net.fetch(url, { ...init, bypassCustomProtocolHandlers: true }),
+    renderPage: renderWebPage,
+  })
   seedDefaultAvatars(
     app.isPackaged
       ? path.join(process.resourcesPath, 'default-avatars')
       : path.join(app.getAppPath(), 'resources', 'default-avatars'),
+  )
+  seedUserPresetAvatars(
+    app.isPackaged
+      ? path.join(process.resourcesPath, 'user-avatars')
+      : path.join(app.getAppPath(), 'resources', 'user-avatars'),
   )
   getDb()
     .prepare("UPDATE agent_threads SET status='stopped' WHERE status='running'")

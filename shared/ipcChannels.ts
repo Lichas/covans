@@ -4,6 +4,7 @@ export const CH = {
   getUserProfile: 'user:profile',
   saveUserProfile: 'user:saveProfile',
   pickUserAvatar: 'user:pickAvatar',
+  listUserPresetAvatars: 'user:listPresetAvatars',
   listUserMemories: 'user:memories',
   saveUserMemory: 'user:saveMemory',
   deleteUserMemory: 'user:deleteMemory',
@@ -18,6 +19,7 @@ export const CH = {
   listProviderModels: 'providers:listModels',
   testProvider: 'providers:test',
 
+  listPresetAvatars: 'bots:listPresetAvatars',
   listBots: 'bots:list',
   createBot: 'bots:create',
   updateBot: 'bots:update',
@@ -47,6 +49,7 @@ export const CH = {
 
   listWorkspaceFiles: 'workspace:list',
   openWorkspace: 'workspace:open',
+  revealWorkspaceFile: 'workspace:reveal',
   readWorkspaceFile: 'workspace:read',
 
   getSetting: 'settings:get',

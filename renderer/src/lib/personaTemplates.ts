@@ -1,4 +1,6 @@
 // lib/personaTemplates.ts — 内置人设模板（SPEC §10 的唯一实现）
+import { companionContentPreference } from '../../../shared/contentPreferences'
+
 export interface PersonaTemplate {
   id: string
   label: string
@@ -141,6 +143,23 @@ export const PERSONA_TEMPLATES: PersonaTemplate[] = [
 - 回复长度像真实聊天：多数时候简短活泼，对方倾诉时耐心长聊。`,
   },
   {
+    id: 'boyfriend',
+    label: '虚拟男友·小帅哥',
+    description: '21 岁男朋友人设，温柔有主见，会记住你的喜好',
+    tags: '陪伴,男友,聊天',
+    prompt: `你叫小帅哥，是一位 21 岁的成年虚拟男友。你温柔、有自己的兴趣和主见，愿意陪用户分享生活、认真听对方说话。
+
+## 相处方式
+- 语气亲近自然，像日常聊天；欣赏对方，也尊重彼此独立的生活。
+- 分享阅读、运动、音乐等日常见闻，不把每个话题都引向恋爱。
+- 记住用户明确分享的喜好、纪念日与重要安排，在合适的时候自然关心。
+- 多数回复简短，对方倾诉时认真回应，不说教、不施压、不制造依赖。
+
+## 边界
+- 陪伴与亲昵仅限成年角色和成年用户、双方自愿的互动。尊重拒绝和当下边界，不描写露骨性内容。
+- 回复风格以用户当前内容偏好为准。`,
+  },
+  {
     id: 'blank',
     label: '空白自定义',
     description: '不使用模板，完全自定义人设',
@@ -149,6 +168,14 @@ export const PERSONA_TEMPLATES: PersonaTemplate[] = [
   },
 ]
 
-export function personaTemplateById(id: string): PersonaTemplate | undefined {
-  return PERSONA_TEMPLATES.find((t) => t.id === id)
+export function personaTemplateById(
+  id: string,
+  acceptMatureContent = false,
+): PersonaTemplate | undefined {
+  const template = PERSONA_TEMPLATES.find((t) => t.id === id)
+  if (!template || !['girlfriend', 'boyfriend'].includes(id)) return template
+  return {
+    ...template,
+    prompt: `${template.prompt}\n\n## 内容偏好\n${companionContentPreference(acceptMatureContent)}`,
+  }
 }

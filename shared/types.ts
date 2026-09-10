@@ -33,10 +33,27 @@ export interface ProviderInput {
   default_model?: string
 }
 
+export type BotGender = 'female' | 'male'
+
+export interface PresetAvatar {
+  id: string
+  label: string
+  gender: BotGender
+  avatar: string
+  lifestyle: string[]
+}
+
+export interface UserPresetAvatar {
+  id: string
+  label: string
+  avatar: string
+}
+
 export interface Bot {
   id: string
   name: string
   avatar: string
+  gender: BotGender
   description: string
   tags: string
   system_prompt: string
@@ -56,6 +73,7 @@ export interface Bot {
 export interface BotInput {
   name: string
   avatar?: string
+  gender?: BotGender
   description?: string
   tags?: string
   system_prompt?: string
@@ -107,6 +125,14 @@ export interface Attachment {
   mime: string
 }
 
+export interface WorkspaceArtifact {
+  relPath: string
+  name: string
+  size: number
+  mtime: number
+  operation: 'write' | 'edit'
+}
+
 export interface Message {
   id: string
   chat_id: string
@@ -114,6 +140,7 @@ export interface Message {
   sender_bot_id: string | null
   content: string
   attachments: Attachment[]
+  artifacts: WorkspaceArtifact[]
   mentions: string[]
   status: MessageStatus
   error: string
@@ -140,6 +167,7 @@ export interface WorkspaceFile {
 }
 
 export interface UserProfile {
+  accept_mature_content: boolean
   avatar: string
   name: string
   role: string
@@ -212,6 +240,7 @@ export type CovanEvent =
     }
   | { type: 'chat-updated'; chatId: string }
   | { type: 'bot-updated'; botId: string }
+  | { type: 'workspace-updated'; botId: string }
   | { type: 'system-message'; chatId: string; message: Message }
 
 export interface TestProviderResult {
@@ -225,6 +254,7 @@ export interface CovanApi {
   getUserProfile(): Promise<UserProfile>
   saveUserProfile(profile: UserProfile): Promise<UserProfile>
   pickUserAvatar(): Promise<UserProfile>
+  listUserPresetAvatars(): Promise<UserPresetAvatar[]>
   listUserMemories(): Promise<UserMemory[]>
   saveUserMemory(
     content: string,
@@ -250,6 +280,7 @@ export interface CovanApi {
   listProviderModels(id: string): Promise<string[]>
   testProvider(id: string): Promise<TestProviderResult>
 
+  listPresetAvatars(): Promise<PresetAvatar[]>
   listBots(): Promise<Bot[]>
   createBot(input: BotInput): Promise<Bot>
   updateBot(id: string, patch: Partial<BotInput>): Promise<Bot>
@@ -303,6 +334,7 @@ export interface CovanApi {
 
   listWorkspaceFiles(botId: string): Promise<WorkspaceFile[]>
   openWorkspace(botId: string): Promise<void>
+  revealWorkspaceFile(botId: string, relPath: string): Promise<void>
   readWorkspaceFile(botId: string, relPath: string): Promise<string>
 
   getSetting(key: string): Promise<string>

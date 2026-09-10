@@ -12,12 +12,13 @@ import { useSettingsStore } from '../stores/settingsStore'
 import { useUiStore } from '../stores/uiStore'
 import { Avatar } from './Avatar'
 import { AvatarDialog } from './AvatarSettings'
+import { AvatarLifestyle } from './AvatarLifestyle'
 import { MemoryPanel } from './MemoryPanel'
 import { WorkspacePanel } from './WorkspacePanel'
 import { Field, Toggle, inputCls } from './controls'
 import { PencilIcon, ProviderIcon, UsersIcon } from './icons'
 
-type Tab = 'settings' | 'memory' | 'workspace' | 'model'
+type Tab = 'settings' | 'lifestyle' | 'memory' | 'workspace' | 'model'
 
 /** 失焦保存的文本输入 */
 function BotField({
@@ -389,6 +390,7 @@ export function BotSettingsPanel() {
   }
 
   const tabs: { id: Tab; label: string }[] = [
+    { id: 'lifestyle', label: '生活照' },
     { id: 'settings', label: '设定' },
     { id: 'memory', label: '记忆' },
     { id: 'workspace', label: '工作区' },
@@ -401,12 +403,12 @@ export function BotSettingsPanel() {
       <div className="flex items-center gap-3 border-b border-stone-200 px-4 py-4 dark:border-stone-800">
         <button
           onClick={() => setAvatarOpen(true)}
-          className="group relative shrink-0"
-          title="设计头像"
-          aria-label="设计头像"
+          className="group relative shrink-0 rounded-full focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-emerald-600"
+          title="更换头像"
+          aria-label="更换头像"
         >
           <Avatar name={bot.name} avatar={bot.avatar} size={52} />
-          <span className="absolute inset-0 flex items-center justify-center rounded-full bg-black/35 text-white opacity-0 transition group-hover:opacity-100">
+          <span className="absolute inset-0 flex items-center justify-center rounded-full bg-black/35 text-white opacity-0 transition group-hover:opacity-100 group-focus-visible:opacity-100">
             <PencilIcon width={16} height={16} />
           </span>
         </button>
@@ -433,27 +435,26 @@ export function BotSettingsPanel() {
         </div>
       </div>
 
-      <div className="px-5 py-3 text-[12px] text-stone-500">
-        <button onClick={() => setAvatarOpen(true)}>生成 / 更换头像 ↗</button>
-      </div>
       {error && (
         <p role="alert" className="px-5 pb-2 text-[12px] text-red-500">
           {error}
         </p>
       )}
       <AvatarDialog
+        key={bot.id}
         bot={bot}
         open={avatarOpen}
         onClose={() => setAvatarOpen(false)}
       />
 
       {/* Tabs */}
-      <div className="flex border-b border-stone-200 px-3 dark:border-stone-800">
+      <div className="grid grid-cols-5 border-b border-stone-200 px-2 dark:border-stone-800">
         {tabs.map((t) => (
           <button
             key={t.id}
             onClick={() => setTab(t.id)}
-            className={`relative px-3.5 py-2.5 text-[13px] transition ${
+            aria-pressed={tab === t.id}
+            className={`relative min-w-0 whitespace-nowrap px-1.5 py-2.5 text-[12px] transition ${
               tab === t.id
                 ? 'font-medium text-stone-800 dark:text-stone-100'
                 : 'text-stone-400 hover:text-stone-600 dark:hover:text-stone-300'
@@ -467,11 +468,15 @@ export function BotSettingsPanel() {
         ))}
       </div>
 
-      <div className="scroll-thin min-h-0 flex-1 overflow-y-auto">
-        {tab === 'settings' && <SettingsTab bot={bot} />}
+      <div
+        key={`${bot.id}:${tab}`}
+        className="scroll-thin flex min-h-0 flex-1 flex-col overflow-y-auto"
+      >
+        {tab === 'settings' && <SettingsTab key={bot.id} bot={bot} />}
         {tab === 'memory' && <MemoryPanel botId={bot.id} />}
         {tab === 'workspace' && <WorkspacePanel botId={bot.id} />}
         {tab === 'model' && <ModelTab bot={bot} />}
+        {tab === 'lifestyle' && <AvatarLifestyle bot={bot} />}
       </div>
     </aside>
   )

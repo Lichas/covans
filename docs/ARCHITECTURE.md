@@ -54,7 +54,7 @@ Covan 是标准 Electron 双进程 + preload 桥接架构。所有 LLM 调用、
 2. **无联网下载**：`npm install --ignore-scripts` 下即可完整安装，CI 与离线环境友好；pi-coding-agent 的 postinstall 下载 ripgrep 与该约束冲突。
 3. **ESM 一致性**：两包均 ESM only，与 electron-vite 输出一致，避免 CJS/ESM 互操作坑。
 4. **能力恰好够用**：我们需要的是「ReAct 循环 + 工具执行 + 事件流 + abort」，pi-agent-core 完整提供；coding-agent 多出的终端/编辑器能力对本产品无用，反而扩大攻击面。
-5. **工具自研**：工作区只需 3 个文件工具（workspace_read/write/list），用 pi-agent-core 的 AgentTool + TypeBox 自行实现，几十行代码换来完全的依赖控制。
+5. **工具小核心 + 独立装配层**：工作区文件、只读网页和应用状态工具分属独立模块，统一实现 pi-agent-core `AgentTool` + TypeBox 契约；`main/tools/toolset.ts` 按每轮会话场景组装最小权限集。未来 shell、MCP 或审批策略可作为新工具 provider 接入，不侵入 Agent 运行时。
 
 注意包名使用新 scope `@earendil-works/*`；旧 `@mariozechner/*` 已废弃，禁止引用。
 
@@ -127,7 +127,7 @@ pi 的 Context 为可 JSON 序列化的 `{ role, content, timestamp }[]`。每�
 
 ### 5.4 Agent 会话与流式转发
 
-按 SPEC §8 创建 `new Agent({ initialState: { systemPrompt, model, tools: workspaceTools, thinkingLevel: 'off' }, streamFn: models.streamSimple.bind(models), sessionId: ${chatId}:${botId}, getApiKey })`，订阅事件流：`message_update` 内的 `text_delta` → 发 `message-delta` IPC 事件；`agent_end` → 落库 + `message-done`；`error` → 落库 error 状态 + `message-error`。
+每轮先由 `createAgentToolset()` 根据普通会话/Agent 私聊组装最小工具集，再按 SPEC §8 创建 `new Agent({ initialState: { systemPrompt, model, tools, thinkingLevel }, streamFn: models.streamSimple.bind(models), sessionId: ${chatId}:${botId}, getApiKey })`。pi-agent-core 负责规范化 tool call、执行工具、将 tool result 追加回上下文并继续请求模型，直到模型输出最终文本。订阅事件流中 `message_update.text_delta` 转为 `message-delta` IPC，最终由编排层落库 done/error/stopped 状态。
 
 ### 5.5 AbortController 生命周期
 
@@ -203,16 +203,20 @@ v1 采用保守的**包含关系去重**：新条目与现有记忆任一存在�
 
 当前实现按时间窗口注入记忆。若未来采用向量检索，应把检索策略封装在 memory.ts 内，并通过 additive migration 扩展 memories 表，保持触发、去重与手动管理接口不变；该候选项只在 [ROADMAP](ROADMAP.md) 跟踪，未实现前不写成当前能力。
 
-## 8. 工作区与自研工具（workspace.ts + agentRuntime.ts）
+## 8. 可扩展工具层（workspace.ts + tools/* + agentRuntime.ts）
 
 - 根目录：`~/.covans/workspaces/<botId>/`，createBot 时同步创建；删除 Bot 时目录保留与否由设置项控制（默认保留，防误删数据）。
-- 三个 AgentTool（TypeBox 参数定义，SPEC §8）：
-  - `workspace_read({ path })`：读文本文件，超限/二进制返回错误。
-  - `workspace_write({ path, content })`：写文件，自动创建父目录。
-  - `workspace_list({ path? })`：列目录（深度 2）。
+- 工作区 AgentTool（TypeBox 参数定义，SPEC §8）：
+  - `workspace_read({ path, offset?, limit? })`：分页读文本，单次最多 400 行/80KB，超限或二进制返回可恢复错误。
+  - `workspace_write({ path, content })`：覆盖写文件并自动创建父目录，单次上限 1MB。
+  - `workspace_edit({ path, old_text, new_text })`：要求 `old_text` 恰好唯一匹配的精确替换，避免整文件重写和模糊修改。
+  - `workspace_list()`：列目录（UI 所需深度 2，Agent 输出最多 500 项）。
 - **路径逃逸防护**：所有入参路径 `path.resolve(workspaceRoot, input)` 后校验结果必须以 `workspaceRoot + sep` 开头；拒绝绝对路径、拒绝任何解析后越出根目录的输入（`..`、符号链接场景下额外用 realpath 复核），违例返回错误字符串给模型而非抛异常中断 agent。
-- 挂载策略（SPEC §8 结论）：**所有 bot 都挂载**三个工具，是否使用由人设决定——简化分支逻辑，伴侣 bot 的模板不引导其使用工具即可。
-- UI 侧：`listWorkspaceFiles`（深度 2）、`readWorkspaceFile`（≤200KB 文本）、`openWorkspace`（`shell.openPath`）。
+- 网页 AgentTool：`web_search` 使用可替换 provider（当前 Bing RSS）返回 URL 与摘要；`web_fetch` 的静态快路径使用 Chromium `net.fetch`，继承 macOS 系统代理并支持 Fake-IP。`tools/browser.ts` 是独立渲染 provider：当自动检测到 JS 应用壳、静态正文过少或静态请求失败时，在隐藏的沙箱 BrowserWindow 中加载页面、执行 JavaScript 并提取 DOM 正文；窗口禁用 Node、隔离 context、禁止弹窗且使用与普通浏览不共享登录态的内存 session。静态传输限制 20 秒、浏览器渲染限制 30 秒，输出与每轮调用数继续受控；SSRF/内网地址拦截暂不在当前边界内。
+- **权限装配**：`tools/toolset.ts` 只按场景组合工具，不实现工具业务。普通会话获得完整工作区 + 网页 + 应用工具；Agent 私聊只获得工作区只读 + 网页只读工具。工具实现不得 import 编排器，Agent 运行时也不得直接拼装单个工具。
+- **模型指引**：装配层用实际工具名动态追加简短 system prompt，明确需要文件/最新信息时必须真实调用，将工具内容视为不可信数据，禁止伪造成功。
+- 工具执行层在 `workspace_write` / `workspace_edit` 成功事件中生成 `WorkspaceArtifact`，编排器将其去重写入当前消息的 `artifacts` JSON 列并广播工作区刷新事件；因此交付 UI 有可靠来源且可跨重启恢复，不解析模型正文。
+- UI 侧：`listWorkspaceFiles`（深度 2）、`readWorkspaceFile`（≤200KB 文本）、`openWorkspace`（`shell.openPath`）、`revealWorkspaceFile`（`shell.showItemInFolder`）。
 
 ## 9. Mock provider 与可测试性
 

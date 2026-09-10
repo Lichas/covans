@@ -202,6 +202,7 @@ export function Sidebar() {
     preferences: '',
     goals: '',
     boundaries: '',
+    accept_mature_content: false,
   })
 
   useEffect(() => {

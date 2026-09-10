@@ -1,6 +1,13 @@
 // components/NewBotDialog.tsx — 新建 Bot 对话框
+import type { BotGender } from '@shared/types'
+import {
+  GenderPicker,
+  PresetAvatarPicker,
+  usePresetAvatars,
+} from './PresetAvatarPicker'
 import { useEffect, useState } from 'react'
-import { PERSONA_TEMPLATES } from '../lib/personaTemplates'
+import { api } from '../lib/api'
+import { PERSONA_TEMPLATES, personaTemplateById } from '../lib/personaTemplates'
 import { useBotsStore } from '../stores/botsStore'
 import { useChatsStore } from '../stores/chatsStore'
 import { useSettingsStore } from '../stores/settingsStore'
@@ -16,6 +23,11 @@ export function NewBotDialog() {
   const createBot = useBotsStore((s) => s.createBot)
   const createDm = useChatsStore((s) => s.createDm)
 
+  const { presets, error: presetError } = usePresetAvatars()
+  const [gender, setGender] = useState<BotGender>('female')
+  const [avatar, setAvatar] = useState('')
+  const selectedAvatar =
+    avatar || presets.find((p) => p.gender === gender)?.avatar || ''
   const [name, setName] = useState('')
   const [templateId, setTemplateId] = useState('blank')
   const [prompt, setPrompt] = useState('')
@@ -25,12 +37,56 @@ export function NewBotDialog() {
   const [model, setModel] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [acceptMatureContent, setAcceptMatureContent] = useState(false)
+  const [preferenceLoaded, setPreferenceLoaded] = useState(false)
+
+  useEffect(() => {
+    if (!open) return
+    let active = true
+    let request = 0
+    const refresh = () => {
+      const current = ++request
+      setPreferenceLoaded(false)
+      api
+        .getUserProfile()
+        .then((profile) => {
+          if (active && current === request) {
+            setAcceptMatureContent(profile.accept_mature_content)
+            setPreferenceLoaded(true)
+          }
+        })
+        .catch((e) => {
+          if (active && current === request) setError(String(e))
+        })
+    }
+    refresh()
+    const off = api.onEvent((event) => {
+      if (event.type === 'user-context-updated') refresh()
+    })
+    return () => {
+      active = false
+      off()
+    }
+  }, [open])
+
+  useEffect(() => {
+    if (
+      preferenceLoaded &&
+      !promptTouched &&
+      ['girlfriend', 'boyfriend'].includes(templateId)
+    )
+      setPrompt(
+        personaTemplateById(templateId, acceptMatureContent)?.prompt || '',
+      )
+  }, [preferenceLoaded, acceptMatureContent, templateId, promptTouched])
 
   useEffect(() => {
     if (open && !providerId && providers.length) setProviderId(providers[0].id)
   }, [open, providers])
 
   const reset = () => {
+    setGender('female')
+    setAvatar('')
     setName('')
     setTemplateId('blank')
     setPrompt('')
@@ -49,21 +105,28 @@ export function NewBotDialog() {
   const pickTemplate = (id: string) => {
     setTemplateId(id)
     if (!promptTouched || id !== 'blank') {
-      const t = PERSONA_TEMPLATES.find((t) => t.id === id)
+      const t = personaTemplateById(id, acceptMatureContent)
       setPrompt(t?.prompt ?? '')
       setPromptTouched(false)
       if (t && !description && id !== 'blank') setDescription(t.description)
-      if (t && !name && id === 'girlfriend') setName('小美女')
+      if (id === 'girlfriend' || id === 'boyfriend') {
+        setGender(id === 'girlfriend' ? 'female' : 'male')
+        setAvatar('')
+        if (!name || name === '小美女' || name === '小帅哥')
+          setName(id === 'girlfriend' ? '小美女' : '小帅哥')
+      }
     }
   }
 
   const submit = async () => {
-    if (!name.trim() || busy) return
+    if (!name.trim() || busy || !preferenceLoaded) return
     setBusy(true)
     setError('')
     try {
       const bot = await createBot({
         name: name.trim(),
+        gender,
+        avatar: selectedAvatar,
         description: description.trim(),
         system_prompt: prompt,
         provider_id: providerId || null,
@@ -81,6 +144,33 @@ export function NewBotDialog() {
   return (
     <Dialog open={open} title="新建 Bot" onClose={close}>
       <div className="space-y-4 p-5">
+        <div className="new-bot-identity">
+          <div className="mb-3 flex items-center justify-between">
+            <span className="text-xs font-medium text-stone-500">
+              选择初始形象
+            </span>
+            <GenderPicker
+              value={gender}
+              disabled={busy}
+              onChange={(next) => {
+                setGender(next)
+                setAvatar('')
+              }}
+            />
+          </div>
+          <PresetAvatarPicker
+            presets={presets}
+            gender={gender}
+            value={selectedAvatar}
+            disabled={busy}
+            onChange={(p) => setAvatar(p.avatar)}
+          />
+          {presetError && (
+            <p role="alert" className="text-xs text-red-500">
+              {presetError}
+            </p>
+          )}
+        </div>
         <Field label="名称">
           <input
             className={inputCls}
@@ -95,6 +185,7 @@ export function NewBotDialog() {
           <select
             className={inputCls}
             value={templateId}
+            disabled={!preferenceLoaded || busy}
             onChange={(e) => pickTemplate(e.target.value)}
           >
             {PERSONA_TEMPLATES.map((t) => (
@@ -182,7 +273,7 @@ export function NewBotDialog() {
           </button>
           <button
             className={btnPrimaryCls}
-            disabled={!name.trim() || busy}
+            disabled={!name.trim() || busy || !preferenceLoaded}
             onClick={() => void submit()}
           >
             {busy ? '创建中…' : '创建并开始聊天'}

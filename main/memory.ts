@@ -1,4 +1,5 @@
 // main/memory.ts — 记忆系统（SPEC §6）：注入拼接 + 自动提取
+import { companionContentPreference } from '../shared/contentPreferences'
 import type { Bot, Memory, Message } from '../shared/types'
 import * as db from './db'
 import { completeOnce } from './agentRuntime'
@@ -25,9 +26,15 @@ export function buildSystemPrompt(
   )
   const profile = db.getUserProfile()
   const about = Object.entries(profile)
-    .filter(([key, value]) => key !== 'avatar' && value.trim())
+    .filter(
+      ([key, value]) =>
+        key !== 'avatar' && typeof value === 'string' && value.trim(),
+    )
     .map(([key, value]) => `${key}: ${value}`)
     .join('\n')
+  parts.push(
+    `## 当前内容偏好（优先于人设中的旧偏好）\n${companionContentPreference(profile.accept_mature_content)}\n此偏好只调节已有伴侣关系的交流风格，工作与普通对话保持原有用途；随时尊重用户当下表达的边界。`,
+  )
   const sharedMemories = db.listUserMemories(60)
   if (about || sharedMemories.length)
     parts.push(
