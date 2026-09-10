@@ -161,6 +161,13 @@ console.log('\n[1b] 成熟内容偏好与伴侣模板')
     !prompt.includes('accept_mature_content:'),
     '原始布尔字段不作为用户资料文本发送',
   )
+  assert(
+    prompt.includes('必须先用 list_bots 找到准确 ID，再调用 agent_private_chat') &&
+      prompt.includes('只有本轮确实收到 agent_private_chat 的工具结果') &&
+      prompt.includes('禁止自行模拟、代写或编造另一位 Bot 的回答') &&
+      prompt.includes('只能依据本轮实际工具执行结果回答'),
+    '系统提示词要求跨 Bot 咨询必须真实调用工具且禁止伪造结果',
+  )
   db.deleteBot(bot.id)
   db.setSetting('user_profile', '')
 }
