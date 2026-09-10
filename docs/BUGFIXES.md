@@ -2,6 +2,13 @@
 
 这里只记录值得长期保留的缺陷知识：症状、根因、修复和防回归方式。面向用户的变化写入根目录 `CHANGELOG.md`，不在这里重复发布说明。
 
+## 2026-09-10 · LM Studio 无法识别本轮 user query
+
+- **症状**：用户在单聊发送“继续呢”等正常消息后，LM Studio/Qwen 返回 Jinja template 错误 `No user query found in messages`。
+- **根因**：数据库和 pi 历史中存在 user 消息，但运行时把它随历史预填给新 Agent，再调用 `agent.continue()`；部分 LM Studio 模板只把本轮显式 prompt 识别为 user query，无法兼容这种 continuation 启动方式。
+- **修复**：Agent 初始历史只保留到最新输入之前，最新 user/toolResult 消息改由 `agent.prompt(message)` 显式提交；新增默认关闭的隐私安全本地观测，记录历史与最终 payload 的角色摘要、续发结果及错误分类。
+- **回归**：`npm run test:context` 的 OpenAI-compatible fixture 断言首个真实 Agent payload 最后一条为 user，并验证日志包含 `payload_last_role=user`，且不含已知聊天正文。
+
 ## 2026-09-10 · 私聊自然追问复述并暴露分段机制
 
 - **症状**：Bot 已在主回复中完整回答，随后却从开头复述，还可能说“下一条来了”“重新来”等暴露内部调度的话。

@@ -127,7 +127,7 @@ pi 的 Context 为可 JSON 序列化的 `{ role, content, timestamp }[]`。每�
 
 ### 5.4 Agent 会话与流式转发
 
-每轮先由 `createAgentToolset()` 根据普通会话/Agent 私聊组装最小工具集，再按 SPEC §8 创建 `new Agent({ initialState: { systemPrompt, model, tools, thinkingLevel }, streamFn: models.streamSimple.bind(models), sessionId: ${chatId}:${botId}, getApiKey })`。pi-agent-core 负责规范化 tool call、执行工具、将 tool result 追加回上下文并继续请求模型，直到模型输出最终文本。订阅事件流中 `message_update.text_delta` 转为 `message-delta` IPC，最终由编排层落库 done/error/stopped 状态。
+每轮先由 `createAgentToolset()` 根据普通会话/Agent 私聊组装最小工具集，再按 SPEC §8 创建 `new Agent({ initialState: { systemPrompt, model, tools, thinkingLevel }, streamFn: models.streamSimple.bind(models), sessionId: ${chatId}:${botId}, getApiKey })`。持久历史初始化到最新输入之前，最新 user/toolResult 通过 `agent.prompt(message)` 显式提交，避免部分 LM Studio Jinja 模板无法从 `agent.continue()` 的预填上下文识别本轮 query。pi-agent-core 负责规范化 tool call、执行工具、将 tool result 追加回上下文并继续请求模型，直到模型输出最终文本。订阅事件流中 `message_update.text_delta` 转为 `message-delta` IPC，最终由编排层落库 done/error/stopped 状态。
 
 ### 5.5 AbortController 生命周期
 
@@ -135,6 +135,10 @@ pi 的 Context 为可 JSON 序列化的 `{ role, content, timestamp }[]`。每�
 - 终态（done/error/stopped）时从 set 移除并置空；`stopChat(chatId)` 遍历该 chat 的 set 逐个 abort，随后清空。
 - 消息状态机：创建 streaming → abort 时若已有 delta 落库为 stopped（保留已输出内容），若尚无内容则置 error 文案「已停止」；正常完成置 done。
 - 应用退出前统一 abort 全部 set，避免悬挂请求。
+
+### 5.6 本地观测
+
+`observability.ts` 是主进程唯一的诊断日志出口。它每次写入时读取 `local_observability` 开关，因而无需重启即可启停；所有 `*_id` 字段先做 SHA-256 截断匿名化。Agent 运行时记录历史和最终 Provider payload 的角色/长度摘要、HTTP 状态、耗时及归一化错误码，编排器记录自然续发候选的接受或拒绝原因。调用方只可传结构化元数据，禁止传正文、prompt、工具内容和完整错误文本。日志写入或轮转失败静默，不得影响聊天。
 
 ## 6. 群聊编排协议详细设计（orchestrator.ts）
 

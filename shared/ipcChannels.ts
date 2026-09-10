@@ -54,6 +54,7 @@ export const CH = {
 
   getSetting: 'settings:get',
   setSetting: 'settings:set',
+  openObservabilityLogs: 'settings:openObservabilityLogs',
 
   event: 'covan:event', // main → renderer 推送通道
 } as const

@@ -21,6 +21,7 @@ interface SettingsState {
   setTheme: (t: ThemeMode) => Promise<void>
   getSettingValue: (key: string, fallback?: string) => string
   setSettingValue: (key: string, value: string) => Promise<void>
+  openObservabilityLogs: () => Promise<void>
   loadProviders: () => Promise<void>
   saveProvider: (p: ProviderInput) => Promise<Provider>
   deleteProvider: (id: string) => Promise<void>
@@ -43,11 +44,18 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
     init: async () => {
       try {
         const get = (k: string) => api.getSetting(k).catch(() => '')
-        const [rawTheme, autoReview, reviewRules, naturalFollowUp] = await Promise.all([
+        const [
+          rawTheme,
+          autoReview,
+          reviewRules,
+          naturalFollowUp,
+          localObservability,
+        ] = await Promise.all([
           get('theme'),
           get('auto_review'),
           get('review_rules'),
           get('natural_follow_up'),
+          get('local_observability'),
         ])
         const theme = rawTheme === 'light' || rawTheme === 'dark' ? rawTheme : 'system'
         set({
@@ -58,6 +66,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
             auto_review: autoReview,
             review_rules: reviewRules,
             natural_follow_up: naturalFollowUp,
+            local_observability: localObservability,
           },
         })
         applyTheme(theme)
@@ -80,6 +89,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
       set({ settings: { ...get().settings, [key]: value } })
       await api.setSetting(key, value)
     },
+
+    openObservabilityLogs: () => api.openObservabilityLogs(),
 
     loadProviders: async () => {
       try {

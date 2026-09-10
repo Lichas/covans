@@ -23,6 +23,12 @@ const PROVIDER_KINDS = PROVIDER_PRESETS
 function GeneralSection() {
   const theme = useSettingsStore((s) => s.theme)
   const setTheme = useSettingsStore((s) => s.setTheme)
+  const settings = useSettingsStore((s) => s.settings)
+  const setSettingValue = useSettingsStore((s) => s.setSettingValue)
+  const openObservabilityLogs = useSettingsStore(
+    (s) => s.openObservabilityLogs,
+  )
+  const localObservability = settings['local_observability'] === '1'
   const options: { value: ThemeMode; label: string }[] = [
     { value: 'system', label: '跟随系统' },
     { value: 'light', label: '浅色' },
@@ -49,6 +55,30 @@ function GeneralSection() {
             </button>
           ))}
         </div>
+      </div>
+      <div className="space-y-3 rounded-xl border border-stone-200 px-3.5 py-3 dark:border-stone-700">
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <div className="text-[13px] text-stone-700 dark:text-stone-200">
+              本地观测日志
+            </div>
+            <div className="mt-0.5 max-w-[380px] text-[11.5px] leading-relaxed text-stone-400">
+              记录模型、角色序列、长度、耗时、续发结果和错误分类；不记录聊天正文、提示词或 API Key。默认关闭。
+            </div>
+          </div>
+          <Toggle
+            checked={localObservability}
+            onChange={(value) =>
+              void setSettingValue('local_observability', value ? '1' : '0')
+            }
+          />
+        </div>
+        <button
+          className={btnGhostCls}
+          onClick={() => void openObservabilityLogs()}
+        >
+          打开日志目录
+        </button>
       </div>
       <div>
         <div className="mb-2 text-[13px] font-medium text-stone-700 dark:text-stone-200">

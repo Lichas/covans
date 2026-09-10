@@ -31,6 +31,11 @@ import * as db from './db'
 import { mockComplete, mockStream } from './mockProvider'
 import { appendToolGuidance, createAgentToolset } from './tools/toolset'
 import { describeWorkspaceArtifact } from './workspace'
+import {
+  classifyObservationError,
+  observe,
+  type ObservationFields,
+} from './observability'
 
 export interface AgentCallbacks {
   onImages?(images: Attachment[]): void
@@ -448,6 +453,45 @@ function lastUserText(messages: PiMessage[]): string {
   return ''
 }
 
+function piContentLength(message: PiMessage): number {
+  if (typeof message.content === 'string') return message.content.length
+  return message.content.reduce((total, part) => {
+    if (part.type === 'text') return total + part.text.length
+    if (part.type === 'thinking') return total + part.thinking.length
+    return total
+  }, 0)
+}
+
+function historyObservation(messages: PiMessage[]): ObservationFields {
+  const roles = messages.map((message) => message.role)
+  return {
+    message_count: messages.length,
+    roles,
+    text_lengths: messages.map(piContentLength),
+    last_role: roles.at(-1) ?? 'none',
+    last_user_index: roles.lastIndexOf('user'),
+  }
+}
+
+function payloadObservation(payload: unknown): ObservationFields {
+  if (!payload || typeof payload !== 'object')
+    return { payload_kind: typeof payload }
+  const value = payload as Record<string, unknown>
+  const messages = Array.isArray(value.messages) ? value.messages : []
+  const roles = messages.map((message) => {
+    if (!message || typeof message !== 'object') return 'invalid'
+    const role = (message as Record<string, unknown>).role
+    return typeof role === 'string' ? role : 'missing'
+  })
+  return {
+    payload_message_count: messages.length,
+    payload_roles: roles,
+    payload_last_role: roles.at(-1) ?? 'none',
+    payload_last_user_index: roles.lastIndexOf('user'),
+    payload_tool_count: Array.isArray(value.tools) ? value.tools.length : 0,
+  }
+}
+
 async function runMockAgent(
   bot: Bot,
   historyMessages: PiMessage[],
@@ -478,6 +522,7 @@ async function runPiAgent(
   signal: AbortSignal,
 ): Promise<void> {
   const { models, model, apiKey, provider } = resolveModel(bot)
+  const startedAt = Date.now()
   if (
     !model.input.includes('image') &&
     historyMessages.some(
@@ -505,13 +550,25 @@ async function runPiAgent(
     ),
     tools,
   )
+  const promptMessage = historyMessages.at(-1)
+  if (!promptMessage || promptMessage.role === 'assistant')
+    throw new Error('生成历史最后一条必须是 user 或 toolResult 消息')
+  observe('agent.run.started', {
+    chat_id: chatId,
+    bot_id: bot.id,
+    provider_kind: provider.kind,
+    model: model.id,
+    ...historyObservation(historyMessages),
+  })
   const agent = new Agent({
     initialState: {
       systemPrompt,
       model,
       tools,
       thinkingLevel: effort,
-      messages: historyMessages,
+      // 把最后一条用户输入作为本轮显式 prompt，而不是依赖 provider
+      // 从预填历史中推断 query；部分 LM Studio Jinja 模板不支持后者。
+      messages: historyMessages.slice(0, -1),
     },
     streamFn: (m, context, options) =>
       models.streamSimple(m, context, {
@@ -523,6 +580,25 @@ async function runPiAgent(
       }),
     sessionId: `${chatId}:${bot.id}`,
     getApiKey: async () => apiKey || undefined,
+    onPayload: (payload) => {
+      observe('provider.payload.ready', {
+        chat_id: chatId,
+        bot_id: bot.id,
+        provider_kind: provider.kind,
+        model: model.id,
+        ...payloadObservation(payload),
+      })
+      return undefined
+    },
+    onResponse: (response) => {
+      observe('provider.response.received', {
+        chat_id: chatId,
+        bot_id: bot.id,
+        provider_kind: provider.kind,
+        model: model.id,
+        status: response.status,
+      })
+    },
   })
 
   let acc = ''
@@ -565,7 +641,7 @@ async function runPiAgent(
 
   try {
     if (signal.aborted) return
-    await agent.continue()
+    await agent.prompt(promptMessage)
   } catch (e) {
     sawError = e instanceof Error ? e.message : String(e)
   } finally {
@@ -576,14 +652,39 @@ async function runPiAgent(
   const lastAssistant: AssistantMessage | undefined = assistants.at(-1)
   if (signal.aborted || lastAssistant?.stopReason === 'aborted') return // stopped
   if (sawError) {
+    observe('agent.run.failed', {
+      chat_id: chatId,
+      bot_id: bot.id,
+      provider_kind: provider.kind,
+      model: model.id,
+      duration_ms: Date.now() - startedAt,
+      error_code: classifyObservationError(sawError),
+    })
     callbacks.onError(sawError)
     return
   }
   if (lastAssistant && lastAssistant.stopReason === 'error') {
+    observe('agent.run.failed', {
+      chat_id: chatId,
+      bot_id: bot.id,
+      provider_kind: provider.kind,
+      model: model.id,
+      duration_ms: Date.now() - startedAt,
+      error_code: classifyObservationError(lastAssistant.errorMessage),
+    })
     callbacks.onError(lastAssistant.errorMessage || '生成失败')
     return
   }
   const full = acc || (lastAssistant ? contentText(lastAssistant.content) : '')
+  observe('agent.run.completed', {
+    chat_id: chatId,
+    bot_id: bot.id,
+    provider_kind: provider.kind,
+    model: model.id,
+    duration_ms: Date.now() - startedAt,
+    output_chars: full.length,
+    stop_reason: lastAssistant?.stopReason ?? 'unknown',
+  })
   callbacks.onDone(full)
 }
 

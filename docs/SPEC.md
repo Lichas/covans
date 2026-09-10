@@ -191,6 +191,7 @@ interface CovanApi {
   // settings
   getSetting(key: string): Promise<string>;
   setSetting(key: string, value: string): Promise<void>;
+  openObservabilityLogs(): Promise<void>;
 
   // 事件订阅（返回取消订阅函数）
   onEvent(cb: (ev: CovanEvent) => void): () => void;
@@ -222,6 +223,10 @@ type CovanEvent =
 7. 流式 delta → `message-delta`；完成 → 落库 + `message-done`。轮次完成后异步刷新群聊前文总结，并触发长期记忆提取。
 
 单聊（dm）：直接调用该 bot agent。设置项 `natural_follow_up` 默认开启；开启时主回复提示要求按即时聊天节奏输出：较长内容先发送一个自然完整的语义段，一条即可回答时仍完整回答。主回复完成后，Bot 通过轻量 completion 同时返回 `SKIP` 或 `REPLY\n<候选短消息>`；仅在仍有未完成的新内容、遗漏重要具体信息或存在必须由用户回答的明确问题时追加，最多 2 条。候选在写入消息前必须通过 240 字上限、近期回复长片段去重和调度元话术过滤；完整回答、只能复述改写、寒暄、泛泛关心、格式无效、判断失败、停止或主回复失败都不追加。跟进不再对以 assistant 消息结尾的历史调用 `agent.continue()`。
+
+普通 Agent 生成不再把最新用户消息预填进历史后调用 `agent.continue()`；历史只初始化到上一条消息，最新的 user/toolResult 通过 `agent.prompt(message)` 显式开始本轮，兼容要求本轮必须存在 user query 的 LM Studio Jinja 模板。
+
+设置项 `local_observability` 默认关闭。开启后，主进程向 `<userData>/logs/observability.jsonl` 写入 JSON Lines 结构化事件：运行阶段、Provider/模型、匿名化后的 chat/bot/message ID、角色序列、各消息字符数、payload 最后角色及 user 索引、耗时、输出长度、HTTP 状态、续发接受/拒绝原因和归一化错误码。禁止写入消息正文、prompt、工具输入输出、API Key、Provider 完整错误文本；单文件 5MB 后轮转为 `.1`，仅保留当前文件和一份历史。`openObservabilityLogs` 只打开日志目录。
 
 ## 6. 记忆系统（memory.ts）
 

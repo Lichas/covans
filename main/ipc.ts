@@ -34,6 +34,7 @@ import {
   readWorkspaceFile,
   resolveWorkspaceFile,
 } from './workspace'
+import { observabilityDirectory } from './observability'
 
 // ---------- 参数校验 ----------
 
@@ -412,5 +413,9 @@ export function registerIpc(): void {
     assertStr(key, 'key')
     if (typeof value !== 'string') throw new Error('参数 value 必须是字符串')
     db.setSetting(key, value)
+  })
+  handle(CH.openObservabilityLogs, async () => {
+    const err = await shell.openPath(observabilityDirectory())
+    if (err) throw new Error(err)
   })
 }

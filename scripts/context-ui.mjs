@@ -375,8 +375,22 @@ try {
   await expect.poll(() => page.evaluate(() => window.covan.getSetting('natural_follow_up'))).toBe('0')
   await naturalFollowUpSwitch.click()
   await expect.poll(() => page.evaluate(() => window.covan.getSetting('natural_follow_up'))).toBe('1')
+  await page.getByRole('button', { name: '通用', exact: true }).click()
+  const observabilityCard = page
+    .getByText('本地观测日志', { exact: true })
+    .locator('xpath=../..')
+  const observabilitySwitch = observabilityCard.getByRole('switch')
+  await expect(observabilitySwitch).toHaveAttribute('aria-checked', 'false')
+  await observabilitySwitch.click()
+  await expect
+    .poll(() =>
+      page.evaluate(() => window.covan.getSetting('local_observability')),
+    )
+    .toBe('1')
   await page.keyboard.press('Escape')
-  console.log('✓ Natural follow-up setting defaults on, persists, and can be disabled')
+  console.log(
+    '✓ Natural follow-up and privacy-safe local observability settings persist',
+  )
 
   sequence = [
     {
@@ -470,6 +484,11 @@ try {
     r.body.tools?.some((tool) => tool.function?.name === 'web_search'),
   )
   assert.ok(normalToolRequest, '普通 Agent 请求应挂载网页工具')
+  assert.equal(
+    normalToolRequest.body.messages.at(-1)?.role,
+    'user',
+    '最新用户输入应作为本轮显式 query 发给 OpenAI-compatible/LM Studio',
+  )
   assert.ok(
     [
       'workspace_read',
@@ -611,8 +630,16 @@ try {
   await page.getByRole('button', { name: '删除记忆' }).first().click()
   await expect(page.locator('.user-memory-row')).toHaveCount(1)
   assert.deepEqual(errors, [])
+  const observationLog = fs.readFileSync(
+    path.join(profile, 'logs', 'observability.jsonl'),
+    'utf8',
+  )
+  assert.match(observationLog, /"event":"agent\.run\.started"/)
+  assert.match(observationLog, /"event":"provider\.payload\.ready"/)
+  assert.match(observationLog, /"payload_last_role":"user"/)
+  assert.doesNotMatch(observationLog, /请改名为小蓝|文件工具已连通|API Key/)
   console.log(
-    '✓ Private-chat card cancellation with partial content, error handling, no self-chat, memory deletion',
+    '✓ Private-chat errors and privacy-safe local observation metadata',
   )
   console.log('Context UI regression passed. Screenshots: ' + artifacts)
 } catch (e) {

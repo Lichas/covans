@@ -339,6 +339,7 @@ export interface CovanApi {
 
   getSetting(key: string): Promise<string>
   setSetting(key: string, value: string): Promise<void>
+  openObservabilityLogs(): Promise<void>
 
   onEvent(cb: (ev: CovanEvent) => void): () => void
 }

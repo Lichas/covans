@@ -105,6 +105,7 @@ const api: CovanApi = {
   getSetting: (key: string) => ipcRenderer.invoke(CH.getSetting, key),
   setSetting: (key: string, value: string) =>
     ipcRenderer.invoke(CH.setSetting, key, value),
+  openObservabilityLogs: () => ipcRenderer.invoke(CH.openObservabilityLogs),
 
   // 事件订阅（返回取消订阅函数）
   onEvent: (cb: (ev: CovanEvent) => void) => {

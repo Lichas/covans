@@ -11,6 +11,7 @@ import * as db from './db'
 import { abortChat, completeOnce, runAgent } from './agentRuntime'
 import { buildSystemPrompt, noteNewMessages, type GroupContext } from './memory'
 import { emitEvent as emit, setEventEmitter } from './events'
+import { classifyObservationError, observe } from './observability'
 
 export type EmitFn = (ev: CovanEvent) => void
 
@@ -515,25 +516,39 @@ function substantiallyRepeatsRecentReply(
   })
 }
 
+type FollowUpCandidate = {
+  content: string | null
+  outcome:
+    | 'accepted'
+    | 'skip'
+    | 'invalid_format'
+    | 'empty'
+    | 'too_long'
+    | 'meta_language'
+    | 'duplicate'
+}
+
 function parseNaturalFollowUpCandidate(
   raw: string,
   recentReplies: Message[],
-): string | null {
+): FollowUpCandidate {
   const trimmed = raw.trim()
-  if (/^SKIP\b/i.test(trimmed)) return null
+  if (/^SKIP\b/i.test(trimmed)) return { content: null, outcome: 'skip' }
   const match = trimmed.match(/^REPLY(?:\s*[:：]\s*|\s*\n+)([\s\S]+)$/i)
-  if (!match) return null
+  if (!match) return { content: null, outcome: 'invalid_format' }
   const candidate = match[1].trim().replace(/\s*\n\s*/g, ' ')
-  if (!candidate || candidate.length > MAX_NATURAL_FOLLOW_UP_CHARS)
-    return null
+  if (!candidate) return { content: null, outcome: 'empty' }
+  if (candidate.length > MAX_NATURAL_FOLLOW_UP_CHARS)
+    return { content: null, outcome: 'too_long' }
   if (
     /(重新来|重发|分段回复|一段一段|下一条(?:来了|再|会|我)|(?:这|上|下)一条消息|接着发|继续发送|待续|别催|回复机制|自然追问)/i.test(
       candidate,
     )
   )
-    return null
-  if (substantiallyRepeatsRecentReply(candidate, recentReplies)) return null
-  return candidate
+    return { content: null, outcome: 'meta_language' }
+  if (substantiallyRepeatsRecentReply(candidate, recentReplies))
+    return { content: null, outcome: 'duplicate' }
+  return { content: candidate, outcome: 'accepted' }
 }
 
 async function draftNaturalFollowUp(
@@ -562,8 +577,24 @@ async function draftNaturalFollowUp(
       decisionTranscript(chatId),
       { signal, reasoning: 'low', maxTokens: 180, temperature: 0 },
     )
-    return parseNaturalFollowUpCandidate(raw, recentReplies)
-  } catch {
+    const parsed = parseNaturalFollowUpCandidate(raw, recentReplies)
+    observe('followup.candidate.evaluated', {
+      chat_id: chatId,
+      bot_id: bot.id,
+      iteration: index + 1,
+      outcome: parsed.outcome,
+      raw_chars: raw.length,
+      candidate_chars: parsed.content?.length ?? 0,
+      recent_reply_count: recentReplies.length,
+    })
+    return parsed.content
+  } catch (error) {
+    observe('followup.candidate.failed', {
+      chat_id: chatId,
+      bot_id: bot.id,
+      iteration: index + 1,
+      error_code: classifyObservationError(error),
+    })
     // 追问是体验增强，判断失败时不影响已经完成的主回复。
     return null
   }
@@ -592,6 +623,11 @@ function publishNaturalFollowUp(
   db.touchChat(chatId, Date.now(), true)
   emit({ type: 'message-done', chatId, message })
   emit({ type: 'chat-updated', chatId })
+  observe('followup.message.published', {
+    chat_id: chatId,
+    bot_id: bot.id,
+    output_chars: content.length,
+  })
 }
 
 async function runNaturalFollowUps(
@@ -733,6 +769,20 @@ async function speakOne(
         db.touchChat(chatId, Date.now(), true)
         emit({ type: 'message-done', chatId, message: msg })
         emit({ type: 'chat-updated', chatId })
+        observe('message.completed', {
+          chat_id: chatId,
+          bot_id: bot.id,
+          phase: responseInstruction.includes('<<natural-followup-primary>>')
+            ? 'dm_primary'
+            : ctx
+              ? 'group'
+              : 'dm',
+          output_chars: finalContent.length,
+          continuation_cue:
+            /(下一条|下条|接着发|继续发|待续|to be continued)/i.test(
+              finalContent,
+            ),
+        })
         completed = true
       },
       onError: (error) => {
@@ -743,6 +793,17 @@ async function speakOne(
         })
         emit({ type: 'message-done', chatId, message: msg })
         emit({ type: 'chat-updated', chatId })
+        observe('message.failed', {
+          chat_id: chatId,
+          bot_id: bot.id,
+          phase: responseInstruction.includes('<<natural-followup-primary>>')
+            ? 'dm_primary'
+            : ctx
+              ? 'group'
+              : 'dm',
+          partial_chars: acc.length,
+          error_code: classifyObservationError(error),
+        })
       },
     },
     { systemPrompt, signal },

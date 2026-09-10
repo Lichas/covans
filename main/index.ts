@@ -13,6 +13,7 @@ import { configureWebNetworkAdapter } from './tools/web'
 import { renderWebPage } from './tools/browser'
 import { registerIpc } from './ipc'
 import { chatImagePath } from './chatImages'
+import { initObservability } from './observability'
 import {
   canReadLifestylePhoto,
   seedDefaultAvatars,
@@ -187,6 +188,7 @@ void app.whenReady().then(() => {
   prepareUserDataDir(userData)
   registerAvatarProtocol(userData)
   initDb(userData)
+  initObservability(userData)
   // A previous process may have exited during generation.
   // Recovery never resumes a network request automatically.
   getDb()
