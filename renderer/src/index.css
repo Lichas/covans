@@ -1334,6 +1334,64 @@ kbd {
   }
 }
 
+.markdown-editor-shell {
+  position: relative;
+  min-height: 360px;
+  overflow: hidden;
+  border: 1px solid rgb(231 229 228);
+  border-radius: 0.75rem;
+  background: white;
+}
+.markdown-editor-highlight,
+.markdown-editor-input {
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  min-height: 360px;
+  margin: 0;
+  padding: 0.8rem;
+  border: 0;
+  font: 12px/1.65 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  tab-size: 2;
+}
+.markdown-editor-highlight {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  color: #57534e;
+  pointer-events: none;
+}
+.markdown-editor-line { min-height: 1.65em; }
+.markdown-editor-input {
+  position: relative;
+  z-index: 1;
+  display: block;
+  resize: vertical;
+  color: transparent;
+  caret-color: #292524;
+  background: transparent;
+  outline: none;
+  -webkit-text-fill-color: transparent;
+}
+.markdown-editor-input::selection { background: rgb(214 228 255 / 0.7); }
+.md-token-heading { color: #7c3aed; font-weight: 700; }
+.md-token-fence { color: #0369a1; }
+.md-token-code { color: #b45309; }
+.md-token-emphasis { color: #047857; font-weight: 600; }
+.md-token-link { color: #2563eb; text-decoration: underline; }
+.md-token-comment { color: #a8a29e; }
+.dark .markdown-editor-shell { border-color: #44403c; background: #292725; }
+.dark .markdown-editor-highlight { color: #d6d3d1; }
+.dark .markdown-editor-input { caret-color: #f5f5f4; }
+.dark .md-token-heading { color: #c4b5fd; }
+.dark .md-token-fence { color: #7dd3fc; }
+.dark .md-token-code { color: #fbbf24; }
+.dark .md-token-emphasis { color: #6ee7b7; }
+.dark .md-token-link { color: #93c5fd; }
+.dark .md-token-comment { color: #78716c; }
+
 /* Chat media uses the same local files for drafts, history and model input. */
 .message-images {
   display: flex;

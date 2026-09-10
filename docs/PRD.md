@@ -104,6 +104,7 @@ Covan 的机会在于：**同一套「Bot（人设 + 记忆 + 工作区 + 模型
 
 **FR-BOT-03 编辑 Bot（P0）**
 - Given 用户在单聊中打开右侧 BotSettingsPanel，When 修改名称/标签/描述/人设/模型/温度/通知开关，Then 变更即时保存并广播 `bot-updated` 事件，后续对话立即生效。
+- Given 用户在设定页查看人设 System Prompt，Then 默认看到已渲染的 Markdown 预览；When 点击铅笔，Then 进入至少 360px 高的编辑器并显示标题、代码围栏、行内代码、强调、链接和注释的语法高亮；When 点击完成，Then 保存修改并返回预览；点击取消则丢弃草稿。
 
 **FR-BOT-04 删除 Bot（P1）**
 - Given 某 Bot 存在历史消息，When 用户删除该 Bot，Then Bot 及其记忆、工作区关联被移除，但 messages 表中其历史消息保留并正常展示（头像降级为占位样式）。

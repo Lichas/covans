@@ -1,5 +1,5 @@
 // components/BotSettingsPanel.tsx — 右栏：Bot 设定 / 记忆 / 工作区
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type RefObject } from 'react'
 import type {
   Bot,
   ChatSummary,
@@ -17,6 +17,7 @@ import { MemoryPanel } from './MemoryPanel'
 import { WorkspacePanel } from './WorkspacePanel'
 import { Field, Toggle, inputCls } from './controls'
 import { PencilIcon, ProviderIcon, UsersIcon } from './icons'
+import { MarkdownContent } from './MarkdownContent'
 
 type Tab = 'settings' | 'lifestyle' | 'memory' | 'workspace' | 'model'
 
@@ -65,13 +66,135 @@ function BotField({
   )
 }
 
+type MarkdownToken = { text: string; className?: string }
+
+function tokenizeMarkdown(line: string): MarkdownToken[] {
+  const tokens: MarkdownToken[] = []
+  const pattern = /(<!--.*?-->|^\s{0,3}#{1,6}\s.*$|```.*$|`[^`]+`|\*\*[^*]+\*\*|__[^_]+__|\*[^*]+\*|_[^_]+_|\[[^\]]+\]\([^)]*\))/g
+  let cursor = 0
+  for (const match of line.matchAll(pattern)) {
+    const index = match.index ?? 0
+    if (index > cursor) tokens.push({ text: line.slice(cursor, index) })
+    const text = match[0]
+    const className = text.trimStart().startsWith('#')
+      ? 'md-token-heading'
+      : text.startsWith('```')
+        ? 'md-token-fence'
+        : text.startsWith('<!--')
+          ? 'md-token-comment'
+          : text.startsWith('`')
+            ? 'md-token-code'
+            : text.startsWith('[')
+              ? 'md-token-link'
+              : 'md-token-emphasis'
+    tokens.push({ text, className })
+    cursor = index + text.length
+  }
+  if (cursor < line.length) tokens.push({ text: line.slice(cursor) })
+  return tokens.length ? tokens : [{ text: ' ' }]
+}
+
+function MarkdownCodeLayer({ value, highlightRef }: { value: string; highlightRef: RefObject<HTMLPreElement> }) {
+  return (
+    <pre ref={highlightRef} aria-hidden="true" className="markdown-editor-highlight selectable-none">
+      {value.split('\n').map((line, index) => (
+        <div key={index} className="markdown-editor-line">
+          {tokenizeMarkdown(line).map((token, tokenIndex) => (
+            <span key={tokenIndex} className={token.className}>{token.text}</span>
+          ))}
+        </div>
+      ))}
+    </pre>
+  )
+}
+
+function MarkdownBotField({
+  label,
+  value,
+  placeholder,
+  onSave,
+  fillRemaining,
+}: {
+  label: string
+  value: string
+  placeholder?: string
+  onSave: (v: string) => void
+  fillRemaining?: boolean
+}) {
+  const [draft, setDraft] = useState(value)
+  const [editing, setEditing] = useState(false)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const highlightRef = useRef<HTMLPreElement>(null)
+  useEffect(() => {
+    if (!editing) setDraft(value)
+  }, [value, editing])
+  const syncScroll = () => {
+    if (textareaRef.current && highlightRef.current) {
+      highlightRef.current.scrollTop = textareaRef.current.scrollTop
+      highlightRef.current.scrollLeft = textareaRef.current.scrollLeft
+    }
+  }
+  const finish = () => {
+    if (draft !== value) onSave(draft)
+    setEditing(false)
+  }
+  const cancel = () => {
+    setDraft(value)
+    setEditing(false)
+  }
+  return (
+    <div className={fillRemaining ? 'flex min-h-0 flex-1 flex-col' : 'block'}>
+      <span className="mb-1 block text-[12px] font-medium text-stone-500 dark:text-stone-400">
+        {label}
+      </span>
+      {editing ? (
+        <div className={fillRemaining ? 'flex min-h-0 flex-1 flex-col space-y-2' : 'space-y-2'}>
+          <div className={`markdown-editor-shell${fillRemaining ? ' flex min-h-0 flex-1' : ''}`}>
+            <MarkdownCodeLayer value={draft} highlightRef={highlightRef} />
+            <textarea
+              ref={textareaRef}
+              autoFocus
+              value={draft}
+              placeholder={placeholder}
+              onChange={(event) => setDraft(event.target.value)}
+              onScroll={syncScroll}
+              spellCheck={false}
+              aria-label="编辑人设 System Prompt"
+              className="markdown-editor-input"
+            />
+          </div>
+          <div className="flex justify-end gap-2">
+            <button type="button" onClick={cancel} className="rounded-lg px-2.5 py-1 text-[11px] text-stone-500 hover:bg-stone-100 dark:hover:bg-stone-700">取消</button>
+            <button type="button" onClick={finish} className="rounded-lg bg-ink px-2.5 py-1 text-[11px] text-white dark:bg-stone-100 dark:text-stone-900">完成</button>
+          </div>
+        </div>
+      ) : (
+        <div className={`relative rounded-xl border border-stone-200 bg-white dark:border-stone-700 dark:bg-stone-800${fillRemaining ? ' flex min-h-0 flex-1 flex-col' : ''}`}>
+          <div className={`markdown-preview scroll-thin overflow-y-auto p-3 pr-11${fillRemaining ? ' min-h-[220px] flex-1' : ' max-h-[360px] min-h-[220px]'}`}>
+            {value.trim() ? <MarkdownContent content={value} /> : <span className="text-[13px] text-stone-400">{placeholder}</span>}
+          </div>
+          <button
+            type="button"
+            onClick={() => setEditing(true)}
+            title="编辑人设"
+            aria-label="编辑人设"
+            className="absolute right-2 top-2 rounded-lg p-1.5 text-stone-400 transition hover:bg-stone-100 hover:text-stone-700 dark:hover:bg-stone-700 dark:hover:text-stone-200"
+          >
+            <PencilIcon width={14} height={14} />
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function SettingsTab({ bot }: { bot: Bot }) {
   const updateBot = useBotsStore((s) => s.updateBot)
   const save = (patch: Parameters<typeof updateBot>[1]) => {
     void updateBot(bot.id, patch).catch(() => undefined)
   }
   return (
-    <div className="space-y-4 p-4">
+    <div className="flex min-h-full flex-col gap-4 p-4 pb-5">
       <div className="flex items-center justify-between">
         <span className="text-[13px] text-stone-600 dark:text-stone-300">
           新消息通知
@@ -90,12 +213,12 @@ function SettingsTab({ bot }: { bot: Bot }) {
         placeholder="开发,后端"
         onSave={(v) => save({ tags: v })}
       />
-      <BotField
+      <MarkdownBotField
         label="人设 System Prompt"
-        multiline
         value={bot.system_prompt}
         placeholder="描述这个 Bot 的身份、能力与说话方式…"
         onSave={(v) => save({ system_prompt: v })}
+        fillRemaining
       />
     </div>
   )
