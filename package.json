@@ -1,6 +1,7 @@
 {
   "name": "covan",
   "version": "0.1.0",
+  "license": "Apache-2.0",
   "private": true,
   "description": "Covan — 多 Bot 智能体聊天桌面应用",
   "main": "out/main/index.js",

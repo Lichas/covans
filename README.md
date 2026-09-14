@@ -1,14 +1,29 @@
 # Covan — 多 Bot 智能体聊天桌面应用
 
-类 Grok Bot 的 Electron + React 桌面应用：创建多个有独立人设、记忆、模型配置与文件工作区的 Bot，与它们单聊，或把它们拉进群组讨论。双场景定位：**工作协作分队**（开发/产品/研究）与 **虚拟伴侣陪伴**。Agent runtime 基于 [pi（earendil-works/pi-mono）](https://github.com/earendil-works/pi) 的统一 LLM 抽象层，支持 30+ 模型供应商。
+一款 Electron + React 多智能体聊天桌面应用。创建多个拥有独立人设、记忆、模型配置和工作区的 Bot，与它们私聊或发起群聊。适用于**工作协作**（开发、产品、研究）和**日常陪伴**。Agent runtime 基于 [pi（earendil-works/pi-mono）](https://github.com/earendil-works/pi) 的统一 LLM 抽象层。
+
+## 截图 Screenshots
+
+![群聊背景与背景选择器 / Group chat with background picker](docs/screenshots/group-backgrounds.png)
+
+<details>
+<summary>更多界面 / More screens</summary>
+
+![Markdown 聊天界面 / Markdown chat](docs/screenshots/chat.png)
+
+![右侧产物预览 / Resizable artifact preview](docs/screenshots/artifact-preview.png)
+
+</details>
 
 ## 功能一览
 
 - **多 Bot 管理**：名称/头像/标签/描述/人设 prompt，新 Bot 从内置头像集中自动分配；内置 8 套人设模板（高级全栈、架构设计师、Code Reviewer、测试员、产品经理、设计师、虚拟女友·小美女、自定义）
 - **拟人化对话节奏**：私聊可在设置中开启「自然追问」，Bot 只在有补充价值时另发 1–2 条短消息；群聊以首轮为起点按需延展讨论，成员每轮重新判断，最多 5 轮并避免复述
 - **群聊回复机制**：「主动回复」让全体成员并发判断是否发言，「顺序回复」让成员逐个判断与回复；判断上下文固定为前文总结 + 最新 5 条消息，支持 @提及强制回复
+- **独立聊天背景**：新群聊随机分配场景背景；群聊和私聊均可单独更换、随机或清除，不同会话互不影响
 - **独立记忆**：每个 Bot 的长期记忆（对话中自动提取 + 手动增删），下次对话自动注入 system prompt
 - **独立工作区与网页工具**：每个 Bot 一个文件目录，Agent 可分页读取、覆盖写入、精确编辑、列目录，也可搜索和读取网页；网页请求继承系统代理并兼容 Fake-IP，动态页会自动用隐藏 Chromium 执行 JavaScript
+- **产物预览**：工作区交付文件在右侧预览 Markdown、HTML、TXT、代码、图片和 PDF；拖动边缘调整预览宽度，也可定位文件或打开工作区
 - **多 LLM Provider**：OpenAI / Anthropic / Google / OpenRouter / Kimi Coding Plan / 智谱 / DeepSeek / LM Studio / 任意 OpenAI 兼容端点（Ollama、vLLM、公司网关）/ 内置 Mock（离线体验）；每 Bot 可绑定不同 provider 与模型
 - **流式输出 / 随时停止 / 错误重试**；主题跟随系统（浅色/深色）
 - **Markdown 阅读体验**：表格、任务列表、行内/块级 LaTeX 公式、代码高亮与代码复制；消息时间与日期分隔；引用回复
@@ -18,11 +33,11 @@
 - **Agent 私聊**：Bot 向另一位 Bot 咨询，消息流中插入私聊卡片，点击浮窗查看真实记录、状态与时间；支持停止，不递归发起私聊
 - **最多 3 个置顶 Bot**：在左侧单聊列表项右键 → 置顶/取消置顶；顶部只显示已置顶头像，没有空槽位
 
-产品、规格、架构与设计文档见 [文档导航](docs/README.md)；版本变化见 [CHANGELOG](CHANGELOG.md)。
+产品、规格、架构与设计文档见 [文档导航](docs/README.md)；版本变化见 [CHANGELOG](CHANGELOG.md)。本项目使用 [Apache License 2.0](LICENSE)。
 
 ## 运行
 
-macOS 可双击仓库根目录的 `start.command`，或运行 `./start.command`。脚本会检查 Node、安装缺失依赖并检查 Electron 原生模块，随后启动应用。当前已在系统 Node 26.5.0 上验证；Electron 仍使用自己的内置 Node，两者 ABI 不混用。
+要求 Node.js >= 22.19。macOS 可双击仓库根目录的 `start.command`，或运行 `./start.command`；脚本会检查并安装缺失依赖，再启动应用。Electron 使用自己的内置 Node，原生模块需要匹配 Electron ABI。
 
 ```bash
 # 要求 Node >= 22.19（pi 包 engines 约束；Electron 38 内置 Node 22）
@@ -31,11 +46,16 @@ npx electron-builder install-app-deps  # 为 Electron 构建原生依赖
 
 npm run dev      # 开发模式（electron-vite dev，热更新）
 npm run build    # 构建 out/
+npm run typecheck # TypeScript 类型检查
 npm run smoke    # 使用 Electron 的 Node 模式验证 Mock Provider 全链路
 npm run test:ui  # 构建并运行独立临时 profile 的真实 Electron 点击回归
-npm run test:context # 关于我/右键置顶/头像/Agent 工具/私聊的真实 Electron 回归
+npm run test:context # 记忆、背景、Agent 工具、产物预览等真实 Electron 回归
+npm run test:avatars # 头像和资料页的真实 Electron 回归
+npm run test:multimodal # 多模态输入的本地模拟回归
 npm run test:local-llm # 可选：连接 localhost:1234 的真实 LM Studio 模型
 ```
+
+Electron UI 回归截图写入 `artifacts/`，测试使用隔离临时 profile 和本地 mock，不读取个人聊天记录或调用付费模型。真实服务测试 `node scripts/multimodal-ui.mjs --kimi` 会使用已有 Kimi 配置并消耗服务额度。
 
 > 开发模式下 Electron 加载 better-sqlite3 需要的是 **Electron 的 ABI** 构建。若 `npm run dev` 报原生模块 ABI 错误，执行：
 > `npx electron-rebuild -f -w better-sqlite3`（或 `npm install electron-rebuild -D` 后运行）。
@@ -81,8 +101,10 @@ main/       Electron 主进程（db / agentRuntime / orchestrator / memory / wor
 preload/    contextBridge 安全桥（window.covan）
 renderer/   React 三栏 UI（stores / components / lib）
 shared/     主↔渲染共享类型与 IPC 通道常量（接口契约）
+resources/  随应用分发的头像、生活照与群聊场景图
 scripts/    冒烟测试与真实 Electron UI 回归
 docs/       PRD / SPEC / 架构 / 设计 / 路线图 / Bugfix 记录
+LICENSE     Apache License 2.0
 AGENTS.md   AI 开发入口、文档权威顺序与工作流
 CHANGELOG.md  面向用户的版本变化
 ```
@@ -93,3 +115,34 @@ CHANGELOG.md  面向用户的版本变化
 - ⚠️ API Key 当前以**明文**存于本地 SQLite，请勿与他人共享该目录；safeStorage 加密已列入 [ROADMAP](docs/ROADMAP.md#provider-密钥保护)
 - 工作区文件工具通过词法路径 + realpath 校验拒绝绝对路径、`..` 和符号链接逃逸；网页工具不携带登录态，限制超时、响应大小和内容类型，当前不拦截内网地址；应用工具不向模型返回 Provider 密钥
 - 私聊仅转发咨询问题，不自动转发主会话；接收方只开放工作区读取/列表工具，禁止修改资料和递归私聊。每轮最多 3 次咨询，每个主会话最多同时运行 3 个
+
+## English
+
+Covan is an Electron + React desktop chat app for working with multiple AI agents. Each Bot has its own persona, memory, model settings, and workspace. Chat privately or bring Bots together in a group.
+
+### Highlights
+
+- Group chats support parallel or sequential replies, mentions, and bounded follow-up rounds.
+- Each chat can have its own background. New groups receive a random scene; users can change, randomize, or clear backgrounds per chat.
+- Agents can work with files inside their own workspaces and search or read public web pages.
+- Delivery cards open a resizable right-side preview for Markdown, HTML, TXT, source code, images, and PDF files.
+- Includes layered memory, streaming responses, Markdown and LaTeX rendering, image attachments, and Agent-to-Agent consultation.
+- Supports OpenAI, Anthropic, Google, OpenRouter, Kimi, Zhipu, DeepSeek, LM Studio, OpenAI-compatible endpoints, and an offline mock provider.
+
+### Quick start
+
+Requirements: Node.js 22.19 or newer. On macOS, run `./start.command` to check dependencies and launch the desktop app. For development:
+
+```bash
+npm install --ignore-scripts
+npx electron-builder install-app-deps
+npm run dev
+```
+
+Run `npm run typecheck`, `npm run smoke`, `npm run test:ui`, and `npm run test:context` for local checks. Electron UI tests use isolated temporary profiles and mock services; screenshots are written to `artifacts/`.
+
+### Privacy and license
+
+Application data is stored locally under `~/.covans/`. Chat content and files sent to a model are processed by the provider configured for that Bot. Provider API keys are currently stored in plaintext in the local SQLite database; do not share that data directory.
+
+This project is licensed under the [Apache License 2.0](LICENSE). Third-party dependencies remain under their respective licenses. See the [documentation index](docs/README.md) and [changelog](CHANGELOG.md) for more details.

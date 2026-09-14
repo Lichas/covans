@@ -467,7 +467,8 @@ try {
       args: {
         path: 'notes/tool-check.md',
         old_text: '文件工具已连通。',
-        new_text: '文件读写与精确编辑已连通。',
+        new_text:
+          '文件读写与精确编辑已连通。\n\n## 本轮交付\n\n- 工作区写入与精确编辑\n- Markdown 内容直接预览\n- 可定位文件并调整预览宽度',
       },
     },
     { name: 'workspace_list', args: {} },
@@ -533,6 +534,7 @@ try {
     ? previewAfterResize.width > previewBeforeResize.width + 40
     : previewAfterResize.width < previewBeforeResize.width - 40
   assert.ok(resized, '产物预览窗应支持调整宽度')
+  await page.screenshot({ path: path.join(artifacts, 'artifact-preview.png') })
   assert.equal(sequence.length, 0)
   assert.equal(
     fs.readFileSync(
@@ -545,7 +547,7 @@ try {
       ),
       'utf8',
     ),
-    '# Tool check\n\n文件读写与精确编辑已连通。',
+    '# Tool check\n\n文件读写与精确编辑已连通。\n\n## 本轮交付\n\n- 工作区写入与精确编辑\n- Markdown 内容直接预览\n- 可定位文件并调整预览宽度',
   )
   assert.equal(
     fs.readFileSync(
