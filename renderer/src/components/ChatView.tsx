@@ -15,6 +15,7 @@ import { useSettingsStore } from '../stores/settingsStore'
 import { useDraftsStore } from '../stores/draftsStore'
 import { api } from '../lib/api'
 import { formatMessageDay, messageDay } from '../lib/format'
+import { groupBackgroundUrl } from '../lib/groupBackground'
 import { Composer } from './Composer'
 import { MessageBubble } from './MessageBubble'
 import { chatDisplayName } from './Sidebar'
@@ -159,9 +160,19 @@ export function ChatView() {
   if (!chat) return <WelcomeView />
   const isGroup = chat.type === 'group'
   const title = chatDisplayName(chat)
+  const backgroundUrl =
+    chat.background_image ? groupBackgroundUrl(chat.background_image) : ''
+  const backgroundStyle = backgroundUrl
+    ? ({
+        '--group-bg-image': `url("${backgroundUrl}")`,
+      } as React.CSSProperties)
+    : undefined
 
   return (
-    <section className="chat-view">
+    <section
+      className={`chat-view ${backgroundUrl ? 'group-background' : ''}`}
+      style={backgroundStyle}
+    >
       <header
         className="chat-header"
         style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}

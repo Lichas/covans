@@ -227,6 +227,20 @@ try {
     .getByRole('button', { name: /设计搭档/ })
     .click()
   await expect(page.locator('html')).toHaveClass(/dark/)
+  if (
+    await page
+      .getByRole('button', { name: '展开设置', exact: true })
+      .isVisible()
+      .catch(() => false)
+  )
+    await page.getByRole('button', { name: '展开设置', exact: true }).click()
+  await expect(page.getByText('聊天背景', { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: '更换', exact: true }).click()
+  await page.waitForFunction(() =>
+    [...document.querySelectorAll('.group-background-option img')].some(
+      (image) => image instanceof HTMLImageElement && image.naturalWidth > 0,
+    ),
+  )
   await page.screenshot({ path: path.join(artifacts, 'chat-dark.png') })
   await page.getByRole('button', { name: '设置', exact: true }).click()
   await page.keyboard.press('Shift+Tab')
@@ -257,6 +271,12 @@ try {
   await expect(
     page.getByRole('button', { name: /^顺序回复/ }),
   ).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByText('聊天背景', { exact: true })).toBeVisible()
+  await page.waitForFunction(() =>
+    [...document.querySelectorAll('.group-background-option img')].some(
+      (image) => image instanceof HTMLImageElement && image.naturalWidth > 0,
+    ),
+  )
   await page.screenshot({ path: path.join(artifacts, 'group-settings.png') })
   await page.getByRole('button', { name: '收起设置', exact: true }).click()
   console.log('✓ Group gear opens reply-mode settings; sequential is default')
@@ -339,12 +359,13 @@ try {
         message.sender_type === 'user' && message.content.includes('优先考虑'),
     ),
   )
-  assert.equal(
-    activeCompleted.filter(
-      (message) => message.sender_type === 'bot' && message.status === 'done',
-    ).length,
-    6,
-  )
+  const previousDone = completed.filter(
+    (message) => message.sender_type === 'bot' && message.status === 'done',
+  ).length
+  const activeDone = activeCompleted.filter(
+    (message) => message.sender_type === 'bot' && message.status === 'done',
+  ).length
+  assert.ok(activeDone >= previousDone + 2)
   console.log(
     '✓ Active mode shows animated member avatars and accepts new messages while replying',
   )

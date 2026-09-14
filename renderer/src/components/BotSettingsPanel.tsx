@@ -18,6 +18,7 @@ import { WorkspacePanel } from './WorkspacePanel'
 import { Field, Toggle, inputCls } from './controls'
 import { PencilIcon, ProviderIcon, UsersIcon } from './icons'
 import { MarkdownContent } from './MarkdownContent'
+import { GROUP_BACKGROUNDS, groupBackgroundUrl } from '../lib/groupBackground'
 
 type Tab = 'settings' | 'lifestyle' | 'memory' | 'workspace' | 'model'
 
@@ -149,7 +150,10 @@ function MarkdownBotField({
       </span>
       {editing ? (
         <div className={fillRemaining ? 'flex min-h-0 flex-1 flex-col space-y-2' : 'space-y-2'}>
-          <div className={`markdown-editor-shell${fillRemaining ? ' flex min-h-0 flex-1' : ''}`}>
+          <div
+            className={`markdown-editor-shell${fillRemaining ? ' flex flex-1' : ''}`}
+            style={{ minHeight: 380, height: 380, flexShrink: 0 }}
+          >
             <MarkdownCodeLayer value={draft} highlightRef={highlightRef} />
             <textarea
               ref={textareaRef}
@@ -188,13 +192,137 @@ function MarkdownBotField({
   )
 }
 
-function SettingsTab({ bot }: { bot: Bot }) {
+function ChatBackgroundPicker({
+  chat,
+  compact,
+}: {
+  chat: ChatSummary
+  compact?: boolean
+}) {
+  const updateChat = useChatsStore((s) => s.updateChat)
+  const [savingBackground, setSavingBackground] = useState<string | null>(null)
+  const [expanded, setExpanded] = useState(!compact)
+  const [error, setError] = useState('')
+  const currentBackground = GROUP_BACKGROUNDS.find(
+    (background) => background.file === chat.background_image,
+  )
+
+  const chooseBackground = async (backgroundImage: string) => {
+    if (backgroundImage === chat.background_image || savingBackground) return
+    setSavingBackground(backgroundImage || 'none')
+    setError('')
+    try {
+      await updateChat(chat.id, { backgroundImage })
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setSavingBackground(null)
+    }
+  }
+
+  const randomizeBackground = () => {
+    const pool = GROUP_BACKGROUNDS.filter(
+      (background) => background.file !== chat.background_image,
+    )
+    const next = pool[Math.floor(Math.random() * pool.length)]?.file
+    if (next) void chooseBackground(next)
+  }
+
+  return (
+    <div className={compact ? 'rounded-xl border border-stone-200 bg-stone-50/70 p-3 dark:border-stone-700 dark:bg-stone-800/40' : ''}>
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <span className="text-[12px] font-medium text-stone-500 dark:text-stone-400">
+          聊天背景
+        </span>
+        <div className="flex items-center gap-1">
+          {compact && (
+            <button
+              type="button"
+              className="rounded-md px-2 py-1 text-[11px] text-stone-500 transition hover:bg-stone-100 hover:text-stone-800 dark:hover:bg-stone-800 dark:hover:text-stone-100"
+              onClick={() => setExpanded((value) => !value)}
+            >
+              {expanded ? '收起' : '更换'}
+            </button>
+          )}
+          {chat.background_image && (
+            <button
+              type="button"
+              className="rounded-md px-2 py-1 text-[11px] text-stone-500 transition hover:bg-stone-100 hover:text-stone-800 disabled:opacity-50 dark:hover:bg-stone-800 dark:hover:text-stone-100"
+              disabled={!!savingBackground}
+              onClick={() => void chooseBackground('')}
+            >
+              清除
+            </button>
+          )}
+          <button
+            type="button"
+            className="rounded-md px-2 py-1 text-[11px] text-stone-500 transition hover:bg-stone-100 hover:text-stone-800 disabled:opacity-50 dark:hover:bg-stone-800 dark:hover:text-stone-100"
+            disabled={!!savingBackground}
+            onClick={randomizeBackground}
+          >
+            随机
+          </button>
+        </div>
+      </div>
+      {compact && (
+        <button
+          type="button"
+          className="chat-background-current"
+          onClick={() => setExpanded((value) => !value)}
+          aria-label="更换聊天背景"
+        >
+          {currentBackground ? (
+            <img
+              src={groupBackgroundUrl(currentBackground.file)}
+              alt=""
+              draggable={false}
+            />
+          ) : (
+            <span aria-hidden="true" />
+          )}
+          <strong>{currentBackground?.label || '无背景'}</strong>
+        </button>
+      )}
+      {expanded && <div className="group-background-grid">
+        {GROUP_BACKGROUNDS.map((background) => {
+          const selected = chat.background_image === background.file
+          return (
+            <button
+              key={background.file}
+              type="button"
+              className="group-background-option"
+              aria-pressed={selected}
+              title={background.label}
+              disabled={!!savingBackground}
+              onClick={() => void chooseBackground(background.file)}
+            >
+              <img
+                src={groupBackgroundUrl(background.file)}
+                alt=""
+                draggable={false}
+              />
+              <span>{background.label}</span>
+              {savingBackground === background.file && <i>保存中</i>}
+            </button>
+          )
+        })}
+      </div>}
+      {error && (
+        <p role="alert" className="mt-2 text-[12px] text-red-500">
+          {error}
+        </p>
+      )}
+    </div>
+  )
+}
+
+function SettingsTab({ bot, chat }: { bot: Bot; chat: ChatSummary }) {
   const updateBot = useBotsStore((s) => s.updateBot)
   const save = (patch: Parameters<typeof updateBot>[1]) => {
     void updateBot(bot.id, patch).catch(() => undefined)
   }
   return (
-    <div className="flex min-h-full flex-col gap-4 p-4 pb-5">
+    <div className="settings-tab-pane flex min-h-full flex-col gap-4 p-4">
       <div className="flex items-center justify-between">
         <span className="text-[13px] text-stone-600 dark:text-stone-300">
           新消息通知
@@ -213,6 +341,7 @@ function SettingsTab({ bot }: { bot: Bot }) {
         placeholder="开发,后端"
         onSave={(v) => save({ tags: v })}
       />
+      {chat.type === 'dm' && <ChatBackgroundPicker chat={chat} compact />}
       <MarkdownBotField
         label="人设 System Prompt"
         value={bot.system_prompt}
@@ -409,7 +538,10 @@ function GroupSettingsPanel({ chat }: { chat: ChatSummary }) {
   ]
 
   return (
-    <aside className="flex h-full w-[320px] shrink-0 flex-col border-l border-stone-200 bg-stone-50/60 dark:border-stone-800 dark:bg-stone-900/40">
+    <aside
+      className="flex h-full w-[320px] shrink-0 flex-col border-l border-stone-200 bg-stone-50/60 dark:border-stone-800 dark:bg-stone-900/40"
+      aria-label="群聊设定"
+    >
       <div className="flex items-center gap-3 border-b border-stone-200 px-4 py-4 dark:border-stone-800">
         <span className="grid h-[46px] w-[46px] shrink-0 place-items-center rounded-full bg-stone-200 text-stone-600 dark:bg-stone-800 dark:text-stone-300">
           <UsersIcon width={20} height={20} />
@@ -470,6 +602,10 @@ function GroupSettingsPanel({ chat }: { chat: ChatSummary }) {
           Covan 会持续保存群聊前文总结。成员判断时只携带该总结与最新 5
           条消息，避免群聊越长越慢。
         </div>
+
+        <div className="mt-6">
+          <ChatBackgroundPicker chat={chat} />
+        </div>
         {error && (
           <p role="alert" className="mt-3 text-[12px] text-red-500">
             {error}
@@ -521,7 +657,10 @@ export function BotSettingsPanel() {
   ]
 
   return (
-    <aside className="flex h-full w-[320px] shrink-0 flex-col border-l border-stone-200 bg-stone-50/60 dark:border-stone-800 dark:bg-stone-900/40">
+    <aside
+      className="flex h-full w-[320px] shrink-0 flex-col border-l border-stone-200 bg-stone-50/60 dark:border-stone-800 dark:bg-stone-900/40"
+      aria-label="Bot 设定"
+    >
       {/* 头部：头像 + 名称 */}
       <div className="flex items-center gap-3 border-b border-stone-200 px-4 py-4 dark:border-stone-800">
         <button
@@ -595,7 +734,7 @@ export function BotSettingsPanel() {
         key={`${bot.id}:${tab}`}
         className="scroll-thin flex min-h-0 flex-1 flex-col overflow-y-auto"
       >
-        {tab === 'settings' && <SettingsTab key={bot.id} bot={bot} />}
+        {tab === 'settings' && <SettingsTab key={bot.id} bot={bot} chat={chat} />}
         {tab === 'memory' && <MemoryPanel botId={bot.id} sceneId={chat.id} />}
         {tab === 'workspace' && <WorkspacePanel botId={bot.id} />}
         {tab === 'model' && <ModelTab bot={bot} />}

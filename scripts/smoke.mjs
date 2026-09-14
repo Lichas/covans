@@ -360,6 +360,11 @@ console.log('\n[3] 建群（默认顺序回复）并发送用户消息')
 const group = db.createGroup('冒烟讨论组', [botA.id, botB.id, botC.id])
 assert(group.type === 'group', '群聊已创建')
 assert(group.reply_mode === 'sequential', '新群默认使用顺序回复')
+assert(
+  typeof group.background_image === 'string' &&
+    group.background_image.endsWith('.png'),
+  '新群随机分配群聊背景',
+)
 const t0 = Date.now()
 await orchestrator.sendUserMessage(
   group.id,
@@ -520,6 +525,15 @@ console.log('\n[3d] 顺序回复：思考中插入新消息并更新当前成员
 
 console.log('\n[4] 单聊（dm）直调')
 const dm = db.createDm(botB.id)
+db.updateChat(dm.id, {
+  backgroundImage: '03-starry-night-milky-way.png',
+})
+assert(
+  db.getChat(dm.id).background_image === '03-starry-night-milky-way.png',
+  'dm 可设置聊天背景',
+)
+db.updateChat(dm.id, { backgroundImage: '' })
+assert(db.getChat(dm.id).background_image === '', 'dm 可清除聊天背景')
 await orchestrator.sendUserMessage(dm.id, '帮我看看这个用例怎么写', [])
 const dmMsgs = db.listMessages(dm.id, undefined, 50)
 assert(
@@ -637,8 +651,11 @@ console.log('\n[6] listChats 摘要')
 const summaries = db.listChats()
 const g = summaries.find((c) => c.id === group.id)
 assert(
-  !!g && g.member_bots.length === 3 && g.preview.length > 0,
-  '群聊摘要含成员与预览',
+  !!g &&
+    g.member_bots.length === 3 &&
+    g.preview.length > 0 &&
+    g.background_image === group.background_image,
+  '群聊摘要含成员、预览与背景',
 )
 
 console.log('\n[7] 邀请 / 隐藏 / 清空聊天记录')

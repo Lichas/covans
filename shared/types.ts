@@ -96,6 +96,7 @@ export interface Chat {
   name: string
   bot_id: string | null
   coordinator_bot_id: string | null
+  background_image: string
   last_message_at: number
   unread: number
   /** 隐藏的单聊保留在本地，可从「我的 Bot」再次打开。 */
@@ -327,6 +328,7 @@ export interface CovanApi {
       name?: string
       coordinatorBotId?: string | null
       replyMode?: GroupReplyMode
+      backgroundImage?: string
     },
   ): Promise<void>
   addChatMembers(chatId: string, botIds: string[]): Promise<void>

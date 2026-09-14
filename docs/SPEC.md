@@ -84,6 +84,7 @@ CREATE TABLE chats (
   name TEXT NOT NULL DEFAULT '',    -- group 必填；dm 空
   bot_id TEXT REFERENCES bots(id),  -- dm 专用
   coordinator_bot_id TEXT REFERENCES bots(id), -- legacy：仅兼容旧库
+  background_image TEXT NOT NULL DEFAULT '', -- 内置聊天背景文件名；群聊新建随机，私聊可手动设置
   last_message_at INTEGER NOT NULL DEFAULT 0,
   unread INTEGER NOT NULL DEFAULT 0,
   hidden INTEGER NOT NULL DEFAULT 0,
@@ -169,10 +170,10 @@ interface CovanApi {
   expandAvatarPrompt(botId: string, direction?: string): Promise<AvatarDesign>;
 
   // chats
-  listChats(): Promise<ChatSummary[]>;                 // 含最后一条消息预览、未读、成员头像
+  listChats(): Promise<ChatSummary[]>;                 // 含最后一条消息预览、未读、成员头像、聊天背景
   createDm(botId: string): Promise<Chat>;
-  createGroup(name: string, memberBotIds: string[], coordinatorBotId?: string): Promise<Chat>; // coordinatorBotId 仅兼容旧调用
-  updateChat(id: string, patch: { name?: string; coordinatorBotId?: string; replyMode?: 'active'|'sequential' }): Promise<void>; // coordinatorBotId 已弃用
+  createGroup(name: string, memberBotIds: string[], coordinatorBotId?: string): Promise<Chat>; // coordinatorBotId 仅兼容旧调用；group 随机分配内置背景
+  updateChat(id: string, patch: { name?: string; coordinatorBotId?: string; replyMode?: 'active'|'sequential'; backgroundImage?: string }): Promise<void>; // coordinatorBotId 已弃用；backgroundImage 必须为空或来自内置背景清单
   addChatMembers(chatId: string, botIds: string[]): Promise<void>;
   hideChat(chatId: string): Promise<void>;
   clearChatMessages(chatId: string): Promise<void>;
@@ -282,7 +283,8 @@ type CovanEvent =
 - 根目录：默认 `~/.covans/workspaces/<botId>/`（测试可用 `COVAN_USER_DATA_DIR` 覆盖），创建 Bot 时自动建。应用数据库、头像和聊天图片同属 `~/.covans/`；目录不存在时启动自动创建。
 - Agent 的文件工具只能使用该目录内的相对路径，词法路径检查后还要用 realpath 防止符号链接逃逸。
 - 面板可列文件（深度 2）、预览文本文件（<=200KB）、`openWorkspace` 打开系统文件夹。
-- `workspace_write` / `workspace_edit` 成功后，把文件元数据结构化记录在当前 Bot 消息的 `artifacts` 中；同一路径在一轮内去重并保留最后操作。聊天内显示独立交付卡，支持文本预览、打开工作区和在系统文件夹中定位；记录随消息持久化，重启后仍可见。写入时广播 `workspace-updated`，已打开的右侧工作区即时刷新。
+- `workspace_write` / `workspace_edit` 成功后，把文件元数据结构化记录在当前 Bot 消息的 `artifacts` 中；同一路径在一轮内去重并保留最后操作。聊天内显示独立交付卡，支持在右侧产物预览窗查看 Markdown、HTML、TXT、代码、图片和 PDF，预览窗可拖拽左边缘调整宽度；也可打开工作区、在系统文件夹中定位。记录随消息持久化，重启后仍可见。写入时广播 `workspace-updated`，已打开的右侧工作区即时刷新。
+- 产物预览的文本类内容仍通过 `readWorkspaceFile` 读取，受 200KB 和二进制检测限制；图片与 PDF 通过 `covan-workspace://file/<botId>/<path>` 只读协议加载。主进程必须用 `resolveWorkspaceFile` 校验 Bot 工作区边界后再返回文件流，不向 renderer 暴露任意本机路径。
 
 ## 8. Agent Runtime 集成（agentRuntime.ts）— 基于 pi-mono 调研结论（2026-09，已确认）
 
@@ -360,8 +362,8 @@ await agent.prompt(userText)   // agent.abort() 用于 stopChat
 - 三栏：Sidebar 256px / ChatView 自适应 / BotSettingsPanel 320px（默认收起）。
 - 跟随系统浅色/深色主题；暖白/炭灰背景、低饱和绿点缀；用户消息为紧凑浅灰气泡，Bot 回复使用宽阅读区域；代码、表格和块级公式独立滚动。
 - Sidebar：搜索框；单聊列表项右键「置顶 / 取消置顶」，最多3个 Bot，数据库层同样校验；群聊列表项右键提供经确认的「删除群聊」，永久删除群及关联记录。顶部仅在有置顶时显示横排圆形头像，不显示空槽位或添加入口。会话列表项=头像(群聊显示叠头像+N角标)/名称/最后消息预览/时间/未读蓝点；底部为「关于我」「我的 Bot」「新建群聊」「设置」；顶部「+」菜单新建 Bot(⌘1) / 创建群聊(⌘2)。
-- ChatView：顶部 Bot/群名、完整会话导出和设置入口；群聊齿轮打开回复机制设置。消息显示作者、时间、跨日分隔；支持 Markdown（含行内/块级 LaTeX 公式）、多图、代码复制、原文复制、引用回复和错误重试。Bot 本轮真实写入或编辑工作区文件时，回复下方显示结构化交付卡，不从回复文本猜测文件名；卡片支持预览、定位和打开文件夹。Composer 支持群聊 @ 提及、独立持久草稿与中文输入法保护；上方以动画小头像显示正在思考/回复的成员。主动回复中可继续发送新消息。
-- BotSettingsPanel（右栏，单聊选中时显示）：头像与身份信息；生活照、设定、记忆、工作区、模型五个标签页（按从左到右排列）。设定页的人设 System Prompt 默认以 Markdown 预览显示，预览区域至少 220px 高并自动填满设定页剩余空间，底部保留 20px 内边距；点击铅笔进入编辑态，编辑区至少 360px 高，使用等宽透明输入层叠加 Markdown 语法高亮层，支持标题、代码围栏、行内代码、强调、链接和注释高亮，并提供取消/完成操作。点击完成后保存 `system_prompt`，取消恢复进入编辑前内容；编辑中的草稿不会因外部 Bot 更新覆盖。模型页独立管理 provider、model、temperature、reasoning effort 与 max tokens。
+- ChatView：顶部 Bot/群名、完整会话导出和设置入口；群聊齿轮打开回复机制和聊天背景设置。会话可使用 `resources/group-backgrounds` 内置图片作为聊天背景，新建群随机分配一张，旧群首次启动补齐一张；私聊默认无背景，可在 Bot 设定页手动选择、随机或清除。renderer 只能经 `covan-bg://builtin/<file>` 读取清单内文件。消息显示作者、时间、跨日分隔；支持 Markdown（含行内/块级 LaTeX 公式）、多图、代码复制、原文复制、引用回复和错误重试。Bot 本轮真实写入或编辑工作区文件时，回复下方显示结构化交付卡，不从回复文本猜测文件名；卡片支持在右侧可调整宽度的产物预览窗预览 Markdown、HTML、TXT、代码、图片和 PDF，并支持定位和打开文件夹。Composer 支持群聊 @ 提及、独立持久草稿与中文输入法保护；上方以动画小头像显示正在思考/回复的成员。主动回复中可继续发送新消息。
+- BotSettingsPanel（右栏，单聊选中时显示）：头像与身份信息；生活照、设定、记忆、工作区、模型五个标签页（按从左到右排列）。单聊的设定页在人设前显示当前会话的聊天背景选择器，默认以当前背景预览卡和「更换」入口紧凑呈现，展开后显示图库；这只更新当前 dm 会话，不写入 Bot 人设。设定页的人设 System Prompt 默认以 Markdown 预览显示，预览区域至少 220px 高并自动填满设定页剩余空间，底部保留 20px 内边距；点击铅笔进入编辑态，编辑区至少 360px 高，使用等宽透明输入层叠加 Markdown 语法高亮层，支持标题、代码围栏、行内代码、强调、链接和注释高亮，并提供取消/完成操作。点击完成后保存 `system_prompt`，取消恢复进入编辑前内容；编辑中的草稿不会因外部 Bot 更新覆盖。模型页独立管理 provider、model、temperature、reasoning effort 与 max tokens。
 - SettingsModal（通用）：账户占位、外观（主题跟随系统/浅色/深色、语言）、Bot（时区自动检测、自然追问开关、自动审核开关 + 规则文本——审核规则作为自然语言注入各成员的判断与回复）、Provider 管理（列表 + 新增/编辑表单 + 测试连接按钮）。
 - 新建 Bot 对话框：名称/人设模板下拉（开发分队四人、产品经理、设计师、虚拟女友「小美女」、虚拟男友「小帅哥」、空白自定义）/描述/provider/模型。
 - 中文 UI。

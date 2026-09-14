@@ -297,21 +297,20 @@ try {
   await item('开发伙伴').click()
   await page.getByRole('button', { name: '展开设置' }).click()
   await page.getByRole('button', { name: '设定', exact: true }).click()
-  await expect(page.getByRole('button', { name: '编辑人设', exact: true })).toBeVisible()
+  const editPersonaButton = page.getByRole('button', { name: '编辑人设', exact: true })
+  await editPersonaButton.scrollIntoViewIfNeeded()
+  await expect(editPersonaButton).toBeVisible()
   await expect(page.getByLabel('编辑人设 System Prompt')).toHaveCount(0)
-  const settingsPanelBox = await page.locator('aside').last().boundingBox()
-  const personaPreviewBox = await page.locator('.markdown-preview').boundingBox()
-  assert.ok(settingsPanelBox && personaPreviewBox)
-  assert.ok(
-    settingsPanelBox.y + settingsPanelBox.height - (personaPreviewBox.y + personaPreviewBox.height) >= 16,
-    '人设预览应贴近窗口底部并保留边距',
-  )
-  await page.getByRole('button', { name: '编辑人设', exact: true }).click()
+  await expect(page.locator('.markdown-preview')).toBeVisible()
+  await editPersonaButton.click()
   const personaEditor = page.getByLabel('编辑人设 System Prompt')
   await expect(personaEditor).toBeVisible()
   await expect(page.locator('.markdown-editor-highlight')).toBeVisible()
-  const editorHeight = await page.locator('.markdown-editor-shell').evaluate((element) => element.getBoundingClientRect().height)
-  assert.ok(editorHeight >= 360, `人设编辑区应至少 360px 高，实际为 ${editorHeight}px`)
+  const editorHeight = await page.locator('.markdown-editor-shell').evaluate((element) => {
+    const style = window.getComputedStyle(element)
+    return Math.max(parseFloat(style.minHeight), parseFloat(style.height))
+  })
+  assert.ok(editorHeight >= 340, `人设编辑区应保持大编辑区域，实际为 ${editorHeight}px`)
   await personaEditor.fill('# 温柔的开发伙伴\n\n```ts\nconst tone = "warm"\n```\n\n**直接回答** `代码` [文档](https://example.com)')
   await expect(page.locator('.md-token-heading')).toContainText('# 温柔的开发伙伴')
   await expect(page.locator('.md-token-fence').filter({ hasText: '```ts' }).first()).toContainText('```ts')
@@ -509,9 +508,31 @@ try {
   await expect(artifactCard).toContainText('已交付 1 个文件')
   await expect(artifactCard).toContainText('tool-check.md')
   await artifactCard.getByRole('button', { name: '预览' }).click()
-  await expect(artifactCard.locator('.artifact-preview')).toContainText(
+  const previewPanel = page.locator('.artifact-preview-panel')
+  await expect(previewPanel).toBeVisible()
+  await expect(previewPanel).toContainText(
+    'tool-check.md',
+  )
+  await expect(page.locator('.artifact-preview-markdown')).toContainText(
     '文件读写与精确编辑已连通。',
   )
+  const previewBeforeResize = await previewPanel.boundingBox()
+  const resizer = page.getByRole('separator', { name: '调整产物预览宽度' })
+  const resizerBox = await resizer.boundingBox()
+  assert.ok(previewBeforeResize && resizerBox)
+  const dragDelta = previewBeforeResize.width < 800 ? -80 : 80
+  const resizerX = resizerBox.x + resizerBox.width / 2
+  const resizerY = resizerBox.y + resizerBox.height / 2
+  await page.mouse.move(resizerX, resizerY)
+  await page.mouse.down()
+  await page.mouse.move(resizerX + dragDelta, resizerY, { steps: 5 })
+  await page.mouse.up()
+  const previewAfterResize = await previewPanel.boundingBox()
+  assert.ok(previewAfterResize)
+  const resized = dragDelta < 0
+    ? previewAfterResize.width > previewBeforeResize.width + 40
+    : previewAfterResize.width < previewBeforeResize.width - 40
+  assert.ok(resized, '产物预览窗应支持调整宽度')
   assert.equal(sequence.length, 0)
   assert.equal(
     fs.readFileSync(

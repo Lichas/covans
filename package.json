@@ -15,6 +15,10 @@
         "to": "app-icon.png"
       },
       {
+        "from": "resources/group-backgrounds",
+        "to": "group-backgrounds"
+      },
+      {
         "from": "resources/default-avatars",
         "to": "default-avatars"
       },

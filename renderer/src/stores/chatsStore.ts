@@ -24,6 +24,7 @@ interface ChatsState {
       name?: string
       coordinatorBotId?: string | null
       replyMode?: GroupReplyMode
+      backgroundImage?: string
     },
   ) => Promise<void>
   addChatMembers: (id: string, botIds: string[]) => Promise<void>

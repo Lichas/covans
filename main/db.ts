@@ -2,6 +2,10 @@
 // 注意：本模块不 import electron，以便冒烟脚本在纯 Node 下复用。
 // 由 index.ts 调用 initDb(app.getPath('userData')) 完成初始化。
 import { PRESET_AVATARS } from '../shared/presetAvatars'
+import {
+  isGroupBackground,
+  randomGroupBackground,
+} from '../shared/groupBackgrounds'
 import Database from 'better-sqlite3'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -70,6 +74,7 @@ CREATE TABLE IF NOT EXISTS chats (
   name TEXT NOT NULL DEFAULT '',
   bot_id TEXT REFERENCES bots(id),
   coordinator_bot_id TEXT REFERENCES bots(id),
+  background_image TEXT NOT NULL DEFAULT '',
   last_message_at INTEGER NOT NULL DEFAULT 0,
   unread INTEGER NOT NULL DEFAULT 0,
   hidden INTEGER NOT NULL DEFAULT 0,
@@ -174,6 +179,10 @@ export function initDb(dir: string): Db {
     d.exec(
       "ALTER TABLE chats ADD COLUMN context_summary TEXT NOT NULL DEFAULT ''",
     )
+  if (!chatColumns.some((column) => column.name === 'background_image'))
+    d.exec(
+      "ALTER TABLE chats ADD COLUMN background_image TEXT NOT NULL DEFAULT ''",
+    )
   const messageColumns = d.pragma('table_info(messages)') as { name: string }[]
   if (!messageColumns.some((column) => column.name === 'artifacts'))
     d.exec("ALTER TABLE messages ADD COLUMN artifacts TEXT NOT NULL DEFAULT '[]'")
@@ -185,6 +194,7 @@ export function initDb(dir: string): Db {
          OR lower(base_url) LIKE 'http://127.0.0.1:1234/%')`,
   )
   db = d
+  seedMissingGroupBackgrounds()
   migrateMemories()
   return d
 }
@@ -457,6 +467,7 @@ interface ChatRow {
   name: string
   bot_id: string | null
   coordinator_bot_id: string | null
+  background_image: string
   last_message_at: number
   unread: number
   hidden: number
@@ -489,7 +500,13 @@ function toBot(r: BotRow): Bot {
   return { ...r }
 }
 function toChat(r: ChatRow): Chat {
-  return { ...r, type: r.type as ChatType }
+  return {
+    ...r,
+    type: r.type as ChatType,
+    background_image: isGroupBackground(r.background_image)
+      ? r.background_image
+      : '',
+  }
 }
 function safeJsonArray<T>(raw: string): T[] {
   try {
@@ -824,6 +841,19 @@ export function listChats(): ChatSummary[] {
   })
 }
 
+function seedMissingGroupBackgrounds(): void {
+  const rows = getDb()
+    .prepare(
+      "SELECT id FROM chats WHERE type='group' AND background_image=''",
+    )
+    .all() as { id: string }[]
+  if (!rows.length) return
+  const update = getDb().prepare('UPDATE chats SET background_image=? WHERE id=?')
+  getDb().transaction(() => {
+    for (const row of rows) update.run(randomGroupBackground(), row.id)
+  })()
+}
+
 export function createDm(botId: string): Chat {
   // 同一 bot 的 dm 复用已有会话
   const existing = getDb()
@@ -856,11 +886,12 @@ export function createGroup(
 ): Chat {
   const id = newId()
   const now = Date.now()
+  const background = randomGroupBackground()
   const d = getDb()
   const tx = d.transaction(() => {
     d.prepare(
-      "INSERT INTO chats (id,type,name,bot_id,coordinator_bot_id,last_message_at,unread,created_at) VALUES (?,'group',?,NULL,?,0,0,?)",
-    ).run(id, name, coordinatorBotId ?? null, now)
+      "INSERT INTO chats (id,type,name,bot_id,coordinator_bot_id,background_image,last_message_at,unread,created_at) VALUES (?,'group',?,NULL,?,?,0,0,?)",
+    ).run(id, name, coordinatorBotId ?? null, background, now)
     const ins = d.prepare(
       'INSERT OR IGNORE INTO chat_members (chat_id,bot_id,role) VALUES (?,?,?)',
     )
@@ -881,13 +912,20 @@ export function updateChat(
     name?: string
     coordinatorBotId?: string | null
     replyMode?: 'active' | 'sequential'
+    backgroundImage?: string
   },
 ): void {
   const existing = getChat(id)
   if (!existing) throw new Error('会话不存在')
+  const nextBackground =
+    patch.backgroundImage === undefined
+      ? existing.background_image
+      : patch.backgroundImage
+  if (nextBackground && !isGroupBackground(nextBackground))
+    throw new Error('未知群聊背景')
   getDb()
     .prepare(
-      'UPDATE chats SET name=?, coordinator_bot_id=?, reply_mode=? WHERE id=?',
+      'UPDATE chats SET name=?, coordinator_bot_id=?, reply_mode=?, background_image=? WHERE id=?',
     )
     .run(
       patch.name ?? existing.name,
@@ -895,6 +933,7 @@ export function updateChat(
         ? existing.coordinator_bot_id
         : patch.coordinatorBotId,
       patch.replyMode ?? existing.reply_mode,
+      nextBackground,
       id,
     )
 }

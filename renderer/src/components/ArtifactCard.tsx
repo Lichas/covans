@@ -1,8 +1,8 @@
-import { useState } from 'react'
 import type { WorkspaceArtifact } from '@shared/types'
 import { api } from '../lib/api'
 import { formatSize } from '../lib/format'
-import { ChevronDownIcon, FileIcon, FolderIcon } from './icons'
+import { useUiStore } from '../stores/uiStore'
+import { FileIcon, FolderIcon } from './icons'
 
 interface Props {
   artifacts: WorkspaceArtifact[]
@@ -11,36 +11,8 @@ interface Props {
 }
 
 export function ArtifactCard({ artifacts, botId, streaming }: Props) {
-  const [preview, setPreview] = useState<{
-    relPath: string
-    content: string
-    error: boolean
-  } | null>(null)
-  const [loadingPath, setLoadingPath] = useState('')
-
-  const togglePreview = async (artifact: WorkspaceArtifact) => {
-    if (preview?.relPath === artifact.relPath) {
-      setPreview(null)
-      return
-    }
-    setLoadingPath(artifact.relPath)
-    try {
-      const content = await api.readWorkspaceFile(botId, artifact.relPath)
-      setPreview({
-        relPath: artifact.relPath,
-        content: content || '（空文件）',
-        error: false,
-      })
-    } catch (error) {
-      setPreview({
-        relPath: artifact.relPath,
-        content: `无法预览：${String(error)}`,
-        error: true,
-      })
-    } finally {
-      setLoadingPath('')
-    }
-  }
+  const artifactPreview = useUiStore((s) => s.artifactPreview)
+  const setArtifactPreview = useUiStore((s) => s.setArtifactPreview)
 
   return (
     <section className="artifact-card" aria-label="交付文件">
@@ -65,9 +37,14 @@ export function ArtifactCard({ artifacts, botId, streaming }: Props) {
       </header>
       <div className="artifact-file-list">
         {artifacts.map((artifact) => {
-          const expanded = preview?.relPath === artifact.relPath
+          const selected =
+            artifactPreview?.botId === botId &&
+            artifactPreview.artifact.relPath === artifact.relPath
           return (
-            <div className="artifact-file" key={artifact.relPath}>
+            <div
+              className={`artifact-file ${selected ? 'artifact-file-selected' : ''}`}
+              key={artifact.relPath}
+            >
               <div className="artifact-file-row">
                 <span className="artifact-file-icon" aria-hidden="true">
                   <FileIcon width={18} height={18} />
@@ -87,25 +64,13 @@ export function ArtifactCard({ artifacts, botId, streaming }: Props) {
                   定位
                 </button>
                 <button
-                  className="artifact-file-action artifact-preview-toggle"
-                  aria-expanded={expanded}
-                  onClick={() => void togglePreview(artifact)}
+                  className="artifact-file-action"
+                  aria-pressed={selected}
+                  onClick={() => setArtifactPreview({ botId, artifact })}
                 >
-                  {loadingPath === artifact.relPath ? '加载中' : '预览'}
-                  <ChevronDownIcon
-                    width={13}
-                    height={13}
-                    className={expanded ? 'rotate-180' : ''}
-                  />
+                  预览
                 </button>
               </div>
-              {expanded && (
-                <pre
-                  className={`artifact-preview selectable ${preview.error ? 'artifact-preview-error' : ''}`}
-                >
-                  {preview.content}
-                </pre>
-              )}
             </div>
           )
         })}

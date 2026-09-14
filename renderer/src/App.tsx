@@ -1,6 +1,7 @@
 // App.tsx — 三栏布局装配 + 启动加载 + 事件订阅 + 全局快捷键
 import { useEffect } from 'react'
 import { BotSettingsPanel } from './components/BotSettingsPanel'
+import { ArtifactPreviewPanel } from './components/ArtifactPreviewPanel'
 import { ChatView } from './components/ChatView'
 import { NewBotDialog } from './components/NewBotDialog'
 import { NewGroupDialog } from './components/NewGroupDialog'
@@ -83,6 +84,7 @@ export default function App() {
       <Sidebar />
       <ChatView />
       <BotSettingsPanel />
+      <ArtifactPreviewPanel />
       <SettingsModal />
       <NewBotDialog />
       <NewGroupDialog />

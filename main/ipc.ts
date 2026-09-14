@@ -16,6 +16,7 @@ import {
 } from './chatImages'
 import { randomUUID } from 'node:crypto'
 import { CH } from '../shared/ipcChannels'
+import { isGroupBackground } from '../shared/groupBackgrounds'
 import * as db from './db'
 import { listProviderModels, testProviderConnection } from './agentRuntime'
 import { isTurnRunning, sendUserMessage, stopTurn } from './orchestrator'
@@ -235,6 +236,7 @@ export function registerIpc(): void {
         name?: string
         coordinatorBotId?: string | null
         replyMode?: 'active' | 'sequential'
+        backgroundImage?: string
       },
     ) => {
       assertStr(id, 'id')
@@ -242,6 +244,12 @@ export function registerIpc(): void {
         throw new Error('参数 patch 必须是对象')
       if (patch.replyMode && !['active', 'sequential'].includes(patch.replyMode))
         throw new Error('未知群聊回复机制')
+      if (
+        patch.backgroundImage !== undefined &&
+        patch.backgroundImage !== '' &&
+        !isGroupBackground(patch.backgroundImage)
+      )
+        throw new Error('未知群聊背景')
       db.updateChat(id, patch)
     },
   )

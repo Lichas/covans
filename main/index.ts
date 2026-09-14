@@ -7,7 +7,7 @@ import { app, BrowserWindow, net, protocol } from 'electron'
 import type { CovanEvent } from '../shared/types'
 import { CH } from '../shared/ipcChannels'
 import { getDb, initDb } from './db'
-import { initWorkspace } from './workspace'
+import { initWorkspace, resolveWorkspaceFile } from './workspace'
 import { initOrchestrator } from './orchestrator'
 import { configureWebNetworkAdapter } from './tools/web'
 import { renderWebPage } from './tools/browser'
@@ -20,6 +20,7 @@ import {
   seedDefaultAvatars,
   seedUserPresetAvatars,
 } from './avatars'
+import { isGroupBackground } from '../shared/groupBackgrounds'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const legacyUserData = app.getPath('userData')
@@ -85,9 +86,61 @@ protocol.registerSchemesAsPrivileged([
       stream: true,
     },
   },
+  {
+    scheme: 'covan-bg',
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      stream: true,
+    },
+  },
+  {
+    scheme: 'covan-workspace',
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      stream: true,
+    },
+  },
 ])
 
-function registerAvatarProtocol(userData: string): void {
+function workspaceMime(file: string): string {
+  switch (path.extname(file).toLowerCase()) {
+    case '.avif':
+      return 'image/avif'
+    case '.gif':
+      return 'image/gif'
+    case '.htm':
+    case '.html':
+      return 'text/html; charset=utf-8'
+    case '.jpg':
+    case '.jpeg':
+      return 'image/jpeg'
+    case '.pdf':
+      return 'application/pdf'
+    case '.png':
+      return 'image/png'
+    case '.svg':
+      return 'image/svg+xml'
+    case '.txt':
+      return 'text/plain; charset=utf-8'
+    case '.webp':
+      return 'image/webp'
+    default:
+      return 'application/octet-stream'
+  }
+}
+
+function groupBackgroundPath(file: string): string {
+  const base = app.isPackaged
+    ? path.join(process.resourcesPath, 'group-backgrounds')
+    : path.join(app.getAppPath(), 'resources', 'group-backgrounds')
+  return path.join(base, file)
+}
+
+function registerImageProtocols(userData: string): void {
   protocol.handle('covan-image', async (request) => {
     try {
       const url = new URL(request.url)
@@ -97,6 +150,29 @@ function registerAvatarProtocol(userData: string): void {
         decodeURIComponent(url.pathname).replace(/^\/+/, ''),
       )
       return await net.fetch(pathToFileURL(file).toString())
+    } catch {
+      return new Response('not found', { status: 404 })
+    }
+  })
+  protocol.handle('covan-bg', async (request) => {
+    try {
+      const url = new URL(request.url)
+      if (url.hostname !== 'builtin')
+        return new Response('forbidden', { status: 403 })
+      const file = decodeURIComponent(url.pathname).replace(/^\/+/, '')
+      if (!isGroupBackground(file))
+        return new Response('forbidden', { status: 403 })
+      const response = await net.fetch(
+        pathToFileURL(groupBackgroundPath(file)).toString(),
+      )
+      return new Response(response.body, {
+        status: response.status,
+        headers: {
+          'Content-Type':
+            response.headers.get('Content-Type') || 'application/octet-stream',
+          'Cache-Control': 'no-store',
+        },
+      })
     } catch {
       return new Response('not found', { status: 404 })
     }
@@ -128,6 +204,30 @@ function registerAvatarProtocol(userData: string): void {
           },
         })
       return response
+    } catch {
+      return new Response('not found', { status: 404 })
+    }
+  })
+  protocol.handle('covan-workspace', async (request) => {
+    try {
+      const url = new URL(request.url)
+      if (url.hostname !== 'file')
+        return new Response('forbidden', { status: 403 })
+      const parts = decodeURIComponent(url.pathname)
+        .replace(/^\/+/, '')
+        .split('/')
+      const botId = parts.shift()
+      const relPath = parts.join('/')
+      if (!botId || !relPath) return new Response('not found', { status: 404 })
+      const abs = resolveWorkspaceFile(botId, relPath)
+      const response = await net.fetch(pathToFileURL(abs).toString())
+      return new Response(response.body, {
+        status: response.status,
+        headers: {
+          'Content-Type': workspaceMime(abs),
+          'Cache-Control': 'no-store',
+        },
+      })
     } catch {
       return new Response('not found', { status: 404 })
     }
@@ -195,7 +295,7 @@ function createWindow(): void {
 void app.whenReady().then(() => {
   const userData = app.getPath('userData')
   prepareUserDataDir(userData)
-  registerAvatarProtocol(userData)
+  registerImageProtocols(userData)
   initDb(userData)
   startMemorySummaries()
   initObservability(userData)
