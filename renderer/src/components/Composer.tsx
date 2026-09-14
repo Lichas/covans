@@ -89,7 +89,7 @@ export function Composer({ chat }: Props) {
     () => (isGroup ? chat.member_bots : []),
     [isGroup, chat.member_bots],
   )
-  const allowDuringGeneration = isGroup && chat.reply_mode === 'active'
+  const allowDuringGeneration = isGroup
   const activeMembers = members.filter((member) => agentActivity[member.id])
 
   const filteredMembers = useMemo(() => {
@@ -402,7 +402,7 @@ export function Composer({ chat }: Props) {
             ? '正在导入图片…'
             : generating
               ? allowDuringGeneration
-                ? '主动回复中 · 可继续补充消息'
+                ? '群聊回复中 · 可继续补充，思考中的成员会更新上下文'
                 : '正在回复，你可以先写下一条消息'
               : text || attachments.length
                 ? '草稿已在本地保存'

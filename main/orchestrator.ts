@@ -133,8 +133,8 @@ export async function sendUserMessage(
   const running = turns.get(chatId)
   if (running) {
     if (running.signal.aborted) throw new Error('当前会话正在停止')
-    const session = activeGroupSessions.get(chatId)
-    if (chat.type !== 'group' || chat.reply_mode !== 'active' || !session)
+    const session = groupSessions.get(chatId)
+    if (chat.type !== 'group' || !session)
       throw new Error('当前会话正在回复，请稍后再发送')
     appendUserMessage(
       chatId,
@@ -143,15 +143,17 @@ export async function sendUserMessage(
       validateChatImages(attachments),
     )
     session.revision += 1
+    for (const botId of mentions) session.forcedMentions.add(botId)
     for (const controller of session.decisions) controller.abort()
     return
   }
   const controller = new AbortController()
   turns.set(chatId, controller)
-  if (chat.type === 'group' && chat.reply_mode === 'active')
-    activeGroupSessions.set(chatId, {
+  if (chat.type === 'group')
+    groupSessions.set(chatId, {
       revision: 0,
       decisions: new Set(),
+      forcedMentions: new Set(mentions),
     })
   emit({ type: 'generation-state', chatId, generating: true })
   try {
@@ -173,7 +175,7 @@ export async function sendUserMessage(
     }
     throw e
   } finally {
-    activeGroupSessions.delete(chatId)
+    groupSessions.delete(chatId)
     turns.delete(chatId)
     emit({ type: 'generation-state', chatId, generating: false })
     emit({ type: 'chat-updated', chatId })
@@ -185,11 +187,12 @@ const turns = new Map<string, AbortController>()
 const MAX_GROUP_DISCUSSION_ROUNDS = 5
 const MAX_NATURAL_FOLLOW_UPS = 2
 const MAX_NATURAL_FOLLOW_UP_CHARS = 240
-interface ActiveGroupSession {
+interface GroupSession {
   revision: number
   decisions: Set<AbortController>
+  forcedMentions: Set<string>
 }
-const activeGroupSessions = new Map<string, ActiveGroupSession>()
+const groupSessions = new Map<string, GroupSession>()
 
 export function isTurnRunning(chatId: string): boolean {
   return turns.has(chatId)
@@ -197,7 +200,7 @@ export function isTurnRunning(chatId: string): boolean {
 
 export function stopTurn(chatId: string): void {
   turns.get(chatId)?.abort()
-  for (const controller of activeGroupSessions.get(chatId)?.decisions ?? [])
+  for (const controller of groupSessions.get(chatId)?.decisions ?? [])
     controller.abort()
   abortChat(chatId)
 }
@@ -264,7 +267,7 @@ async function runTurn(
   } else if (chat.reply_mode === 'active') {
     newMessageCount += await runActiveGroup(chat.id, members, signal)
   } else {
-    newMessageCount += await runSequentialGroup(chat.id, members, mentions, signal)
+    newMessageCount += await runSequentialGroup(chat.id, members, signal)
   }
 
   if (!signal.aborted) {
@@ -387,19 +390,11 @@ async function speakWithActivity(
 async function runSequentialGroup(
   chatId: string,
   members: Bot[],
-  mentions: string[],
   signal: AbortSignal,
 ): Promise<number> {
-  const forced = new Set(mentions)
   let repliedTotal = 0
   for (let round = 1; round <= MAX_GROUP_DISCUSSION_ROUNDS; round++) {
-    const replied = await runSequentialRound(
-      chatId,
-      members,
-      round === 1 ? forced : new Set(),
-      signal,
-      round,
-    )
+    const replied = await runSequentialRound(chatId, members, signal, round)
     repliedTotal += replied
     if (signal.aborted || replied === 0) return repliedTotal
   }
@@ -409,10 +404,12 @@ async function runSequentialGroup(
 async function runSequentialRound(
   chatId: string,
   members: Bot[],
-  forced: Set<string>,
   signal: AbortSignal,
   round: number,
 ): Promise<number> {
+  const session = groupSessions.get(chatId)
+  if (!session) return 0
+  const forced = round === 1 ? session.forcedMentions : new Set<string>()
   const ordered = [
     ...members.filter((member) => forced.has(member.id)),
     ...members.filter((member) => !forced.has(member.id)),
@@ -420,7 +417,7 @@ async function runSequentialRound(
   let replied = 0
   for (const bot of ordered) {
     if (signal.aborted) return replied
-    if (await shouldReply(chatId, bot, forced.has(bot.id), signal, round)) {
+    if (await decideWithLatestContext(chatId, bot, signal, round)) {
       replied += 1
       await speakWithActivity(chatId, bot, members, signal, round)
     }
@@ -433,7 +430,7 @@ async function runActiveGroup(
   members: Bot[],
   signal: AbortSignal,
 ): Promise<number> {
-  const session = activeGroupSessions.get(chatId)
+  const session = groupSessions.get(chatId)
   if (!session) return 0
   let repliedTotal = 0
   for (let round = 1; round <= MAX_GROUP_DISCUSSION_ROUNDS; round++) {
@@ -450,34 +447,12 @@ async function runActiveRound(
   signal: AbortSignal,
   round: number,
 ): Promise<number> {
-  const session = activeGroupSessions.get(chatId)
+  const session = groupSessions.get(chatId)
   if (!session) return 0
   while (!signal.aborted) {
     const revision = session.revision
-    const latestUser = [...db.listRecentMessages(chatId, 5)]
-      .reverse()
-      .find((message) => message.sender_type === 'user')
-    // @ 只强制首轮回复；后续是否延展仍由每个成员基于新内容决定。
-    const forced = round === 1 ? new Set(latestUser?.mentions ?? []) : new Set()
     const decisions = await Promise.all(
-      members.map(async (bot) => {
-        const controller = new AbortController()
-        session.decisions.add(controller)
-        try {
-          const combined = AbortSignal.any([signal, controller.signal])
-          return await shouldReply(
-            chatId,
-            bot,
-            forced.has(bot.id),
-            combined,
-            round,
-          )
-        } catch {
-          return false
-        } finally {
-          session.decisions.delete(controller)
-        }
-      }),
+      members.map((bot) => decideWithLatestContext(chatId, bot, signal, round)),
     )
     if (signal.aborted) return 0
     if (session.revision !== revision) continue
@@ -486,6 +461,42 @@ async function runActiveRound(
     if (session.revision === revision) return speakers.length
   }
   return 0
+}
+
+/**
+ * 成员正在判断时收到新用户消息，取消过期请求并用最新上下文重试。
+ * 主动与顺序模式共用这个修订号边界，避免过期判断触发幽灵回复。
+ */
+async function decideWithLatestContext(
+  chatId: string,
+  bot: Bot,
+  signal: AbortSignal,
+  round: number,
+): Promise<boolean> {
+  const session = groupSessions.get(chatId)
+  if (!session) return false
+  while (!signal.aborted) {
+    const revision = session.revision
+    const controller = new AbortController()
+    session.decisions.add(controller)
+    try {
+      const reply = await shouldReply(
+        chatId,
+        bot,
+        round === 1 && session.forcedMentions.has(bot.id),
+        AbortSignal.any([signal, controller.signal]),
+        round,
+      )
+      if (session.revision === revision) return reply
+    } catch {
+      if (signal.aborted) return false
+      // 补充消息导致的取消由循环重试；普通判断错误已在 shouldReply 内降级为正式回复。
+      if (session.revision === revision) return false
+    } finally {
+      session.decisions.delete(controller)
+    }
+  }
+  return false
 }
 
 function naturalFollowUpEnabled(): boolean {

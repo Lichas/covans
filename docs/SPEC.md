@@ -226,11 +226,12 @@ type CovanEvent =
 触发：`sendUserMessage(groupChatId, …)`。
 1. 落库用户消息；发 `chat-updated`。
 2. 每位成员使用自己的 Provider/Model，读取 `context_summary` + 最新 5 条消息，输出 `REPLY` 或 `SKIP`。被用户 @mention 的成员必须回复。
-3. `reply_mode='active'`：所有成员并发判断，决定回复的成员并发输出。判断阶段收到新用户消息时，中止尚未完成的判断并按新上下文重新开始；正在输出的回复不截断，完成后再处理新消息。
+3. `reply_mode='active'`：所有成员并发判断，决定回复的成员并发输出。
 4. `reply_mode='sequential'`：成员按群成员顺序逐个判断、回复，后面成员可以看到前面成员的输出。
-5. 首轮结束后，成员可基于刚发生的真实发言继续第 2–5 轮讨论；每轮都重新判断，只有能补充新信息、回应具体观点、提出异议或推进未决问题才 `REPLY`，无人回复立即停止。`@mention` 仅强制首轮，整次用户话题硬上限为 5 轮。
-6. 准备判断/正在输出通过 `agent-activity` 推送。回复机制不写入 system 消息，不在聊天消息区显示调度文案。
-7. 流式 delta → `message-delta`；完成 → 落库 + `message-done`。轮次完成后异步刷新群聊前文总结，并触发分层记忆归纳。
+5. 两种模式生成期间 Composer 都保持可发送。新用户消息立即落库并提高群修订号；所有尚未完成的成员判断被取消，再基于包含新消息的最新 5 条上下文重新开始。已在流式输出的回复不截断，后续成员或下一轮读取新消息。过期修订的判断结果必须丢弃。
+6. 首轮结束后，成员可基于刚发生的真实发言继续第 2–5 轮讨论；每轮都重新判断，只有能补充新信息、回应具体观点、提出异议或推进未决问题才 `REPLY`，无人回复立即停止。`@mention` 仅强制首轮，整次用户话题硬上限为 5 轮。
+7. 准备判断/正在输出通过 `agent-activity` 推送。回复机制不写入 system 消息，不在聊天消息区显示调度文案。
+8. 流式 delta → `message-delta`；完成 → 落库 + `message-done`。轮次完成后异步刷新群聊前文总结，并触发分层记忆归纳。
 
 单聊（dm）：直接调用该 bot agent。设置项 `natural_follow_up` 默认开启；开启时主回复提示要求按即时聊天节奏输出：较长内容先发送一个自然完整的语义段，一条即可回答时仍完整回答。主回复完成后，Bot 通过轻量 completion 同时返回 `SKIP` 或 `REPLY\n<候选短消息>`；仅在仍有未完成的新内容、遗漏重要具体信息或存在必须由用户回答的明确问题时追加，最多 2 条。候选在写入消息前必须通过 240 字上限、近期回复长片段去重和调度元话术过滤；完整回答、只能复述改写、寒暄、泛泛关心、格式无效、判断失败、停止或主回复失败都不追加。跟进不再对以 assistant 消息结尾的历史调用 `agent.continue()`。
 
@@ -250,13 +251,14 @@ type CovanEvent =
 
 | 层级 | 内容与进入方式 | 保留规则 |
 | --- | --- | --- |
-| short 短时 | 每个场景的极短工作摘要（约 80 字：当前话题、结论、待办/未决） | 每次新消息后 0.8 秒防抖更新；摘要失败保留上一次 |
+| short 短时 | 同一场景按非重叠窗口维护极短工作摘要（约 80 字：当前话题、结论、待办/未决）；每窗最多 10 条，首尾跨度最多 15 分钟 | 段内每次新消息后 0.8 秒防抖更新；越过消息数或时间边界开启新窗；生成后 1 天过期 |
 | evidence 原文证据 | 已送达消息原文，最多 12000 字，仅供引用与审计 | 原文从消息时间起 90 天，不作为短时摘要直接注入 |
 | episodic 场景 | 带参与者、时间和来源的场景归纳，约 500 字 | 摘要从生成起 90 天 |
 | semantic 语义 | 后台归纳的事实、偏好、人物关系，附原话证据 | 生成起 180 天 |
 | long 长期 | 手动记忆、旧记忆，或用户明确要求记住的后台归纳 | 不自动过期 |
 
-- 每条完整消息送达后，按 Bot/场景启动实时摘要调度；连续消息以 0.8 秒防抖、最迟 5 秒触发一次，使用该 Bot 自己的 Provider/Model 同时生成约 80 字 short_summary 和约 500 字场景 summary。每批最多 30 条、18000 字原文、4 项稳定记忆，单次调用 60 秒超时。Bot 私聊成功结束后同样更新双方摘要。每 Bot 同时最多一个摘要任务，进程全局最多两个；忙碌时场景合并排队，失败时保留上一次摘要并标记 error，原文证据仍可召回，用户可手动重试。
+- 每条完整消息送达后，按 Bot/场景启动实时摘要调度；连续消息以 0.8 秒防抖、最迟 5 秒触发一次。短时窗口从本段第一条开始，满足“最多 10 条”且“首尾不超过 15 分钟”时持续更新同一条 `short_summary`，超过任一条件则以新消息开启下一窗口；窗口互不重叠，旧窗口摘要保留至过期。场景 `summary` 仍使用最近最多 30 条、18000 字原文维护更长脉络；单次还可生成最多 4 项稳定记忆，调用 60 秒超时。Bot 私聊成功结束后同样更新双方摘要。每 Bot 同时最多一个摘要任务，进程全局最多两个；忙碌时场景合并排队，失败时保留上一次有效摘要并标记 error，原文证据仍可召回，用户可手动重试。
+- 模型必须分别返回短时窗口与场景摘要的证据 ID。写入前对摘要与原文做归一化子串和四字片段重合校验；近似摘抄、格式错误或证据越界时自动重试一次，仍不合格则不把输出保存为摘要。应用启动、手动刷新或新消息归纳时会清理同场景中已存在的近似原文摘要；启动清理不自动发起网络请求，而是在记忆页提示用户刷新。
 - 输出须为 `{content, layer, source_id, quote}[]`；验证来源属于该 Bot、来源仍在记忆中、quote 为原文连续摘录。归纳保留发言者与原话，转述不升级为用户亲口确认；长期层还要求来源是用户且包含明确记住意图。模型归纳不是事实验证。
 - 相同发言者、相同层级、归纳及原话完全归一化相等才去重，不使用包含关系，避免吞掉否定和纠正。冲突并存并注明来源/时间，回答以当前明确表达优先。
 - 启动、读取与检索时维护 TTL；每 Bot 普通自动记忆最多保留 2000 条，按最近召回/创建时间淘汰。手动和长期记忆不进入容量淘汰。淘汰记忆不删除聊天原文。
@@ -350,7 +352,7 @@ await agent.prompt(userText)   // agent.abort() 用于 stopChat
 
 **Provider kind → pi 内置 provider 映射**：`openai→openAIProvider()`、`anthropic→anthropicProvider()`、`google→googleProvider()`、`openrouter→openrouterProvider()`、`kimi→createProvider(...)`（Kimi Coding Plan，模型从 `/v1/models` 动态拉取）、`zhipu→createProvider(...)`（智谱 OpenAI 兼容国内端点）、`deepseek→deepseekProvider()`、`openai-compatible→createProvider(...)`。`testProvider` 用一次 `models.complete(model, {messages:[{role:'user',content:'ping',timestamp:Date.now()}]}, {apiKey})` 验证。OpenAI-compatible 支持 API Key 留空的本地服务：模型目录请求不发送 Authorization，pi-agent-core 运行时使用不落库、无权限的占位值满足其非空校验。LM Studio 预设为 `http://localhost:1234/v1`；误填 `/api/v1/chat` 或 `/v1/chat/completions` 会规范到 `/v1`。Covan 使用支持自定义 tools 与完整历史的 `/v1/chat/completions`，不直接使用 LM Studio 原生 `/api/v1/chat`。
 
-**进行中任务表**：Agent 层维护 `Map<chatId, Set<AbortController>>`；编排层另外维护轮次级 AbortController 与主动群的判断修订号。stopChat 同时取消当前判断、Agent 输出和后续群聊发言，保留当前已生成文本为 stopped 消息。generation-state 明确表示整个轮次是否结束。
+**进行中任务表**：Agent 层维护 `Map<chatId, Set<AbortController>>`；编排层为每个进行中群聊维护判断 AbortController 集合与修订号。stopChat 同时取消当前判断、Agent 输出和后续群聊发言，保留当前已生成文本为 stopped 消息。generation-state 明确表示整个轮次是否结束。
 **Mock provider（冒烟测试）**：kind='mock' 时不走 pi，直接按名字模板生成流式假回复（`main/mockProvider.ts`）。
 
 ## 9. UI 规范（复刻参考截图）

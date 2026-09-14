@@ -69,12 +69,23 @@ export function mockMemoryExtraction(bot: Bot, prompt: string): string {
 
 export function mockSceneSummary(prompt: string): string {
   try {
-    const messages = JSON.parse(prompt) as { source_id: string; content: string }[]
+    const input = JSON.parse(prompt) as {
+      short_window_ids?: string[]
+      evidence?: { source_id: string; content: string }[]
+    } | { source_id: string; content: string }[]
+    const messages = Array.isArray(input) ? input : input.evidence ?? []
     const latest = messages.at(-1)
     if (!latest) return '{}'
-    const short = `当前围绕：${latest.content.replace(/\s+/g, ' ').slice(0, 68)}`
-    const summary = `围绕“${latest.content.replace(/\s+/g, ' ').slice(0, 180)}”进行交流；当前保留这条最新信息，后续待结合更多上下文确认。`
-    return JSON.stringify({ short_summary: short, summary, evidence_ids: messages.map((m) => m.source_id), memories: [] })
+    const shortIds = Array.isArray(input) ? messages.map((message) => message.source_id) : input.short_window_ids ?? [latest.source_id]
+    const short = `当前窗口含 ${shortIds.length} 条交流，话题正在推进，尚无明确结论或待办。`
+    const summary = `当前场景含 ${messages.length} 条交流；参与者正在交换信息，已确认结论与后续事项仍待形成。`
+    return JSON.stringify({
+      short_summary: short,
+      short_evidence_ids: shortIds,
+      summary,
+      evidence_ids: messages.map((message) => message.source_id),
+      memories: [],
+    })
   } catch { return '{}' }
 }
 

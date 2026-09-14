@@ -70,10 +70,90 @@ export async function runMemoryRegression(db, memory, assert, profile) {
   }])) === 1, '否定与更正不会被包含关系去重误删')
   const sceneSummary = { ...item, layer: 'episodic' }
   assert(memory.applyConsolidation(b.id, evidence, JSON.stringify([sceneSummary])) === 1, '场景归纳带独立来源标记写入')
+  const baseTime = Date.now()
+  const timedEvidence = Array.from({ length: 12 }, (_, index) => ({
+    ...evidence[0],
+    id: 'timed-' + index,
+    source_id: 'timed-' + index,
+    content: '窗口消息 ' + index,
+    created_at: baseTime + index * 1000,
+  }))
+  const countWindows = memory.partitionShortMemoryWindows(timedEvidence)
+  assert(countWindows.length === 2 && countWindows[0].length === 10 && countWindows[1].length === 2, '第 11 条消息开启新的非重叠短时窗口')
+  const durationWindows = memory.partitionShortMemoryWindows([
+    { ...timedEvidence[0], created_at: baseTime },
+    { ...timedEvidence[1], created_at: baseTime + 15 * 60 * 1000 },
+    { ...timedEvidence[2], created_at: baseTime + 15 * 60 * 1000 + 1 },
+  ])
+  assert(durationWindows.length === 2 && durationWindows[0].length === 2 && durationWindows[1].length === 1, '短时窗口首尾超过 15 分钟时开启新段')
+  const copiedSource = {
+    ...evidence[0],
+    source_id: 'copied-source',
+    content: '我叫小美女，是用户的女朋友，喜欢吃饭逛街看剧，也会记住用户的偏好和重要日子。',
+  }
+  let copiedRejected = false
+  try {
+    memory.parseSceneSummary(JSON.stringify({
+      short_summary: '当前围绕：' + copiedSource.content,
+      short_evidence_ids: [copiedSource.source_id],
+      summary: '当前围绕：' + copiedSource.content,
+      evidence_ids: [copiedSource.source_id],
+      memories: [],
+    }), [copiedSource], [copiedSource])
+  } catch { copiedRejected = true }
+  assert(copiedRejected, '增加少量连接词的近似原文不能冒充摘要')
+
+  const windowScene = 'short-window-regression'
+  const writeWindowEvidence = (index, createdAt) => db.writeMemory({
+    bot_id: a.id,
+    kind: 'summary',
+    content: '讨论窗口中的第 ' + (index + 1) + ' 条测试消息',
+    source: 'auto',
+    layer: 'evidence',
+    source_type: 'chat',
+    source_id: 'window-source-' + index,
+    scene_id: windowScene,
+    participants: ['user', a.id],
+    speaker: 'user',
+    evidence: ['window-source-' + index],
+    expires_at: createdAt + 90 * 86400000,
+    last_recalled_at: null,
+    representation: 'verbatim',
+    created_at: createdAt,
+  })
+  const firstWindowEvidence = Array.from({ length: 10 }, (_, index) => writeWindowEvidence(index, baseTime + index * 1000))
+  db.writeMemory({
+    bot_id: a.id,
+    kind: 'summary',
+    content: firstWindowEvidence[0].content,
+    source: 'auto',
+    layer: 'short',
+    source_type: 'chat',
+    source_id: 'working-summary:' + windowScene,
+    scene_id: windowScene,
+    participants: ['user', a.id],
+    speaker: '',
+    evidence: [firstWindowEvidence[0].source_id],
+    expires_at: baseTime + 86400000,
+    last_recalled_at: null,
+    representation: 'summary',
+    created_at: baseTime,
+  })
+  memory.startMemorySummaries()
+  memory.stopMemorySummaries()
+  assert(!db.listMemories(a.id).some((record) => record.scene_id === windowScene && record.representation === 'summary' && record.content === firstWindowEvidence[0].content), '启动时会清理已有的原文式伪摘要')
+  assert(db.listMemorySummaryStates(a.id).some((state) => state.scene_id === windowScene && state.status === 'error' && state.error.includes('已移除')), '启动时移除旧伪摘要并显示可刷新状态')
+  await memory.consolidateMemories(a, windowScene, true)
+  writeWindowEvidence(10, baseTime + 10000)
+  await memory.consolidateMemories(a, windowScene, true)
+  const storedWindows = db.listMemories(a.id).filter((record) => record.layer === 'short' && record.scene_id === windowScene)
+  assert(storedWindows.length === 2 && storedWindows.some((record) => record.evidence.length === 10) && storedWindows.some((record) => record.evidence.length === 1), '段内更新同一短时摘要，第 11 条持久化为新摘要')
+  assert(storedWindows.some((record) => record.source_id.endsWith(':' + firstWindowEvidence[0].source_id)), '短时摘要使用窗口首条消息作为稳定标识')
+
   const before = db.listMemories(a.id).length
   await memory.consolidateMemories(a, thread.id, true)
   assert(db.listMemories(a.id).some((m) => m.representation === 'summary' && m.source_id === 'scene-summary:' + thread.id), '真实后台 completion 调用生成有证据的场景归纳')
-  const shortSummary = db.listMemories(a.id).find((m) => m.representation === 'summary' && m.source_id === 'working-summary:' + thread.id)
+  const shortSummary = db.listMemories(a.id).find((m) => m.representation === 'summary' && m.source_id.startsWith('working-summary:' + thread.id + ':'))
   assert(shortSummary && shortSummary.content.length <= 80 && shortSummary.content !== question.content, '同一次归纳生成不照抄原文的极短工作摘要')
   const after = db.listMemories(a.id).length
   await memory.consolidateMemories(a, thread.id, true)
@@ -99,7 +179,7 @@ export async function runMemoryRegression(db, memory, assert, profile) {
   const now = Date.now()
   db.getDb().prepare('UPDATE memories SET created_at=? WHERE bot_id=? AND source_id=?').run(now - 2 * day, a.id, question.id)
   db.maintainMemories(a.id, now)
-  assert(db.listMemories(a.id).find((m) => m.source_id === 'working-summary:' + thread.id)?.layer === 'short', '短时摘要保持工作层，原文证据独立存在')
+  assert(db.listMemories(a.id).find((m) => m.source_id.startsWith('working-summary:' + thread.id + ':'))?.layer === 'short', '短时摘要保持工作层，原文证据独立存在')
   const manual = db.addMemory(a.id, '永久手动记忆')
   db.getDb().prepare("UPDATE memories SET expires_at=? WHERE bot_id=? AND source='auto' AND layer!='long'").run(now - 1, a.id)
   db.maintainMemories(a.id, now)

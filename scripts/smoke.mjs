@@ -481,6 +481,43 @@ console.log('\n[3c] 主动回复：并发判断 + 思考中插入新消息')
   assert(preparing.length >= 6, '新消息使尚未完成的三个判断重新开始')
 }
 
+console.log('\n[3d] 顺序回复：思考中插入新消息并更新当前成员上下文')
+{
+  events.length = 0
+  const sequential = db.createGroup('顺序插话冒烟组', [botA.id, botB.id])
+  const running = orchestrator.sendUserMessage(
+    sequential.id,
+    '第一条：请评估这个方案。',
+    [],
+  )
+  await sleep(5)
+  await orchestrator.sendUserMessage(
+    sequential.id,
+    '补充：先回答可靠性。',
+    [botA.id],
+  )
+  await running
+  const messages = db.listMessages(sequential.id, undefined, 100)
+  assert(
+    messages.filter((message) => message.sender_type === 'user').length === 2,
+    '顺序模式思考中的新消息会立即落库',
+  )
+  const firstReply = messages.find(
+    (message) => message.sender_type === 'bot' && message.status === 'done',
+  )
+  assert(
+    firstReply?.content.includes('补充：先回答可靠性'),
+    '正在思考的顺序成员用补充消息重新判断并回复',
+  )
+  const preparing = events.filter(
+    (event) =>
+      event.type === 'agent-activity' &&
+      event.botId === botA.id &&
+      event.state === 'preparing',
+  )
+  assert(preparing.length >= 2, '顺序成员的过期判断被取消并重新开始')
+}
+
 console.log('\n[4] 单聊（dm）直调')
 const dm = db.createDm(botB.id)
 await orchestrator.sendUserMessage(dm.id, '帮我看看这个用例怎么写', [])

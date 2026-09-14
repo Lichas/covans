@@ -46,8 +46,9 @@ const server = http.createServer(async (req, res) => {
     let tool
     if (system.includes('<<memory-scene-summary>>')) {
       const input = JSON.parse(body.messages?.find((message) => message.role === 'user')?.content || '[]')
-      const latest = input.at(-1)
-      content = JSON.stringify({ short_summary: '当前围绕：' + String(latest?.content || '').slice(0, 68), summary: '围绕当前话题整理了参与者的最新信息，等待后续确认。', evidence_ids: input.map((item) => item.source_id), memories: [] })
+      const evidence = Array.isArray(input) ? input : input.evidence || []
+      const shortIds = Array.isArray(input) ? evidence.map((item) => item.source_id) : input.short_window_ids || []
+      content = JSON.stringify({ short_summary: `当前窗口含 ${shortIds.length} 条交流，参与者正在推进话题，结论和待办尚待确认。`, short_evidence_ids: shortIds, summary: `当前场景含 ${evidence.length} 条交流，参与者正在交换信息，尚未形成需要长期保留的结论。`, evidence_ids: evidence.map((item) => item.source_id), memories: [] })
     } else if (system.includes('当前为 Agent 私聊'))
       content =
         '## 设计建议\n采用清晰层级与柔和留白。\n\n- 顶部只显示已置顶 Bot\n- 私聊放在轻量浮窗中'
@@ -718,10 +719,13 @@ try {
       message.status === 'done' && message.sender_type === 'bot' && message.content.includes('这是他转达的说法')),
   fixture.chats[1].id)).toBe(true)
   await item('设计伙伴').click()
+  await page.reload()
+  await item('设计伙伴').click()
   await expect(page.locator('.message-row').last()).toContainText('这是他转达的说法')
   if (await page.getByRole('button', { name: '展开设置', exact: true }).count())
     await page.getByRole('button', { name: '展开设置', exact: true }).click()
   await page.getByRole('button', { name: '记忆', exact: true }).click()
+  await expect(page.getByText(/每段短时记忆最多包含 10 条消息/)).toBeVisible()
   await page.getByRole('button', { name: '原文', exact: true }).click()
   const sourceRow = page.locator('.memory-row').filter({ hasText: '橙色的天空来自意大利' }).filter({ hasText: '小蓝说过' })
   await expect(sourceRow).toHaveCount(1)

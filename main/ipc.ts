@@ -344,10 +344,7 @@ export function registerIpc(): void {
       assertStrArray(mentions ?? [], 'mentions')
       const chat = db.getChat(chatId)
       if (!chat) throw new Error('会话不存在')
-      if (
-        isTurnRunning(chatId) &&
-        !(chat.type === 'group' && chat.reply_mode === 'active')
-      )
+      if (isTurnRunning(chatId) && chat.type !== 'group')
         throw new Error('当前会话正在回复，请稍后再发送')
       const images = validateChatImages(attachments)
       if (!content.trim() && !images.length)

@@ -269,6 +269,9 @@ try {
   await expect(
     page.locator('article[data-status="streaming"] .markdown-content'),
   ).toContainText('设计')
+  await expect(
+    page.getByRole('button', { name: '发送', exact: true }),
+  ).toBeVisible()
   await page.getByRole('button', { name: '停止生成' }).click()
   await expect(page.locator('article[data-status="stopped"]')).toHaveCount(1)
   await expect(
@@ -291,8 +294,8 @@ try {
   await composer.fill('继续讨论')
   await page.getByRole('button', { name: '发送', exact: true }).click()
   await expect(
-    page.getByRole('button', { name: '发送', exact: true }),
-  ).toBeVisible({ timeout: 20000 })
+    page.getByRole('button', { name: '停止生成', exact: true }),
+  ).toHaveCount(0, { timeout: 20000 })
   const completed = await page.evaluate(
     (id) => window.covan.listMessages(id),
     fixture.group.id,

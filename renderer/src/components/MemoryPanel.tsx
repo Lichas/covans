@@ -64,6 +64,11 @@ export function MemoryPanel({ botId, sceneId }: { botId: string; sceneId?: strin
 
   const filtered = memories.filter((memory) => layer === 'all' || memory.layer === layer)
   const summaries = filtered.filter((memory) => memory.representation === 'summary')
+  const sceneSummaries = summaries.filter((summary) => !sceneId || summary.scene_id === sceneId)
+  const currentSummaries = [
+    sceneSummaries.filter((summary) => summary.layer === 'short').sort((a, b) => b.updated_at - a.updated_at)[0],
+    sceneSummaries.filter((summary) => summary.layer === 'episodic').sort((a, b) => b.updated_at - a.updated_at)[0],
+  ].filter((summary): summary is Memory => !!summary)
   const sceneStates = sceneId ? summaryStates.filter((state) => state.scene_id === sceneId) : summaryStates
   const currentState = sceneStates.find((state) => state.status === 'error') ?? sceneStates.find((state) => state.status === 'running' || state.status === 'pending')
 
@@ -104,14 +109,14 @@ export function MemoryPanel({ botId, sceneId }: { botId: string; sceneId?: strin
         </div>
       </div>
       <p className="text-[11px] leading-relaxed text-stone-400">
-        消息送达后会先生成极短工作摘要（约 80 字），再更新场景摘要（约 500 字）；原文只作为可追溯证据。摘要会在连续消息停止约 0.8 秒后更新，失败时保留上一次摘要并可重试。短时摘要一天后转为场景；语义保留 180 天，长期与手动记忆持续保留。
+        每段短时记忆最多包含 10 条消息，且首尾不超过 15 分钟；段内消息会持续更新同一条极短摘要，超过任一边界才开启下一段。原文只作为可追溯证据，场景摘要负责更长脉络。摘要在消息停止约 0.8 秒后更新，失败时保留上一次有效摘要并可重试。
       </p>
       {currentState && <div className={'rounded-lg px-2.5 py-2 text-[11px] ' + (currentState.status === 'error' ? 'bg-red-50 text-red-600' : 'bg-stone-100 text-stone-500')}>
         {currentState.status === 'error' ? currentState.error || '摘要更新失败，可点击刷新摘要重试' : currentState.status === 'running' ? '正在更新摘要…' : '等待摘要更新…'}
       </div>}
-      {summaries.filter((summary) => !sceneId || summary.scene_id === sceneId).length > 0 && <div className="rounded-xl border border-emerald-200/70 bg-emerald-50/60 px-3 py-2.5 dark:border-emerald-900/60 dark:bg-emerald-950/20">
-        <div className="mb-1 text-[11px] font-medium text-emerald-700 dark:text-emerald-300">当前场景摘要</div>
-        {summaries.filter((summary) => !sceneId || summary.scene_id === sceneId).slice(0, 2).map((summary) => <div key={summary.id} className="whitespace-pre-wrap text-[12px] leading-relaxed text-stone-700 dark:text-stone-200">{summary.content}</div>)}
+      {currentSummaries.length > 0 && <div className="rounded-xl border border-emerald-200/70 bg-emerald-50/60 px-3 py-2.5 dark:border-emerald-900/60 dark:bg-emerald-950/20">
+        <div className="mb-1 text-[11px] font-medium text-emerald-700 dark:text-emerald-300">当前短时与场景摘要</div>
+        {currentSummaries.map((summary) => <div key={summary.id} className="whitespace-pre-wrap text-[12px] leading-relaxed text-stone-700 dark:text-stone-200">{summary.content}</div>)}
       </div>}
       <div className="flex flex-wrap gap-1" aria-label="记忆分层">
         {(['all', 'short', 'episodic', 'semantic', 'long', 'evidence'] as const).map((value) => (
@@ -166,6 +171,7 @@ export function MemoryPanel({ botId, sceneId }: { botId: string; sceneId?: strin
                   {m.representation === 'verbatim' ? '原文证据' : LAYER_LABEL[m.layer]} · {KIND_LABEL[m.kind] ?? m.kind}
                 </span>
                 <span>{m.source === 'auto' ? '自动' : '手动'}</span>
+                {m.layer === 'short' && <span>窗口 {m.evidence.length}/10 条</span>}
                 <span>{formatFullTime(m.created_at)}</span>
               </div>
               {m.speaker && <div className="mt-1 text-[11px] text-stone-400">

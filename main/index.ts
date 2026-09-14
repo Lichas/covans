@@ -145,6 +145,14 @@ function broadcast(ev: CovanEvent): void {
   }
 }
 
+function setDockIcon(): void {
+  if (process.platform !== 'darwin' || !app.dock) return
+  const iconPath = app.isPackaged
+    ? path.join(process.resourcesPath, 'app-icon.png')
+    : path.join(app.getAppPath(), 'resources', 'app-icon.png')
+  if (fs.existsSync(iconPath)) app.dock.setIcon(iconPath)
+}
+
 function createWindow(): void {
   const win = new BrowserWindow({
     title: 'Covan',
@@ -224,6 +232,7 @@ void app.whenReady().then(() => {
     .run()
   initOrchestrator({ emit: broadcast })
   registerIpc()
+  setDockIcon()
   createWindow()
 
   app.on('activate', () => {

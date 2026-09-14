@@ -1170,9 +1170,13 @@ export function setMemorySummaryState(botId: string, sceneId: string, status: Me
   emitEvent({ type: 'memories-updated', botId })
 }
 
-/** One stable summary card per owner's scene; evidence remains independently stored. */
-export function saveSceneSummary(botId: string, sceneId: string, content: string, evidence: Memory[], layer: 'short' | 'episodic' = 'episodic'): Memory {
-  const sourceId = (layer === 'short' ? 'working-summary:' : 'scene-summary:') + sceneId
+/** One scene summary, plus one stable card per short-memory window. */
+export function saveSceneSummary(botId: string, sceneId: string, content: string, evidence: Memory[], layer: 'short' | 'episodic' = 'episodic', windowId = ''): Memory {
+  const sourceId = layer === 'short'
+    ? 'working-summary:' + sceneId + ':' + (windowId || evidence[0]?.source_id || 'empty')
+    : 'scene-summary:' + sceneId
+  if (layer === 'short')
+    getDb().prepare('DELETE FROM memories WHERE bot_id=? AND source_id=?').run(botId, 'working-summary:' + sceneId)
   const row = getDb().prepare('SELECT * FROM memories WHERE bot_id=? AND source_id=?').get(botId, sourceId) as MemoryRow | undefined
   const now = Date.now()
   const fields: MemoryWrite = {
