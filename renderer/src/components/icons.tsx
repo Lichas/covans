@@ -1,6 +1,16 @@
 // components/icons.tsx — 内联 SVG 图标（heroicons 风格手写简版）
-import type { SVGProps } from 'react'
+import type { CSSProperties, HTMLAttributes, SVGProps } from 'react'
 import type { ProviderKind } from '@shared/types'
+import anthropicIcon from '../assets/provider-icons/anthropic.svg'
+import deepseekIcon from '../assets/provider-icons/deepseek.svg'
+import googleIcon from '../assets/provider-icons/google.svg'
+import kimiIcon from '../assets/provider-icons/kimi.svg'
+import lmStudioIcon from '../assets/provider-icons/lm-studio.svg'
+import mockIcon from '../assets/provider-icons/mock.svg'
+import openaiCompatibleIcon from '../assets/provider-icons/openai-compatible.svg'
+import openaiIcon from '../assets/provider-icons/openai.svg'
+import openrouterIcon from '../assets/provider-icons/openrouter.svg'
+import zhipuIcon from '../assets/provider-icons/zhipu.svg'
 
 type P = SVGProps<SVGSVGElement>
 
@@ -218,44 +228,56 @@ export const PencilIcon = (p: P) => (
 
 const PROVIDER_ICON_META: Record<
   ProviderKind,
-  { color: string; glyph: string }
+  { color: string; source: string }
 > = {
-  openai: { color: '#18181b', glyph: 'O' },
-  anthropic: { color: '#c2410c', glyph: 'A' },
-  google: { color: '#4285f4', glyph: 'G' },
-  openrouter: { color: '#7c3aed', glyph: '◇' },
-  kimi: { color: '#1677ff', glyph: 'K' },
-  zhipu: { color: '#2563eb', glyph: '智' },
-  deepseek: { color: '#0891b2', glyph: 'D' },
-  'lm-studio': { color: '#7457e8', glyph: 'LM' },
-  'openai-compatible': { color: '#57534e', glyph: '↔' },
-  mock: { color: '#a8a29e', glyph: 'M' },
+  openai: { color: '#111111', source: openaiIcon },
+  anthropic: { color: '#c15f35', source: anthropicIcon },
+  google: { color: '#4285f4', source: googleIcon },
+  openrouter: { color: '#111111', source: openrouterIcon },
+  kimi: { color: '#1677ff', source: kimiIcon },
+  zhipu: { color: '#2b6af5', source: zhipuIcon },
+  deepseek: { color: '#4d6bfe', source: deepseekIcon },
+  'lm-studio': { color: '#7457e8', source: lmStudioIcon },
+  'openai-compatible': { color: '#6b7280', source: openaiCompatibleIcon },
+  mock: { color: '#8a8a8a', source: mockIcon },
 }
 
-/** Provider 标识图标：内联 SVG，避免依赖外部图片和网络资源。 */
-export function ProviderIcon({ kind, ...props }: P & { kind: ProviderKind }) {
+type ProviderIconProps = Omit<
+  HTMLAttributes<HTMLSpanElement>,
+  'children' | 'width' | 'height'
+> & {
+  kind: ProviderKind
+  width?: number | string
+  height?: number | string
+}
+
+/** Provider 标识图标：使用随应用打包的厂商图形，不在运行时请求网络。 */
+export function ProviderIcon({
+  kind,
+  width = 20,
+  height = 20,
+  className,
+  style,
+  ...props
+}: ProviderIconProps) {
   const meta = PROVIDER_ICON_META[kind]
-  const size = typeof props.width === 'number' ? props.width : 20
   return (
-    <svg {...base({ ...props, stroke: 'none' })} aria-hidden="true">
-      <rect x="1" y="1" width="22" height="22" rx="6" fill={meta.color} />
-      <text
-        x="12"
-        y="16"
-        textAnchor="middle"
-        fill="white"
-        fontSize={
-          meta.glyph === '智' || meta.glyph.length > 1
-            ? 8.5
-            : size <= 18
-              ? 12
-              : 13
-        }
-        fontFamily="-apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif"
-        fontWeight="700"
-      >
-        {meta.glyph}
-      </text>
-    </svg>
+    <span
+      {...props}
+      aria-hidden="true"
+      className={`provider-icon ${className ?? ''}`}
+      data-provider-kind={kind}
+      style={
+        {
+          ...style,
+          width,
+          height,
+          '--provider-icon-color': meta.color,
+          '--provider-icon-source': `url("${meta.source}")`,
+        } as CSSProperties
+      }
+    >
+      <span className="provider-icon-mark" />
+    </span>
   )
 }

@@ -56,6 +56,22 @@ try {
       kind: 'mock',
       default_model: 'mock-default',
     })
+    await Promise.all([
+      window.covan.saveProvider({
+        name: 'Kimi icon fixture',
+        kind: 'kimi',
+        default_model: 'k3',
+      }),
+      window.covan.saveProvider({
+        name: 'DeepSeek icon fixture',
+        kind: 'deepseek',
+        default_model: 'deepseek-v4-flash',
+      }),
+      window.covan.saveProvider({
+        name: 'LM Studio icon fixture',
+        kind: 'lm-studio',
+      }),
+    ])
     const a = await window.covan.createBot({
       name: '设计搭档',
       description: '把模糊的想法，变成清晰的下一步',
@@ -220,6 +236,30 @@ try {
   await page.keyboard.press('Enter')
   await expect(page.locator('.chat-header h1')).toHaveText('产品搭档')
   await page.getByRole('button', { name: '设置', exact: true }).click()
+  await page.getByRole('button', { name: 'Provider', exact: true }).click()
+  for (const kind of ['kimi', 'deepseek', 'lm-studio']) {
+    await expect(
+      page.locator(`[data-provider-kind="${kind}"] .provider-icon-mark`).first(),
+    ).toBeVisible()
+  }
+  const providerIconState = await page.evaluate(() =>
+    ['kimi', 'deepseek', 'lm-studio'].map((kind) => {
+      const icon = document.querySelector(`[data-provider-kind="${kind}"]`)
+      const mark = icon?.querySelector('.provider-icon-mark')
+      const styles = mark ? getComputedStyle(mark) : null
+      return {
+        hasText: Boolean(icon?.querySelector('text')),
+        mask: styles?.webkitMaskImage || styles?.maskImage || '',
+      }
+    }),
+  )
+  assert.ok(
+    providerIconState.every((icon) => !icon.hasText && icon.mask !== 'none'),
+    'Provider 应显示本地图形标识，而非文字缩写',
+  )
+  await page.screenshot({ path: path.join(artifacts, 'provider-icons.png') })
+  console.log('✓ Provider vendor marks render without text glyphs')
+  await page.getByRole('button', { name: '通用', exact: true }).click()
   await page.getByRole('button', { name: '深色', exact: true }).click()
   await page.getByRole('button', { name: '关闭', exact: true }).click()
   await page

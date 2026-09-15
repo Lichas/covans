@@ -125,6 +125,23 @@ button:disabled {
 .icon-button:disabled {
   opacity: 0.35;
 }
+.provider-icon {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  color: var(--provider-icon-color);
+  line-height: 0;
+  vertical-align: middle;
+}
+.provider-icon-mark {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: currentColor;
+  -webkit-mask: var(--provider-icon-source) center / contain no-repeat;
+  mask: var(--provider-icon-source) center / contain no-repeat;
+}
 .chat-view {
   position: relative;
   isolation: isolate;

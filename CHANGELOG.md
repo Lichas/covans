@@ -51,6 +51,8 @@
 
 ### Changed
 
+- Provider 列表、配置表单、Bot 模型选择和聊天头部改用厂商图形标识；移除 K、LM、D 等文字缩写图标。OpenAI-compatible 与内置 Mock 使用中性图形。
+
 - 项目采用 Apache License 2.0，并补充中文优先的中英双语 README、运行指南与界面截图。
 
 - 普通聊天正文和 TXT 产物预览采用系统 UI 字体栈，macOS 下优先使用系统字体与 PingFang SC；代码、代码文件预览和文件名仍保持等宽字体。

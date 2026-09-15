@@ -33,7 +33,7 @@
 - **Agent 私聊**：Bot 向另一位 Bot 咨询，消息流中插入私聊卡片，点击浮窗查看真实记录、状态与时间；支持停止，不递归发起私聊
 - **最多 3 个置顶 Bot**：在左侧单聊列表项右键 → 置顶/取消置顶；顶部只显示已置顶头像，没有空槽位
 
-产品、规格、架构与设计文档见 [文档导航](docs/README.md)；版本变化见 [CHANGELOG](CHANGELOG.md)。本项目使用 [Apache License 2.0](LICENSE)。
+产品、规格、架构与设计文档见 [文档导航](docs/README.md)；版本变化见 [CHANGELOG](CHANGELOG.md)。本项目使用 [Apache License 2.0](LICENSE)。Provider 图标随应用本地打包，来源与商标说明见 [NOTICE](NOTICE)。
 
 ## 运行
 
@@ -145,4 +145,4 @@ Run `npm run typecheck`, `npm run smoke`, `npm run test:ui`, and `npm run test:c
 
 Application data is stored locally under `~/.covans/`. Chat content and files sent to a model are processed by the provider configured for that Bot. Provider API keys are currently stored in plaintext in the local SQLite database; do not share that data directory.
 
-This project is licensed under the [Apache License 2.0](LICENSE). Third-party dependencies remain under their respective licenses. See the [documentation index](docs/README.md) and [changelog](CHANGELOG.md) for more details.
+This project is licensed under the [Apache License 2.0](LICENSE). Provider icon sources and trademark notices are listed in [NOTICE](NOTICE). Third-party dependencies remain under their respective licenses. See the [documentation index](docs/README.md) and [changelog](CHANGELOG.md) for more details.
