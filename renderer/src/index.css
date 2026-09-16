@@ -1065,6 +1065,7 @@ button:disabled {
 }
 .composer-box {
   display: flex;
+  flex-direction: column;
   gap: 10px;
   align-items: flex-end;
   padding: 12px 13px 12px 17px;
@@ -1076,6 +1077,44 @@ button:disabled {
     border-color 150ms,
     box-shadow 150ms;
 }
+.composer-controls {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+}
+#message-composer {
+  min-width: 0;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+#message-composer::-webkit-scrollbar,
+.composer-quote-text::-webkit-scrollbar { display: none; }
+.composer-quote {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  width: 100%;
+  min-width: 0;
+  padding: 9px 10px;
+  border-left: 3px solid var(--accent);
+  border-radius: 4px;
+  background: var(--soft);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.composer-quote-text {
+  max-height: 76px;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  scrollbar-width: none;
+}
+.composer-quote-text .markdown-content { font-size: 12px; line-height: 1.6; }
+.composer-quote-text .markdown-content :is(h1, h2, h3, h4, h5, h6) { font-size: 12px; margin: 4px 0; letter-spacing: 0; }
+.composer-quote-text .markdown-content :is(p, pre, ul, ol, blockquote) { margin-top: 0; margin-bottom: 4px; }
 .composer-box:focus-within {
   border-color: #a4b4a7;
   box-shadow: 0 0 0 3px #7a997c0c;

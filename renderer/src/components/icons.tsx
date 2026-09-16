@@ -1,6 +1,7 @@
 // components/icons.tsx — 内联 SVG 图标（heroicons 风格手写简版）
 import type { CSSProperties, HTMLAttributes, SVGProps } from 'react'
 import type { ProviderKind } from '@shared/types'
+export { Quote as QuoteIcon, Bug as BugIcon } from 'lucide-react'
 import anthropicIcon from '../assets/provider-icons/anthropic.svg'
 import deepseekIcon from '../assets/provider-icons/deepseek.svg'
 import googleIcon from '../assets/provider-icons/google.svg'
@@ -23,11 +24,6 @@ export const CopyIcon = (p: P) => (
 export const ArrowDownIcon = (p: P) => (
   <svg {...base(p)}>
     <path d="M12 4v16m-6-6 6 6 6-6" />
-  </svg>
-)
-export const QuoteIcon = (p: P) => (
-  <svg {...base(p)}>
-    <path d="M4 6h6v6H5c0 3 1 4 3 5M14 6h6v6h-5c0 3 1 4 3 5" />
   </svg>
 )
 export const DownloadIcon = (p: P) => (
@@ -58,6 +54,19 @@ function base(props: P) {
 export const PlusIcon = (p: P) => (
   <svg {...base(p)}>
     <path d="M12 5v14M5 12h14" />
+  </svg>
+)
+
+export const ClockIcon = (p: P) => (
+  <svg {...base(p)}>
+    <circle cx="12" cy="12" r="8.5" />
+    <path d="M12 7v5l3.5 2" />
+  </svg>
+)
+
+export const PlayIcon = (p: P) => (
+  <svg {...base(p)}>
+    <path d="m9 6 9 6-9 6z" fill="currentColor" stroke="none" />
   </svg>
 )
 

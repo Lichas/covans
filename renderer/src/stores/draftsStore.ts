@@ -3,6 +3,7 @@ import { persist } from 'zustand/middleware'
 import type { Attachment } from '@shared/types'
 
 interface Draft {
+  quote?: { messageId: string; author: string; content: string } | null
   attachments?: Attachment[]
   text: string
   mentionNames: Record<string, string>

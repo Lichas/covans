@@ -1,5 +1,8 @@
 // shared/ipcChannels.ts — IPC 通道名常量（主/preload 共用）
 export const CH = {
+  getDiagnosticReport: 'debug:report',
+  analyzeDiagnostic: 'debug:analyze',
+  cancelDiagnostic: 'debug:cancel',
   importChatImage: 'images:import',
   getUserProfile: 'user:profile',
   saveUserProfile: 'user:saveProfile',
@@ -12,6 +15,10 @@ export const CH = {
   getAgentThread: 'agentChats:get',
   startAgentConversation: 'agentChats:start',
   stopAgentConversation: 'agentChats:stop',
+  listScheduledTasks: 'scheduledTasks:list',
+  saveScheduledTask: 'scheduledTasks:save',
+  deleteScheduledTask: 'scheduledTasks:delete',
+  runScheduledTask: 'scheduledTasks:run',
   expandAvatarPrompt: 'bots:expandAvatarPrompt',
   listProviders: 'providers:list',
   saveProvider: 'providers:save',

@@ -1,7 +1,7 @@
 import { memo } from 'react'
 import type { Bot, Message } from '@shared/types'
 import { Avatar } from './Avatar'
-import { QuoteIcon, RefreshIcon, WarnIcon } from './icons'
+import { QuoteIcon, RefreshIcon, WarnIcon, BugIcon } from './icons'
 import { CopyButton } from './CopyButton'
 import { MarkdownContent } from './MarkdownContent'
 import { ChatImage, attachmentUrl } from './ChatImage'
@@ -83,7 +83,7 @@ export const MessageBubble = memo(function MessageBubble({
             </div>
           )}
           {isUser ? (
-            <div className="selectable msg-content">{message.content}</div>
+            message.content.startsWith('> ') ? <MarkdownContent content={message.content} /> : <div className="selectable msg-content">{message.content}</div>
           ) : message.content ? (
             <MarkdownContent content={message.content} />
           ) : streaming && !message.attachments.length ? (
@@ -113,9 +113,9 @@ export const MessageBubble = memo(function MessageBubble({
         {message.status === 'stopped' && (
           <div className="message-stopped">已停止生成 · 已保留现有内容</div>
         )}
-        {!streaming && (
+        {(!streaming || !isUser) && (
           <div className="message-actions">
-            {message.content && (
+            {!streaming && message.content && (
               <>
                 <CopyButton text={message.content} compact />
                 <button
@@ -128,6 +128,7 @@ export const MessageBubble = memo(function MessageBubble({
                 </button>
               </>
             )}
+            {!isUser && <CopyButton compact label="复制诊断标识" text={`covan-debug:v1:${message.id}`} icon={<BugIcon size={14} />} />}
             {isError && (
               <button
                 className="message-action"

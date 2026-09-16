@@ -7,6 +7,7 @@ import type {
   BotInput,
   MemoryKind,
   ProviderInput,
+  ScheduledTaskInput,
 } from '../shared/types'
 import {
   MAX_IMAGE_BYTES,
@@ -37,6 +38,8 @@ import {
   resolveWorkspaceFile,
 } from './workspace'
 import { observabilityDirectory } from './observability'
+import { getDiagnosticReport, analyzeDiagnostic, cancelDiagnostic } from './diagnostics'
+import { observeScheduledTaskChange, refreshScheduledTasks, runScheduledTaskNow } from './scheduledTasks'
 
 // ---------- 参数校验 ----------
 
@@ -116,6 +119,35 @@ export function registerIpc(): void {
   handle(CH.writeClipboard, (text: string) => {
     assertStr(text, 'text', true)
     clipboard.writeText(text)
+  })
+  // scheduled tasks
+  handle(CH.listScheduledTasks, (botId?: string) => {
+    if (botId !== undefined) assertStr(botId, 'botId')
+    return db.listScheduledTasks(botId)
+  })
+  handle(CH.saveScheduledTask, (input: ScheduledTaskInput) => {
+    if (!input || typeof input !== 'object')
+      throw new Error('参数必须是定时任务对象')
+    assertStr(input.bot_id, 'bot_id')
+    assertStr(input.chat_id, 'chat_id')
+    assertStr(input.title, 'title')
+    assertStr(input.prompt, 'prompt')
+    const existing = input.id ? db.getScheduledTask(input.id) : null
+    const task = db.saveScheduledTask(input)
+    observeScheduledTaskChange(existing ? 'updated' : 'created', task)
+    refreshScheduledTasks()
+    return task
+  })
+  handle(CH.deleteScheduledTask, (id: string) => {
+    assertStr(id, 'id')
+    const task = db.getScheduledTask(id)
+    if (task) observeScheduledTaskChange('deleted', task)
+    db.deleteScheduledTask(id)
+    refreshScheduledTasks()
+  })
+  handle(CH.runScheduledTask, async (id: string) => {
+    assertStr(id, 'id')
+    await runScheduledTaskNow(id)
   })
   // providers
   handle(CH.listProviders, () => db.listProviders())
@@ -432,4 +464,7 @@ export function registerIpc(): void {
     const err = await shell.openPath(observabilityDirectory())
     if (err) throw new Error(err)
   })
+  handle(CH.getDiagnosticReport, (reference: string) => getDiagnosticReport(reference))
+  handle(CH.analyzeDiagnostic, (reference: string, botId: string) => analyzeDiagnostic(reference, botId))
+  handle(CH.cancelDiagnostic, () => cancelDiagnostic())
 }

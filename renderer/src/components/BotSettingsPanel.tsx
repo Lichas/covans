@@ -15,12 +15,13 @@ import { AvatarDialog } from './AvatarSettings'
 import { AvatarLifestyle } from './AvatarLifestyle'
 import { MemoryPanel } from './MemoryPanel'
 import { WorkspacePanel } from './WorkspacePanel'
+import { ScheduledTasksPanel } from './ScheduledTasksPanel'
 import { Field, Toggle, inputCls } from './controls'
 import { PencilIcon, ProviderIcon, UsersIcon } from './icons'
 import { MarkdownContent } from './MarkdownContent'
 import { GROUP_BACKGROUNDS, groupBackgroundUrl } from '../lib/groupBackground'
 
-type Tab = 'settings' | 'lifestyle' | 'memory' | 'workspace' | 'model'
+type Tab = 'settings' | 'lifestyle' | 'memory' | 'workspace' | 'scheduled' | 'model'
 
 /** 失焦保存的文本输入 */
 function BotField({
@@ -399,16 +400,7 @@ function ModelTab({ bot }: { bot: Bot }) {
               value={bot.provider_id ?? ''}
               onChange={(e) => {
                 const providerId = e.target.value || null
-                const nextProvider = providers.find((p) => p.id === providerId)
-                save({
-                  provider_id: providerId,
-                  reasoning_effort:
-                    nextProvider?.kind === 'kimi'
-                      ? 'high'
-                      : nextProvider?.kind === 'lm-studio'
-                        ? 'off'
-                        : bot.reasoning_effort,
-                })
+                save({ provider_id: providerId })
               }}
             >
               <option value="">未选择</option>
@@ -463,14 +455,14 @@ function ModelTab({ bot }: { bot: Bot }) {
             onBlur={(e) => {
               const value = Math.max(
                 64,
-                Math.min(131072, Math.round(Number(e.target.value) || 4096)),
+                Math.min(131072, Math.round(Number(e.target.value) || 8192)),
               )
               e.target.value = String(value)
               if (value !== bot.max_tokens) save({ max_tokens: value })
             }}
           />
           <p className="mt-1.5 text-[11px] text-stone-400">
-            日常聊天建议 512–2048；复杂长文再提高。
+            新建 Bot 默认 8192；简短聊天可按成本需要调低。
           </p>
         </Field>
         <div>
@@ -653,6 +645,7 @@ export function BotSettingsPanel() {
     { id: 'settings', label: '设定' },
     { id: 'memory', label: '记忆' },
     { id: 'workspace', label: '工作区' },
+    { id: 'scheduled', label: '定时' },
     { id: 'model', label: '模型' },
   ]
 
@@ -710,7 +703,7 @@ export function BotSettingsPanel() {
       />
 
       {/* Tabs */}
-      <div className="grid grid-cols-5 border-b border-stone-200 px-2 dark:border-stone-800">
+      <div className="grid grid-cols-6 border-b border-stone-200 px-2 dark:border-stone-800">
         {tabs.map((t) => (
           <button
             key={t.id}
@@ -737,6 +730,7 @@ export function BotSettingsPanel() {
         {tab === 'settings' && <SettingsTab key={bot.id} bot={bot} chat={chat} />}
         {tab === 'memory' && <MemoryPanel botId={bot.id} sceneId={chat.id} />}
         {tab === 'workspace' && <WorkspacePanel botId={bot.id} />}
+        {tab === 'scheduled' && <ScheduledTasksPanel bot={bot} chat={chat} />}
         {tab === 'model' && <ModelTab bot={bot} />}
         {tab === 'lifestyle' && <AvatarLifestyle bot={bot} />}
       </div>

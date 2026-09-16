@@ -12,6 +12,7 @@ import {
   type MutableModels,
   type ModelThinkingLevel,
 } from '@earendil-works/pi-ai'
+import { randomUUID } from 'node:crypto'
 import { anthropicProvider } from '@earendil-works/pi-ai/providers/anthropic'
 import { openaiProvider } from '@earendil-works/pi-ai/providers/openai'
 import { googleProvider } from '@earendil-works/pi-ai/providers/google'
@@ -33,6 +34,7 @@ import { appendToolGuidance, createAgentToolset } from './tools/toolset'
 import { describeWorkspaceArtifact } from './workspace'
 import {
   classifyObservationError,
+  observationErrorStatus,
   observe,
   type ObservationFields,
 } from './observability'
@@ -47,6 +49,9 @@ export interface AgentCallbacks {
 }
 
 export interface RunAgentOptions {
+  messageId?: string
+  traceId?: string
+  taskId?: string
   systemPrompt?: string
   signal?: AbortSignal
   privateConversation?: boolean
@@ -55,6 +60,8 @@ export interface RunAgentOptions {
 // ---------- 进行中任务表（SPEC §8）：Map<chatId, Set<AbortController>> ----------
 
 const running = new Map<string, Set<AbortController>>()
+const runningMessages = new Set<string>()
+export function isMessageRunning(messageId: string): boolean { return runningMessages.has(messageId) }
 
 function register(chatId: string, ctrl: AbortController): void {
   let set = running.get(chatId)
@@ -425,24 +432,30 @@ export async function runAgent(
   opts: RunAgentOptions = {},
 ): Promise<void> {
   const ctrl = new AbortController()
+  const dispatchStartedAt = Date.now()
   const onParentAbort = () => ctrl.abort()
   register(chatId, ctrl)
+  if (opts.messageId) runningMessages.add(opts.messageId)
   if (opts.signal) {
     if (opts.signal.aborted) ctrl.abort()
     else opts.signal.addEventListener('abort', onParentAbort, { once: true })
   }
   try {
+    observe('agent.dispatch.started', { chat_id: chatId, bot_id: bot.id, message_id: opts.messageId ?? '', ...(opts.traceId ? { trace_id: opts.traceId } : {}), ...(opts.taskId ? { scheduled_task_id: opts.taskId } : {}), max_tokens: bot.max_tokens, reasoning: bot.reasoning_effort })
     if (isMockBot(bot)) {
       await runMockAgent(bot, historyMessages, callbacks, opts, ctrl.signal)
       return
     }
     await runPiAgent(chatId, bot, historyMessages, callbacks, opts, ctrl.signal)
   } catch (e) {
+    observe('agent.dispatch.failed', { chat_id: chatId, bot_id: bot.id, message_id: opts.messageId ?? '', ...(opts.traceId ? { trace_id: opts.traceId } : {}), ...(opts.taskId ? { scheduled_task_id: opts.taskId } : {}), error_code: classifyObservationError(e), error_status: observationErrorStatus(e), duration_ms: Date.now() - dispatchStartedAt })
     if (!ctrl.signal.aborted)
       callbacks.onError(e instanceof Error ? e.message : String(e))
   } finally {
+    observe(ctrl.signal.aborted ? 'agent.dispatch.aborted' : 'agent.dispatch.ended', { chat_id: chatId, bot_id: bot.id, message_id: opts.messageId ?? '', ...(opts.traceId ? { trace_id: opts.traceId } : {}), ...(opts.taskId ? { scheduled_task_id: opts.taskId } : {}), duration_ms: Date.now() - dispatchStartedAt })
     opts.signal?.removeEventListener('abort', onParentAbort)
     unregister(chatId, ctrl)
+    if (opts.messageId) runningMessages.delete(opts.messageId)
   }
 }
 
@@ -524,6 +537,9 @@ async function runPiAgent(
 ): Promise<void> {
   const { models, model, apiKey, provider } = resolveModel(bot)
   const startedAt = Date.now()
+  const observeRun = (event: string, fields: ObservationFields = {}) => observe(event, { chat_id: chatId, bot_id: bot.id, message_id: opts.messageId ?? '', ...(opts.traceId ? { trace_id: opts.traceId } : {}), ...(opts.taskId ? { scheduled_task_id: opts.taskId } : {}), ...fields })
+  let requestIndex = 0
+  let requestStartedAt = startedAt
   if (
     !model.input.includes('image') &&
     historyMessages.some(
@@ -554,7 +570,7 @@ async function runPiAgent(
   const promptMessage = historyMessages.at(-1)
   if (!promptMessage || promptMessage.role === 'assistant')
     throw new Error('生成历史最后一条必须是 user 或 toolResult 消息')
-  observe('agent.run.started', {
+  observeRun('agent.run.started', {
     chat_id: chatId,
     bot_id: bot.id,
     provider_kind: provider.kind,
@@ -582,7 +598,9 @@ async function runPiAgent(
     sessionId: `${chatId}:${bot.id}`,
     getApiKey: async () => apiKey || undefined,
     onPayload: (payload) => {
-      observe('provider.payload.ready', {
+      requestStartedAt = Date.now()
+      observeRun('provider.payload.ready', {
+        request_index: ++requestIndex,
         chat_id: chatId,
         bot_id: bot.id,
         provider_kind: provider.kind,
@@ -592,12 +610,14 @@ async function runPiAgent(
       return undefined
     },
     onResponse: (response) => {
-      observe('provider.response.received', {
+      observeRun('provider.response.received', {
+        request_index: requestIndex,
         chat_id: chatId,
         bot_id: bot.id,
         provider_kind: provider.kind,
         model: model.id,
         status: response.status,
+        duration_ms: Date.now() - requestStartedAt,
       })
     },
   })
@@ -605,16 +625,57 @@ async function runPiAgent(
   let acc = ''
   const assistants: AssistantMessage[] = []
   let sawError: string | null = null
+  const toolCalls = new Map<string, { startedAt: number; index: number }>()
+  let toolIndex = 0
+  let firstDelta = false
+  let firstThinking = false
   const unsub = agent.subscribe((event) => {
+    if (event.type === 'message_update' && event.assistantMessageEvent.type === 'thinking_delta' && !firstThinking) {
+      firstThinking = true
+      observeRun('agent.first_thinking', { duration_ms: Date.now() - startedAt })
+    }
+    if (event.type === 'tool_execution_start') {
+      const call = { startedAt: Date.now(), index: ++toolIndex }
+      toolCalls.set(event.toolCallId, call)
+      let inputChars = 0
+      try { inputChars = JSON.stringify(event.args ?? '').length } catch { /* Measure metadata only. */ }
+      observeRun('tool.started', { tool_name: event.toolName, tool_index: call.index, input_chars: inputChars })
+    }
+    if (event.type === 'tool_execution_end') {
+      const call = toolCalls.get(event.toolCallId)
+      const errorText = event.isError && Array.isArray(event.result?.content)
+        ? event.result.content.filter((part: { type?: string; text?: string }) => part?.type === 'text').map((part: { text?: string }) => part.text ?? '').join(' ')
+        : ''
+      const resultChars = Array.isArray(event.result?.content)
+        ? event.result.content.reduce((total: number, part: { type?: string; text?: string }) => total + (part?.type === 'text' ? part.text?.length ?? 0 : 0), 0)
+        : 0
+      observeRun('tool.completed', {
+        tool_name: event.toolName,
+        tool_index: call?.index ?? null,
+        is_error: event.isError,
+        ...(event.isError ? { error_code: classifyObservationError(errorText || 'tool_error') } : {}),
+        duration_ms: Date.now() - (call?.startedAt ?? Date.now()),
+        result_chars: resultChars,
+        ...(event.isError ? { error_status: observationErrorStatus(errorText) } : {}),
+      })
+      toolCalls.delete(event.toolCallId)
+    }
     if (
       event.type === 'message_update' &&
       event.assistantMessageEvent.type === 'text_delta'
     ) {
       acc += event.assistantMessageEvent.delta
+      if (!firstDelta) {
+        firstDelta = true
+        observeRun('agent.first_text', { duration_ms: Date.now() - startedAt })
+      }
       callbacks.onDelta(event.assistantMessageEvent.delta)
     } else if (event.type === 'message_end') {
       const m = event.message
-      if (m.role === 'assistant') assistants.push(m)
+      if (m.role === 'assistant') {
+        assistants.push(m)
+        observeRun('agent.step.completed', { stop_reason: m.stopReason, input_tokens: m.usage.input, output_tokens: m.usage.output, reasoning_tokens: m.usage.reasoning ?? null, total_tokens: m.usage.totalTokens })
+      }
     } else if (
       event.type === 'tool_execution_end' &&
       !event.isError &&
@@ -657,33 +718,38 @@ async function runPiAgent(
   }
 
   const lastAssistant: AssistantMessage | undefined = assistants.at(-1)
-  if (signal.aborted || lastAssistant?.stopReason === 'aborted') return // stopped
+  if (signal.aborted || lastAssistant?.stopReason === 'aborted') {
+    observeRun('agent.run.aborted', { duration_ms: Date.now() - startedAt, partial_chars: acc.length })
+    return
+  }
   if (sawError) {
-    observe('agent.run.failed', {
+    observeRun('agent.run.failed', {
       chat_id: chatId,
       bot_id: bot.id,
       provider_kind: provider.kind,
       model: model.id,
       duration_ms: Date.now() - startedAt,
       error_code: classifyObservationError(sawError),
+      error_status: observationErrorStatus(sawError),
     })
     callbacks.onError(sawError)
     return
   }
   if (lastAssistant && lastAssistant.stopReason === 'error') {
-    observe('agent.run.failed', {
+    observeRun('agent.run.failed', {
       chat_id: chatId,
       bot_id: bot.id,
       provider_kind: provider.kind,
       model: model.id,
       duration_ms: Date.now() - startedAt,
       error_code: classifyObservationError(lastAssistant.errorMessage),
+      error_status: observationErrorStatus(lastAssistant.errorMessage),
     })
     callbacks.onError(lastAssistant.errorMessage || '生成失败')
     return
   }
   const full = acc || (lastAssistant ? contentText(lastAssistant.content) : '')
-  observe('agent.run.completed', {
+  observeRun('agent.run.completed', {
     chat_id: chatId,
     bot_id: bot.id,
     provider_kind: provider.kind,
@@ -702,6 +768,15 @@ export interface CompleteOnceOptions {
   reasoning?: ReasoningEffort
   maxTokens?: number
   temperature?: number
+  onResponseStatus?: (status: number) => void
+  onCompletion?: (metadata: { stopReason: string; inputTokens: number; outputTokens: number; reasoningTokens: number | null; outputChars: number }) => void
+  observation?: {
+    operation: string
+    chatId?: string
+    messageId?: string
+    traceId?: string
+    taskId?: string
+  }
 }
 
 export async function completeOnce(
@@ -710,32 +785,93 @@ export async function completeOnce(
   userText: string,
   options: CompleteOnceOptions = {},
 ): Promise<string> {
-  if (isMockBot(bot))
-    return mockComplete(bot, systemPrompt, userText, {
-      signal: options.signal,
-    })
-  const { models, model, apiKey, provider } = resolveModel(bot)
   const effort = options.reasoning ?? bot.reasoning_effort
-  const msg = await models.completeSimple(
-    model,
-    {
-      systemPrompt: applyLmStudioReasoningHint(provider, systemPrompt, effort),
-      messages: [{ role: 'user', content: userText, timestamp: Date.now() }],
-    },
-    {
-      apiKey: apiKey || undefined,
-      signal: options.signal,
-      reasoning: effort === 'off' ? undefined : effort,
-      maxTokens: options.maxTokens ?? bot.max_tokens,
-      temperature:
-        provider.kind === 'kimi' && model.id === 'k3'
-          ? 1
-          : (options.temperature ?? bot.temperature),
-    },
-  )
-  if (msg.stopReason === 'error')
-    throw new Error(msg.errorMessage || '调用失败')
-  return contentText(msg.content)
+  const callId = randomUUID()
+  const configuredProvider = bot.provider_id ? db.getProvider(bot.provider_id) : null
+  const scope: ObservationFields = {
+    call_id: callId,
+    bot_id: bot.id,
+    operation: options.observation?.operation ?? 'internal_completion',
+    provider_kind: configuredProvider?.kind ?? 'unconfigured',
+    model: bot.model || configuredProvider?.default_model || '',
+    ...(options.observation?.chatId ? { chat_id: options.observation.chatId } : {}),
+    ...(options.observation?.messageId ? { message_id: options.observation.messageId } : {}),
+    ...(options.observation?.traceId ? { trace_id: options.observation.traceId } : {}),
+    ...(options.observation?.taskId ? { scheduled_task_id: options.observation.taskId } : {}),
+  }
+  const startedAt = Date.now()
+  let status: number | null = null
+  observe('completion.started', {
+    ...scope,
+    max_tokens: options.maxTokens ?? bot.max_tokens,
+    reasoning: effort,
+  })
+  try {
+    if (isMockBot(bot)) {
+      const result = await mockComplete(bot, systemPrompt, userText, { signal: options.signal })
+      const aborted = options.signal?.aborted ?? false
+      observe(aborted ? 'completion.aborted' : 'completion.finished', {
+        ...scope, duration_ms: Date.now() - startedAt,
+        stop_reason: aborted ? 'aborted' : 'stop', output_chars: result.length,
+      })
+      return result
+    }
+    const { models, model, apiKey, provider } = resolveModel(bot)
+    const callScope = { ...scope, provider_kind: provider.kind, model: model.id }
+    const msg = await models.completeSimple(
+      model,
+      {
+        systemPrompt: applyLmStudioReasoningHint(provider, systemPrompt, effort),
+        messages: [{ role: 'user', content: userText, timestamp: Date.now() }],
+      },
+      {
+        apiKey: apiKey || undefined,
+        signal: options.signal,
+        reasoning: effort === 'off' ? undefined : effort,
+        onPayload: (payload) => {
+          observe('completion.payload.ready', { ...callScope, ...payloadObservation(payload) })
+          return undefined
+        },
+        onResponse: (response) => {
+          status = response.status
+          options.onResponseStatus?.(response.status)
+          observe('completion.response.received', { ...callScope, status, duration_ms: Date.now() - startedAt })
+        },
+        maxTokens: options.maxTokens ?? bot.max_tokens,
+        temperature:
+          provider.kind === 'kimi' && model.id === 'k3'
+            ? 1
+            : (options.temperature ?? bot.temperature),
+      },
+    )
+    const result = contentText(msg.content)
+    const metadata = {
+      stopReason: msg.stopReason, inputTokens: msg.usage.input,
+      outputTokens: msg.usage.output, reasoningTokens: msg.usage.reasoning ?? null,
+      outputChars: result.length,
+    }
+    options.onCompletion?.(metadata)
+    observe('completion.finished', {
+      ...callScope, duration_ms: Date.now() - startedAt,
+      stop_reason: metadata.stopReason, input_tokens: metadata.inputTokens,
+      output_tokens: metadata.outputTokens, reasoning_tokens: metadata.reasoningTokens,
+      output_chars: metadata.outputChars,
+    })
+    if (msg.stopReason === 'error') throw new Error(msg.errorMessage || '调用失败')
+    if (msg.stopReason === 'aborted') observe('completion.aborted', { ...callScope, duration_ms: Date.now() - startedAt })
+    return result
+  } catch (error) {
+    if (options.signal?.aborted) {
+      observe('completion.aborted', { ...scope, duration_ms: Date.now() - startedAt })
+    } else {
+      const message = error instanceof Error ? error.message : String(error)
+      observe('completion.failed', {
+        ...scope, duration_ms: Date.now() - startedAt,
+        error_code: classifyObservationError(error), error_status: status ?? observationErrorStatus(error),
+      })
+    }
+    throw error
+  }
 }
 
 /** testProvider：用一次 ping completion 验证连通性 */
@@ -762,8 +898,8 @@ export async function testProviderConnection(
       provider_id: provider.id,
       model: modelId,
       temperature: 0.7,
-      max_tokens: 4096,
-      reasoning_effort: 'off',
+      max_tokens: 8192,
+      reasoning_effort: 'medium',
       workspace_dir: '',
       notify: 0,
       is_coordinator: 0,

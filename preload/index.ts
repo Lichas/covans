@@ -7,6 +7,7 @@ import type {
   CovanEvent,
   MemoryKind,
   ProviderInput,
+  ScheduledTaskInput,
 } from '../shared/types'
 
 const api: CovanApi = {
@@ -26,6 +27,14 @@ const api: CovanApi = {
     ipcRenderer.invoke(CH.startAgentConversation, chatId, from, to, message),
   stopAgentConversation: (threadId) =>
     ipcRenderer.invoke(CH.stopAgentConversation, threadId),
+  listScheduledTasks: (botId?: string) =>
+    ipcRenderer.invoke(CH.listScheduledTasks, botId),
+  saveScheduledTask: (input: ScheduledTaskInput) =>
+    ipcRenderer.invoke(CH.saveScheduledTask, input),
+  deleteScheduledTask: (id: string) =>
+    ipcRenderer.invoke(CH.deleteScheduledTask, id),
+  runScheduledTask: (id: string) =>
+    ipcRenderer.invoke(CH.runScheduledTask, id),
   expandAvatarPrompt: (botId, direction) =>
     ipcRenderer.invoke(CH.expandAvatarPrompt, botId, direction),
   // providers
@@ -109,6 +118,9 @@ const api: CovanApi = {
   setSetting: (key: string, value: string) =>
     ipcRenderer.invoke(CH.setSetting, key, value),
   openObservabilityLogs: () => ipcRenderer.invoke(CH.openObservabilityLogs),
+  getDiagnosticReport: (reference) => ipcRenderer.invoke(CH.getDiagnosticReport, reference),
+  analyzeDiagnostic: (reference, botId) => ipcRenderer.invoke(CH.analyzeDiagnostic, reference, botId),
+  cancelDiagnostic: () => ipcRenderer.invoke(CH.cancelDiagnostic),
 
   // 事件订阅（返回取消订阅函数）
   onEvent: (cb: (ev: CovanEvent) => void) => {

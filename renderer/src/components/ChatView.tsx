@@ -132,13 +132,12 @@ export function ChatView() {
 
   const quote = (message: Message) => {
     if (!chat) return
-    const existing = useDraftsStore.getState().drafts[chat.id]?.text ?? ''
-    const quoted = message.content
-      .split('\n')
-      .map((line) => '> ' + line)
-      .join('\n')
     useDraftsStore.getState().setDraft(chat.id, {
-      text: existing + (existing ? '\n\n' : '') + quoted + '\n\n',
+      quote: {
+        messageId: message.id,
+        author: message.sender_type === 'user' ? '你' : (chat.member_bots.find((b) => b.id === message.sender_bot_id)?.name ?? 'Bot'),
+        content: message.content,
+      },
     })
     requestAnimationFrame(() =>
       document.getElementById('message-composer')?.focus(),

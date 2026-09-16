@@ -92,6 +92,19 @@ try {
       group: await window.covan.createGroup('灵感工作室', [a.id, b.id]),
     }
   })
+  await page.evaluate(
+    async ({ a, dm }) => window.covan.saveScheduledTask({
+      bot_id: a.id,
+      chat_id: dm.id,
+      title: '每日灵感整理',
+      prompt: '整理三条今日灵感，使用简洁清单。',
+      schedule: 'cron',
+      cron: '0 9 * * *',
+      timezone: 'Asia/Shanghai',
+      enabled: false,
+    }),
+    fixture,
+  )
   await app.evaluate(
     async ({ app }, { fixture, markdown }) => {
       const { createRequire } = process.getBuiltinModule('module')
@@ -140,6 +153,18 @@ try {
     .locator('aside')
     .getByRole('button', { name: /设计搭档/ })
     .click()
+  if (
+    await page
+      .getByRole('button', { name: '展开设置', exact: true })
+      .isVisible()
+      .catch(() => false)
+  )
+    await page.getByRole('button', { name: '展开设置', exact: true }).click()
+  await page.getByRole('button', { name: '定时', exact: true }).click()
+  await expect(page.getByText('每日灵感整理', { exact: true })).toBeVisible()
+  await expect(page.getByText('已暂停', { exact: true })).toBeVisible()
+  await page.screenshot({ path: path.join(artifacts, 'scheduled-tasks.png') })
+  await page.getByRole('button', { name: '设定', exact: true }).click()
   await expect(page.locator('.markdown-content table')).toBeVisible()
   await expect(page.locator('.markdown-content .katex').first()).toBeVisible()
   await expect(page.locator('.markdown-content .katex-display')).toBeVisible()
@@ -216,7 +241,18 @@ try {
     .locator('[data-message-id="markdown"]')
     .getByRole('button', { name: '引用回复' })
     .click()
-  await expect(composer).toHaveValue(/^> ## 把想法/)
+  await expect(composer).toHaveValue('')
+  await expect(page.getByLabel('引用内容')).toContainText('把想法')
+  await composer.fill('引用之后的独立草稿')
+  await page.reload()
+  await expect(composer).toHaveValue('引用之后的独立草稿')
+  await expect(page.getByLabel('引用内容')).toContainText('把想法')
+  await page.screenshot({ path: path.join(artifacts, 'composer-quote.png') })
+  await composer.fill('很长的草稿\n'.repeat(40))
+  assert.equal(await composer.evaluate((el) => getComputedStyle(el).scrollbarWidth), 'none')
+  assert.ok(await composer.evaluate((el) => { el.scrollTop = 100; return el.scrollTop > 0 }))
+  await page.getByRole('button', { name: '取消引用' }).click()
+  await expect(page.getByLabel('引用内容')).toHaveCount(0)
   await composer.fill('拼音输入确认')
   await composer.dispatchEvent('keydown', {
     key: 'Enter',
@@ -259,6 +295,9 @@ try {
   )
   await page.screenshot({ path: path.join(artifacts, 'provider-icons.png') })
   console.log('✓ Provider vendor marks render without text glyphs')
+  await page.getByRole('button', { name: '定时任务', exact: true }).click()
+  await expect(page.getByText('每日灵感整理', { exact: true })).toBeVisible()
+  await page.screenshot({ path: path.join(artifacts, 'scheduled-tasks-global.png') })
   await page.getByRole('button', { name: '通用', exact: true }).click()
   await page.getByRole('button', { name: '深色', exact: true }).click()
   await page.getByRole('button', { name: '关闭', exact: true }).click()
@@ -329,6 +368,7 @@ try {
   await expect(
     page.locator('article[data-status="streaming"] .markdown-content'),
   ).toContainText('设计')
+  await expect(page.locator('article[data-status="streaming"]').getByRole('button', { name: '复制诊断标识' })).toBeVisible()
   await expect(
     page.getByRole('button', { name: '发送', exact: true }),
   ).toBeVisible()
@@ -442,6 +482,31 @@ try {
     false,
   )
   await page.screenshot({ path: path.join(artifacts, 'compact.png') })
+  await page.getByRole('button', { name: '定时', exact: true }).click()
+  await page
+    .getByRole('button', { name: '立即执行 每日灵感整理' })
+    .click()
+  await expect.poll(async () =>
+    page.evaluate(async () =>
+      (await window.covan.listScheduledTasks()).find(
+        (task) => task.title === '每日灵感整理',
+      )?.last_status,
+    ),
+  ).toBe('done')
+  await expect(
+    page.getByRole('button', { name: '停止生成', exact: true }),
+  ).toHaveCount(0)
+  await page.locator('article.message-bot[data-status="done"]').last().getByRole('button', { name: '引用回复' }).click()
+  await composer.fill('针对引用内容补充一句')
+  await page.screenshot({ path: path.join(artifacts, 'composer-quote-compact.png') })
+  await page.getByRole('button', { name: '发送', exact: true }).click()
+  await expect(page.getByLabel('引用内容')).toHaveCount(0)
+  await expect(page.locator('article.message-user').last().locator('blockquote')).toBeVisible()
+  const quoteMessages = await page.evaluate((id) => window.covan.listMessages(id), fixture.dm.id)
+  const quoteSent = quoteMessages.filter((m) => m.sender_type === 'user').at(-1)
+  assert.ok(quoteSent.content.startsWith('> 设计搭档\n> '))
+  assert.ok(quoteSent.content.endsWith('\n\n针对引用内容补充一句'))
+  await expect(page.getByRole('button', { name: '停止生成', exact: true })).toHaveCount(0, { timeout: 20000 })
   assert.deepEqual(errors, [])
   console.log('✓ Compact window layout, no renderer exceptions')
   console.log('Electron UX regression passed. Screenshots: ' + artifacts)

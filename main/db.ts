@@ -30,13 +30,20 @@ import type {
   UserMemory,
   AgentThread,
   AgentPrivateMessage,
+  ScheduledTask,
+  ScheduledTaskInput,
+  ScheduledTaskStatus,
   WorkspaceArtifact,
 } from '../shared/types'
 import { emitEvent } from './events'
+import { assertTimeZone, localTimeZone, nextScheduledRun } from './scheduleUtils'
 
 export type Db = Database.Database
 
 let db: Db | null = null
+
+const DEFAULT_MAX_TOKENS = 8192
+const DEFAULT_REASONING_EFFORT: Bot['reasoning_effort'] = 'medium'
 
 const MIGRATION = `
 CREATE TABLE IF NOT EXISTS providers (
@@ -59,8 +66,8 @@ CREATE TABLE IF NOT EXISTS bots (
   provider_id TEXT REFERENCES providers(id),
   model TEXT NOT NULL DEFAULT '',
   temperature REAL NOT NULL DEFAULT 0.7,
-  max_tokens INTEGER NOT NULL DEFAULT 4096,
-  reasoning_effort TEXT NOT NULL DEFAULT 'off',
+  max_tokens INTEGER NOT NULL DEFAULT 8192,
+  reasoning_effort TEXT NOT NULL DEFAULT 'medium',
   workspace_dir TEXT NOT NULL DEFAULT '',
   notify INTEGER NOT NULL DEFAULT 1,
   is_coordinator INTEGER NOT NULL DEFAULT 0,
@@ -141,6 +148,27 @@ CREATE TABLE IF NOT EXISTS agent_private_messages (
   error TEXT NOT NULL DEFAULT '',
   created_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS scheduled_tasks (
+  id TEXT PRIMARY KEY,
+  bot_id TEXT NOT NULL REFERENCES bots(id) ON DELETE CASCADE,
+  chat_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  prompt TEXT NOT NULL,
+  schedule TEXT NOT NULL DEFAULT 'cron',
+  cron TEXT NOT NULL DEFAULT '',
+  run_at INTEGER,
+  timezone TEXT NOT NULL DEFAULT '',
+  model TEXT NOT NULL DEFAULT '',
+  enabled INTEGER NOT NULL DEFAULT 1,
+  next_run_at INTEGER,
+  last_run_at INTEGER,
+  last_status TEXT NOT NULL DEFAULT 'idle',
+  last_error TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_bot ON scheduled_tasks(bot_id, next_run_at);
+CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_chat ON scheduled_tasks(chat_id);
 `
 
 /** 打开（必要时创建）数据库并执行 migration。dir 为 userData 目录。 */
@@ -488,6 +516,25 @@ interface MessageRow {
   error: string
   created_at: number
 }
+interface ScheduledTaskRow {
+  id: string
+  bot_id: string
+  chat_id: string
+  title: string
+  prompt: string
+  schedule: string
+  cron: string
+  run_at: number | null
+  timezone: string
+  model: string
+  enabled: number
+  next_run_at: number | null
+  last_run_at: number | null
+  last_status: string
+  last_error: string
+  created_at: number
+  updated_at: number
+}
 interface MemoryRow extends Omit<Memory, 'participants' | 'evidence'> {
   participants: string
   evidence: string
@@ -529,6 +576,14 @@ function toMessage(r: MessageRow): Message {
     status: r.status as MessageStatus,
     error: r.error,
     created_at: r.created_at,
+  }
+}
+function toScheduledTask(r: ScheduledTaskRow): ScheduledTask {
+  return {
+    ...r,
+    schedule: r.schedule as ScheduledTask['schedule'],
+    enabled: !!r.enabled,
+    last_status: r.last_status as ScheduledTaskStatus,
   }
 }
 function toMemory(r: MemoryRow): Memory {
@@ -648,10 +703,8 @@ export function createBot(input: BotInput): Bot {
       .prepare('SELECT COALESCE(MAX(sort_order), 0) AS m FROM bots')
       .get() as { m: number }
   ).m
-  const provider = input.provider_id ? getProvider(input.provider_id) : null
-  assertMaxTokens(input.max_tokens ?? 4096)
-  const reasoningEffort =
-    input.reasoning_effort ?? (provider?.kind === 'kimi' ? 'high' : 'off')
+  assertMaxTokens(input.max_tokens ?? DEFAULT_MAX_TOKENS)
+  const reasoningEffort = input.reasoning_effort ?? DEFAULT_REASONING_EFFORT
   assertReasoningEffort(reasoningEffort)
   getDb()
     .prepare(
@@ -670,7 +723,7 @@ export function createBot(input: BotInput): Bot {
       input.provider_id ?? null,
       input.model ?? '',
       input.temperature ?? 0.7,
-      input.max_tokens ?? 4096,
+      input.max_tokens ?? DEFAULT_MAX_TOKENS,
       reasoningEffort,
       id, // workspace_dir 默认用 bot id
       input.notify === false ? 0 : 1,
@@ -999,6 +1052,161 @@ export function touchChat(
       'UPDATE chats SET last_message_at = ?, unread = unread + ? WHERE id = ?',
     )
     .run(at, bumpUnread ? 1 : 0, chatId)
+}
+
+// ---------- scheduled tasks ----------
+
+export function listScheduledTasks(botId?: string): ScheduledTask[] {
+  const rows = (botId
+    ? getDb()
+        .prepare(
+          'SELECT * FROM scheduled_tasks WHERE bot_id=? ORDER BY enabled DESC, next_run_at ASC, created_at DESC',
+        )
+        .all(botId)
+    : getDb()
+        .prepare(
+          'SELECT * FROM scheduled_tasks ORDER BY enabled DESC, next_run_at ASC, created_at DESC',
+        )
+        .all()) as ScheduledTaskRow[]
+  return rows.map(toScheduledTask)
+}
+
+export function getScheduledTask(id: string): ScheduledTask | null {
+  const row = getDb()
+    .prepare('SELECT * FROM scheduled_tasks WHERE id=?')
+    .get(id) as ScheduledTaskRow | undefined
+  return row ? toScheduledTask(row) : null
+}
+
+function validateScheduledTask(input: ScheduledTaskInput): {
+  title: string
+  prompt: string
+  schedule: ScheduledTask['schedule']
+  cron: string
+  runAt: number | null
+  timezone: string
+  model: string
+  enabled: boolean
+  nextRunAt: number | null
+} {
+  const title = input.title.trim()
+  const prompt = input.prompt.trim()
+  if (!title || title.length > 120) throw new Error('任务名称需要 1–120 字')
+  if (!prompt || prompt.length > 8000) throw new Error('任务指令需要 1–8000 字')
+  if (input.schedule !== 'once' && input.schedule !== 'cron')
+    throw new Error('任务计划必须是单次或重复')
+  const timezone = assertTimeZone(input.timezone || localTimeZone())
+  const cron = (input.cron ?? '').trim()
+  const runAt = input.run_at ?? null
+  const enabled = input.enabled ?? true
+  return {
+    title,
+    prompt,
+    schedule: input.schedule,
+    cron,
+    runAt,
+    timezone,
+    model: (input.model ?? '').trim().slice(0, 300),
+    enabled,
+    nextRunAt: enabled
+      ? nextScheduledRun(input.schedule, cron, runAt, timezone)
+      : null,
+  }
+}
+
+/** 创建或更新任务时，Bot 必须仍属于目标会话，避免后台回复投递到无关会话。 */
+export function saveScheduledTask(input: ScheduledTaskInput): ScheduledTask {
+  const bot = getBot(input.bot_id)
+  const chat = getChat(input.chat_id)
+  if (!bot || !chat) throw new Error('Bot 或目标会话不存在')
+  if (!listMemberBots(chat.id).some((member) => member.id === bot.id))
+    throw new Error('定时任务的 Bot 必须属于目标会话')
+  const value = validateScheduledTask(input)
+  const now = Date.now()
+  if (input.id) {
+    const existing = getScheduledTask(input.id)
+    if (!existing) throw new Error('定时任务不存在')
+    getDb()
+      .prepare(
+        `UPDATE scheduled_tasks SET bot_id=?,chat_id=?,title=?,prompt=?,schedule=?,cron=?,run_at=?,timezone=?,model=?,enabled=?,next_run_at=?,last_error='',updated_at=? WHERE id=?`,
+      )
+      .run(
+        bot.id,
+        chat.id,
+        value.title,
+        value.prompt,
+        value.schedule,
+        value.cron,
+        value.runAt,
+        value.timezone,
+        value.model,
+        value.enabled ? 1 : 0,
+        value.nextRunAt,
+        now,
+        input.id,
+      )
+    emitEvent({ type: 'scheduled-tasks-updated', taskId: input.id })
+    return getScheduledTask(input.id)!
+  }
+  const id = newId()
+  getDb()
+    .prepare(
+      `INSERT INTO scheduled_tasks(id,bot_id,chat_id,title,prompt,schedule,cron,run_at,timezone,model,enabled,next_run_at,last_run_at,last_status,last_error,created_at,updated_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,NULL,'idle','',?,?)`,
+    )
+    .run(
+      id,
+      bot.id,
+      chat.id,
+      value.title,
+      value.prompt,
+      value.schedule,
+      value.cron,
+      value.runAt,
+      value.timezone,
+      value.model,
+      value.enabled ? 1 : 0,
+      value.nextRunAt,
+      now,
+      now,
+    )
+  emitEvent({ type: 'scheduled-tasks-updated', taskId: id })
+  return getScheduledTask(id)!
+}
+
+export function deleteScheduledTask(id: string): void {
+  getDb().prepare('DELETE FROM scheduled_tasks WHERE id=?').run(id)
+  emitEvent({ type: 'scheduled-tasks-updated', taskId: id })
+}
+
+export function updateScheduledTaskRuntime(
+  id: string,
+  patch: {
+    enabled?: boolean
+    nextRunAt?: number | null
+    lastRunAt?: number | null
+    lastStatus?: ScheduledTaskStatus
+    lastError?: string
+  },
+): ScheduledTask | null {
+  const existing = getScheduledTask(id)
+  if (!existing) return null
+  getDb()
+    .prepare(
+      'UPDATE scheduled_tasks SET enabled=?,next_run_at=?,last_run_at=?,last_status=?,last_error=?,updated_at=? WHERE id=?',
+    )
+    .run(
+      patch.enabled === undefined ? (existing.enabled ? 1 : 0) : patch.enabled ? 1 : 0,
+      patch.nextRunAt === undefined ? existing.next_run_at : patch.nextRunAt,
+      patch.lastRunAt === undefined ? existing.last_run_at : patch.lastRunAt,
+      patch.lastStatus ?? existing.last_status,
+      patch.lastError === undefined ? existing.last_error : patch.lastError.slice(0, 1200),
+      Date.now(),
+      id,
+    )
+  const task = getScheduledTask(id)
+  emitEvent({ type: 'scheduled-tasks-updated', taskId: id })
+  return task
 }
 
 // ---------- messages ----------

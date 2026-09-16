@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { CheckIcon, CopyIcon } from './icons'
 import { api } from '../lib/api'
 
@@ -6,10 +6,12 @@ export function CopyButton({
   text,
   label = '复制消息',
   compact = false,
+  icon,
 }: {
   text: string | (() => string)
   label?: string
   compact?: boolean
+  icon?: ReactNode
 }) {
   const [state, setState] = useState<'idle' | 'copied' | 'error'>('idle')
   const timer = useRef<ReturnType<typeof setTimeout>>()
@@ -40,7 +42,7 @@ export function CopyButton({
       {state === 'copied' ? (
         <CheckIcon width={14} height={14} />
       ) : (
-        <CopyIcon width={14} height={14} />
+        icon ?? <CopyIcon width={14} height={14} />
       )}
       {(!compact || state !== 'idle') && <span role="status">{title}</span>}
     </button>

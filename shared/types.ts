@@ -230,6 +230,51 @@ export interface AgentPrivateMessage {
   created_at: number
 }
 
+export type ScheduledTaskSchedule = 'once' | 'cron'
+export type ScheduledTaskStatus =
+  | 'idle'
+  | 'running'
+  | 'done'
+  | 'error'
+  | 'stopped'
+  | 'missed'
+
+/** Bot 的本地持久化定时 Agent 任务。空 model 表示继承 Bot 当前模型。 */
+export interface ScheduledTask {
+  id: string
+  bot_id: string
+  chat_id: string
+  title: string
+  prompt: string
+  schedule: ScheduledTaskSchedule
+  cron: string
+  run_at: number | null
+  timezone: string
+  model: string
+  enabled: boolean
+  next_run_at: number | null
+  last_run_at: number | null
+  last_status: ScheduledTaskStatus
+  last_error: string
+  created_at: number
+  updated_at: number
+}
+
+export interface ScheduledTaskInput {
+  id?: string
+  bot_id: string
+  chat_id: string
+  title: string
+  prompt: string
+  schedule: ScheduledTaskSchedule
+  cron?: string
+  run_at?: number | null
+  timezone?: string
+  /** 留空时沿用 Bot 当前的模型或 Provider 默认模型。 */
+  model?: string
+  enabled?: boolean
+}
+
 export interface AvatarDesign {
   prompt: string
   style: 'portrait' | 'robot' | 'cat' | 'abstract'
@@ -242,6 +287,12 @@ export type CovanEvent =
   | { type: 'agent-thread-updated'; chatId: string; threadId: string }
   | { type: 'message-start'; chatId: string; message: Message }
   | { type: 'generation-state'; chatId: string; generating: boolean }
+  | {
+      type: 'scheduled-task-state'
+      chatId: string
+      taskId: string
+      running: boolean
+    }
   | {
       type: 'agent-activity'
       chatId: string
@@ -264,6 +315,7 @@ export type CovanEvent =
   | { type: 'chat-updated'; chatId: string }
   | { type: 'bot-updated'; botId: string }
   | { type: 'workspace-updated'; botId: string }
+  | { type: 'scheduled-tasks-updated'; taskId?: string }
   | { type: 'system-message'; chatId: string; message: Message }
 
 export interface TestProviderResult {
@@ -272,7 +324,21 @@ export interface TestProviderResult {
   models?: string[]
 }
 
+export interface DiagnosticReport {
+  reference: string
+  collectedAt: string
+  loggingEnabled: boolean
+  runtimeActive: boolean
+  message: { id: string; chatId: string; botId: string | null; status: string; createdAt: number; outputChars: number; errorCode: string | null }
+  currentModel: { provider: string; model: string; reasoning: string; maxTokens: number } | null
+  events: { timestamp: string; event: string; fields: Record<string, string | number | boolean | null | (string | number | boolean | null)[]> }[]
+  notes: string[]
+}
+
 export interface CovanApi {
+  getDiagnosticReport(reference: string): Promise<DiagnosticReport>
+  analyzeDiagnostic(reference: string, botId: string): Promise<string>
+  cancelDiagnostic(): Promise<void>
   importChatImage(name: string, bytes: Uint8Array): Promise<Attachment>
   getUserProfile(): Promise<UserProfile>
   saveUserProfile(profile: UserProfile): Promise<UserProfile>
@@ -296,6 +362,10 @@ export interface CovanApi {
     message: string,
   ): Promise<string>
   stopAgentConversation(threadId: string): Promise<void>
+  listScheduledTasks(botId?: string): Promise<ScheduledTask[]>
+  saveScheduledTask(input: ScheduledTaskInput): Promise<ScheduledTask>
+  deleteScheduledTask(id: string): Promise<void>
+  runScheduledTask(id: string): Promise<void>
   expandAvatarPrompt(botId: string, direction?: string): Promise<AvatarDesign>
   listProviders(): Promise<Provider[]>
   saveProvider(p: ProviderInput): Promise<Provider>

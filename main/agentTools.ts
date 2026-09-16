@@ -1,6 +1,6 @@
 import { Type } from '@earendil-works/pi-ai'
 import type { AgentTool } from '@earendil-works/pi-agent-core'
-import type { Attachment, BotInput, MemoryKind } from '../shared/types'
+import type { Attachment, BotInput, MemoryKind, ScheduledTask } from '../shared/types'
 import { storeChatImage, imageContent } from './chatImages'
 import * as db from './db'
 import {
@@ -11,6 +11,7 @@ import {
   type AvatarMode,
 } from './avatars'
 import { beginAgentConversation } from './privateConversations'
+import { observeScheduledTaskChange, refreshScheduledTasks } from './scheduledTasks'
 
 const result = (value: unknown) => ({
   content: [{ type: 'text' as const, text: JSON.stringify(value) }],
@@ -30,6 +31,21 @@ export function createAppTools(
 ): AgentTool[] {
   let privateCalls = 0
   let imageCalls = 0
+  const taskSummary = (task: ScheduledTask) => ({
+    id: task.id,
+    title: task.title,
+    prompt: task.prompt,
+    schedule: task.schedule,
+    cron: task.cron,
+    run_at: task.run_at,
+    timezone: task.timezone,
+    model: task.model || '跟随 Bot 默认模型',
+    enabled: task.enabled,
+    next_run_at: task.next_run_at,
+    last_run_at: task.last_run_at,
+    last_status: task.last_status,
+    last_error: task.last_error,
+  })
   return [
     {
       name: 'generate_image',
@@ -203,6 +219,124 @@ export function createAppTools(
         parentSignal?.throwIfAborted()
         const p = params as { content: string; kind?: MemoryKind }
         return result(db.saveUserMemory(p.content, p.kind, 'agent', botId))
+      },
+    },
+    {
+      name: 'list_scheduled_tasks',
+      label: '查看定时任务',
+      description:
+        '查看当前 Bot 在本会话设置的定时 Agent 任务、下次执行时间和最近状态。需要修改或删除前先调用它获取准确任务 ID。',
+      parameters: Type.Object({}),
+      execute: async () => result(db.listScheduledTasks(botId).map(taskSummary)),
+    },
+    {
+      name: 'create_scheduled_task',
+      label: '创建定时任务',
+      description:
+        '用户的自然语言中只要同时出现时间和要做事项，即视为创建请求，例如“每天晚上20点问好”应创建 cron="0 20 * * *"、任务为向当前会话问好。任务只归当前 Bot，结果会投递到当前会话。schedule=once 时必须给未来的 Unix 毫秒 run_at；schedule=cron 时必须给 5 段或 6 段 Cron（如每天 9:00 为 "0 9 * * *"，每周一 9:00 为 "0 9 * * 1"）。model 留空表示继承当前 Bot 的模型设置。创建后准确回报计划和下次时间，不要声称已设置但没有调用工具。',
+      parameters: Type.Object({
+        title: Type.String({ minLength: 1, maxLength: 120 }),
+        prompt: Type.String({ minLength: 1, maxLength: 8000 }),
+        schedule: Type.Union([Type.Literal('once'), Type.Literal('cron')]),
+        run_at: Type.Optional(Type.Integer({ minimum: 1 })),
+        cron: Type.Optional(Type.String({ minLength: 1, maxLength: 120 })),
+        timezone: Type.Optional(Type.String({ maxLength: 100 })),
+        model: Type.Optional(Type.String({ maxLength: 300 })),
+      }),
+      execute: async (_id, params) => {
+        parentSignal?.throwIfAborted()
+        const p = params as {
+          title: string
+          prompt: string
+          schedule: ScheduledTask['schedule']
+          run_at?: number
+          cron?: string
+          timezone?: string
+          model?: string
+        }
+        const task = db.saveScheduledTask({
+          bot_id: botId,
+          chat_id: chatId,
+          title: p.title,
+          prompt: p.prompt,
+          schedule: p.schedule,
+          run_at: p.run_at,
+          cron: p.cron,
+          timezone: p.timezone,
+          model: p.model,
+        })
+        observeScheduledTaskChange('created', task)
+        refreshScheduledTasks()
+        return result(taskSummary(task))
+      },
+    },
+    {
+      name: 'update_scheduled_task',
+      label: '修改定时任务',
+      description:
+        '仅按用户明确要求修改当前 Bot 自己的定时任务，例如暂停、恢复、改时间、改任务指令或切换模型。先调用 list_scheduled_tasks；任务 ID 不属于当前 Bot 时拒绝。',
+      parameters: Type.Object({
+        task_id: Type.String(),
+        title: Type.Optional(Type.String({ minLength: 1, maxLength: 120 })),
+        prompt: Type.Optional(Type.String({ minLength: 1, maxLength: 8000 })),
+        schedule: Type.Optional(
+          Type.Union([Type.Literal('once'), Type.Literal('cron')]),
+        ),
+        run_at: Type.Optional(Type.Integer({ minimum: 1 })),
+        cron: Type.Optional(Type.String({ minLength: 1, maxLength: 120 })),
+        timezone: Type.Optional(Type.String({ maxLength: 100 })),
+        model: Type.Optional(Type.String({ maxLength: 300 })),
+        enabled: Type.Optional(Type.Boolean()),
+      }),
+      execute: async (_id, params) => {
+        parentSignal?.throwIfAborted()
+        const p = params as {
+          task_id: string
+          title?: string
+          prompt?: string
+          schedule?: ScheduledTask['schedule']
+          run_at?: number
+          cron?: string
+          timezone?: string
+          model?: string
+          enabled?: boolean
+        }
+        const existing = db.getScheduledTask(p.task_id)
+        if (!existing || existing.bot_id !== botId)
+          throw new Error('只能修改当前 Bot 的定时任务')
+        const task = db.saveScheduledTask({
+          id: existing.id,
+          bot_id: existing.bot_id,
+          chat_id: existing.chat_id,
+          title: p.title ?? existing.title,
+          prompt: p.prompt ?? existing.prompt,
+          schedule: p.schedule ?? existing.schedule,
+          run_at: p.run_at ?? existing.run_at,
+          cron: p.cron ?? existing.cron,
+          timezone: p.timezone ?? existing.timezone,
+          model: p.model ?? existing.model,
+          enabled: p.enabled ?? existing.enabled,
+        })
+        observeScheduledTaskChange('updated', task)
+        refreshScheduledTasks()
+        return result(taskSummary(task))
+      },
+    },
+    {
+      name: 'delete_scheduled_task',
+      label: '删除定时任务',
+      description:
+        '仅在用户明确要求删除或取消当前 Bot 的定时任务时调用。先查看任务列表确认 ID；不允许删除其他 Bot 的任务。',
+      parameters: Type.Object({ task_id: Type.String() }),
+      execute: async (_id, params) => {
+        const taskId = (params as { task_id: string }).task_id
+        const task = db.getScheduledTask(taskId)
+        if (!task || task.bot_id !== botId)
+          throw new Error('只能删除当前 Bot 的定时任务')
+        observeScheduledTaskChange('deleted', task)
+        db.deleteScheduledTask(taskId)
+        refreshScheduledTasks()
+        return result({ id: taskId, deleted: true })
       },
     },
     {

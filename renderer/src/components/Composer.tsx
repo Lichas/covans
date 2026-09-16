@@ -4,9 +4,10 @@ import type { ChatSummary } from '@shared/types'
 import { useMessagesStore } from '../stores/messagesStore'
 import { useDraftsStore } from '../stores/draftsStore'
 import { Avatar } from './Avatar'
-import { AtIcon, SendIcon, StopIcon, PlusIcon, CloseIcon } from './icons'
+import { AtIcon, SendIcon, StopIcon, PlusIcon, CloseIcon, QuoteIcon } from './icons'
 import { ChatImage, attachmentUrl } from './ChatImage'
 import { api } from '../lib/api'
+import { MarkdownContent } from './MarkdownContent'
 
 interface MemberLite {
   id: string
@@ -29,6 +30,7 @@ export function Composer({ chat }: Props) {
 
   const draft = useDraftsStore((s) => s.drafts[chat.id])
   const text = draft?.text ?? ''
+  const quote = draft?.quote
   const attachments = draft?.attachments ?? []
   const [importing, setImporting] = useState(false)
   const importLock = useRef(false)
@@ -143,7 +145,9 @@ export function Composer({ chat }: Props) {
   }
 
   const doSend = () => {
-    const content = text.trim()
+    const reply = text.trim()
+    const quoted = quote ? `${quote.author}\n${quote.content}`.split('\n').map((line) => `> ${line}`).join('\n') : ''
+    const content = [quoted, reply].filter(Boolean).join('\n\n')
     if (
       (!content && !attachments.length) ||
       (generating && !allowDuringGeneration) ||
@@ -327,6 +331,19 @@ export function Composer({ chat }: Props) {
       )}
 
       <div className="composer-box">
+        {quote && (
+          <div className="composer-quote" aria-label="引用内容">
+            <QuoteIcon size={16} className="shrink-0" />
+            <div className="min-w-0 flex-1">
+              <div className="font-medium">{quote.author}</div>
+              <div className="composer-quote-text selectable"><MarkdownContent content={quote.content} /></div>
+            </div>
+            <button className="message-action shrink-0" aria-label="取消引用" title="取消引用" onClick={() => setDraft(chat.id, { quote: null })}>
+              <CloseIcon width={16} height={16} />
+            </button>
+          </div>
+        )}
+        <div className="composer-controls">
         <button
           type="button"
           className="rounded-lg p-1.5 text-stone-400 hover:bg-stone-100 disabled:opacity-30 dark:hover:bg-stone-700"
@@ -387,7 +404,7 @@ export function Composer({ chat }: Props) {
         {(!generating || allowDuringGeneration) && (
           <button
             onClick={doSend}
-            disabled={(!text.trim() && !attachments.length) || importing}
+            disabled={(!text.trim() && !attachments.length && !quote) || importing}
             className="rounded-full bg-ink p-2 text-white transition enabled:hover:bg-stone-700 disabled:opacity-30 dark:bg-stone-100 dark:text-stone-900 dark:enabled:hover:bg-stone-300"
             title="发送（Enter）"
             aria-label="发送"
@@ -395,6 +412,7 @@ export function Composer({ chat }: Props) {
             <SendIcon width={17} height={17} />
           </button>
         )}
+      </div>
       </div>
       <div className="composer-footer">
         <span>

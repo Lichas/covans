@@ -6,6 +6,8 @@ interface MessagesState {
   messages: Record<string, Message[]>
   streaming: Record<string, Message>
   generating: Record<string, boolean>
+  turnGenerating: Record<string, boolean>
+  scheduledRuns: Record<string, string[]>
   agentActivity: Record<
     string,
     Record<string, 'preparing' | 'speaking'>
@@ -43,6 +45,8 @@ export const useMessagesStore = create<MessagesState>((set, get) => ({
   messages: {},
   streaming: {},
   generating: {},
+  turnGenerating: {},
+  scheduledRuns: {},
   agentActivity: {},
   loadedChats: {},
   loadingOlder: {},
@@ -221,18 +225,52 @@ export const useMessagesStore = create<MessagesState>((set, get) => ({
     const s = get()
     switch (ev.type) {
       case 'generation-state':
+        {
+          const turnGenerating = {
+            ...s.turnGenerating,
+            [ev.chatId]: ev.generating,
+          }
+          const hasStreaming = Object.values(s.streaming).some(
+            (message) => message.chat_id === ev.chatId,
+          )
+          set({
+            turnGenerating,
+            generating: {
+              ...s.generating,
+              [ev.chatId]:
+                ev.generating ||
+                (s.scheduledRuns[ev.chatId]?.length ?? 0) > 0 ||
+                hasStreaming,
+            },
+            ...(!ev.generating
+              ? {
+                  agentActivity: {
+                    ...s.agentActivity,
+                    [ev.chatId]: {},
+                  },
+                }
+              : {}),
+          })
+        }
+        break
+      case 'scheduled-task-state': {
+        const active = new Set(s.scheduledRuns[ev.chatId] ?? [])
+        if (ev.running) active.add(ev.taskId)
+        else active.delete(ev.taskId)
+        const scheduledRuns = { ...s.scheduledRuns, [ev.chatId]: [...active] }
+        const hasStreaming = Object.values(s.streaming).some(
+          (message) => message.chat_id === ev.chatId,
+        )
         set({
-          generating: { ...s.generating, [ev.chatId]: ev.generating },
-          ...(!ev.generating
-            ? {
-                agentActivity: {
-                  ...s.agentActivity,
-                  [ev.chatId]: {},
-                },
-              }
-            : {}),
+          scheduledRuns,
+          generating: {
+            ...s.generating,
+            [ev.chatId]:
+              !!s.turnGenerating[ev.chatId] || active.size > 0 || hasStreaming,
+          },
         })
         break
+      }
       case 'agent-activity': {
         const chatActivity = { ...(s.agentActivity[ev.chatId] ?? {}) }
         if (ev.state === 'idle') delete chatActivity[ev.botId]
@@ -268,8 +306,18 @@ export const useMessagesStore = create<MessagesState>((set, get) => ({
       case 'message-done': {
         const streaming = { ...s.streaming }
         delete streaming[ev.message.id]
+        const hasStreaming = Object.values(streaming).some(
+          (message) => message.chat_id === ev.chatId,
+        )
         set({
           streaming,
+          generating: {
+            ...s.generating,
+            [ev.chatId]:
+              !!s.turnGenerating[ev.chatId] ||
+              (s.scheduledRuns[ev.chatId]?.length ?? 0) > 0 ||
+              hasStreaming,
+          },
           messages: {
             ...s.messages,
             [ev.chatId]: merge(s.messages[ev.chatId] ?? [], [ev.message]),

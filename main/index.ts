@@ -8,7 +8,7 @@ import type { CovanEvent } from '../shared/types'
 import { CH } from '../shared/ipcChannels'
 import { getDb, initDb } from './db'
 import { initWorkspace, resolveWorkspaceFile } from './workspace'
-import { initOrchestrator } from './orchestrator'
+import { initOrchestrator, runScheduledTask } from './orchestrator'
 import { configureWebNetworkAdapter } from './tools/web'
 import { renderWebPage } from './tools/browser'
 import { registerIpc } from './ipc'
@@ -21,6 +21,7 @@ import {
   seedUserPresetAvatars,
 } from './avatars'
 import { isGroupBackground } from '../shared/groupBackgrounds'
+import { startScheduledTasks, stopScheduledTasks } from './scheduledTasks'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const legacyUserData = app.getPath('userData')
@@ -331,6 +332,7 @@ void app.whenReady().then(() => {
     )
     .run()
   initOrchestrator({ emit: broadcast })
+  startScheduledTasks(runScheduledTask)
   registerIpc()
   setDockIcon()
   createWindow()
@@ -346,4 +348,5 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   stopMemorySummaries()
+  stopScheduledTasks()
 })

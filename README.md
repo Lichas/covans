@@ -24,8 +24,10 @@
 - **独立记忆**：每个 Bot 的长期记忆（对话中自动提取 + 手动增删），下次对话自动注入 system prompt
 - **独立工作区与网页工具**：每个 Bot 一个文件目录，Agent 可分页读取、覆盖写入、精确编辑、列目录，也可搜索和读取网页；网页请求继承系统代理并兼容 Fake-IP，动态页会自动用隐藏 Chromium 执行 JavaScript
 - **产物预览**：工作区交付文件在右侧预览 Markdown、HTML、TXT、代码、图片和 PDF；拖动边缘调整预览宽度，也可定位文件或打开工作区
+- **定时 Agent 任务**：每个 Bot 可在右侧「定时」页建立单次或 Cron 重复任务；默认继承 Bot 模型，也可为任务覆盖模型。完成结果自动发回目标会话，并可从「设置 → 定时任务」统一查看、暂停、立即执行或删除；也可以直接用自然语言让 Bot 设置自己的任务
 - **多 LLM Provider**：OpenAI / Anthropic / Google / OpenRouter / Kimi Coding Plan / 智谱 / DeepSeek / LM Studio / 任意 OpenAI 兼容端点（Ollama、vLLM、公司网关）/ 内置 Mock（离线体验）；每 Bot 可绑定不同 provider 与模型
 - **流式输出 / 随时停止 / 错误重试**；主题跟随系统（浅色/深色）
+- **回复诊断**：回复旁 Bug 按钮复制诊断标识，在「设置 → Debug」加载对应执行记录，选择 Bot 模型分析原因。日志默认关闭，开启后记录后续执行；分析只发送诊断元数据，不发送聊天正文、工具内容或密钥。
 - **Markdown 阅读体验**：表格、任务列表、行内/块级 LaTeX 公式、代码高亮与代码复制；消息时间与日期分隔；引用回复
 - **聊天效率**：独立持久草稿、中文输入法保护、⌘K 搜索、会话恢复、完整 Markdown 导出；群聊停止会取消后续成员发言，左侧群聊右键可确认删除
 - **关于我**：个人资料、头像、交流偏好、目标与边界；可编辑/删除的共同记忆，显示记录来源，供所有 Bot 的后续对话使用
@@ -73,13 +75,13 @@ npm run pack     # electron-builder --mac --dir（产物在 release/）
 1. 启动后点左下角齿轮 → **Provider 管理** → 新增（填入 API Key；Kimi Coding Plan 保存后点击「拉取模型」选择账号可用模型；想离线体验选 `mock` 类型）
 2. 左上「+」→ **新建 Bot** → 选人设模板（如「虚拟女友·小美女」或「高级全栈」）→ 创建后自动进入单聊
 3. 左上「+」→ **创建群聊** → 勾选多个 Bot；新群默认使用顺序回复，可在群聊右上角齿轮中切换为主动回复
-4. 右侧面板管理该 Bot 的**设定 / 记忆 / 工作区**；在「设置 → Bot」可开关私聊的**自然追问**
+4. 右侧面板管理该 Bot 的**设定 / 记忆 / 工作区 / 定时 / 模型**；在「定时」中创建单次或重复任务，在「设置 → 定时任务」查看全部任务；在「设置 → Bot」可开关私聊的**自然追问**
 5. 左侧 **关于我** 填写资料，或在聊天中说「请记住，我喜欢先看结论」；共同记忆可随时编辑/删除
 6. 右键单聊列表项 **置顶**，最多 3 位；同一菜单 **取消置顶**
 7. 点击 Bot 设置中的头像 → **设计头像**。本地插画立即可用；**设置 → 头像生成** 选择支持 Images API 的 Provider 与模型后，才能使用 AI 生图。Coding Plan 不等于生图服务
 8. 对 Bot 说「改名为小蓝，生成蓝色机器人头像」或「和设计师讨论一下方案」；也可点聊天顶部的双人图标发起咨询。私聊卡片点击后显示浮窗
 
-LM Studio：Provider 类型选 **LM Studio**，无需 API Key，点 **拉取模型** 后选择已加载实例。Base URL 默认是 `http://localhost:1234/v1`；若误贴 `/api/v1/chat` 或 `/v1/chat/completions`，保存时会自动规范成 `/v1`。Covan 需要自定义工具，所以使用 LM Studio 的 OpenAI 兼容 Chat Completions 入口。每个 Bot 可独立选择关闭/低/中/高/极高推理强度，并设置最大输出 Token；第三方模型未声明标准推理能力时，Covan 会加入兼容提示。日常聊天建议关闭或低推理、512–2048 输出 Token。
+LM Studio：Provider 类型选 **LM Studio**，无需 API Key，点 **拉取模型** 后选择已加载实例。Base URL 默认是 `http://localhost:1234/v1`；若误贴 `/api/v1/chat` 或 `/v1/chat/completions`，保存时会自动规范成 `/v1`。Covan 需要自定义工具，所以使用 LM Studio 的 OpenAI 兼容 Chat Completions 入口。每个 Bot 可独立选择关闭/低/中/高/极高推理强度，并设置最大输出 Token；新建 Bot 默认使用中等推理和 8192 输出 Token，已有 Bot 保留原设置。第三方模型未声明标准推理能力时，Covan 会加入兼容提示；简短聊天可按成本需要调低。
 
 生图使用 [Images API](https://developers.openai.com/api/reference/resources/images/methods/generate) 的 `POST /images/generations`，兼容 base64 或图片 URL 响应；不预置或猜测生图模型。自动模式未配置服务时使用本地 SVG，显式选择 AI 生图时配置不足会显示错误。生图最多等待 120 秒、下载限制 16MB。调用会消耗所选服务额度，API 兼容性需以该服务文档为准。
 
@@ -126,7 +128,9 @@ Covan is an Electron + React desktop chat app for working with multiple AI agent
 - Each chat can have its own background. New groups receive a random scene; users can change, randomize, or clear backgrounds per chat.
 - Agents can work with files inside their own workspaces and search or read public web pages.
 - Delivery cards open a resizable right-side preview for Markdown, HTML, TXT, source code, images, and PDF files.
+- Each Bot can run persistent one-time or Cron scheduled tasks. Results are delivered back to the chosen chat; tasks inherit the Bot model unless explicitly overridden.
 - Includes layered memory, streaming responses, Markdown and LaTeX rendering, image attachments, and Agent-to-Agent consultation.
+- Copy a reply's diagnostic reference with its Bug button, then inspect execution events and request model-assisted analysis in Settings → Debug. Local logging is opt-in; analysis excludes chat text, tool contents, and credentials.
 - Supports OpenAI, Anthropic, Google, OpenRouter, Kimi, Zhipu, DeepSeek, LM Studio, OpenAI-compatible endpoints, and an offline mock provider.
 
 ### Quick start

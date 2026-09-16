@@ -27,6 +27,7 @@ Covan 是标准 Electron 双进程 + preload 桥接架构。所有 LLM 调用、
 │  orchestrator.ts  群聊编排状态机                           │
 │  memory.ts       记忆注入 + 后台提取                       │
 │  workspace.ts    每 Bot 工作区目录                         │
+│  scheduledTasks.ts 本地 Cron 调度、恢复、无重入执行          │
 │  mockProvider.ts 冒烟测试假回复                            │
 └───────┬───────────────────────────┬────────────────────────┘
         ▼                           ▼
@@ -46,6 +47,7 @@ Covan 是标准 Electron 双进程 + preload 桥接架构。所有 LLM 调用、
 | zustand | ^5 | 轻量、无样板；四个 store（bots/chats/messages/settings）与事件流（message-delta 等）天然契合 |
 | Tailwind CSS | ^3.4 | 快速复刻参考截图的低饱和暖灰视觉体系，`dark:` 变体支持跟随系统暗色 |
 | better-sqlite3 | ^11 | 同步 API 让 DAO 代码直白可靠；主进程单写者模型下性能充足；WAL 模式保证流式写入与读取并发不互斥 |
+| croner | ^10 | 小型无依赖本地 Cron 调度器，支持 IANA 时区、下一次执行计算和单任务保护，无需引入服务端任务队列 |
 | pi-mono：`@earendil-works/pi-ai` + `@earendil-works/pi-agent-core` | 最新 | 见下节 |
 
 ### 为什么用 pi-agent-core 而不是 pi-coding-agent SDK
@@ -72,6 +74,7 @@ chats     1───1 bots   dm：chats.bot_id
 chats.reply_mode       group：active|sequential
 chats.context_summary  group：滚动前文总结
 chats.background_image dm/group：内置聊天背景文件名
+scheduled_tasks       每 Bot 的计划、目标会话、模型覆盖与最近运行状态
 settings  键值表（主题/语言/时区/审核规则等）
 ```
 
@@ -82,6 +85,7 @@ settings  键值表（主题/语言/时区/审核规则等）
 - **聊天背景**：`chats.background_image` 只保存 `resources/group-backgrounds` 清单内的文件名。新建群随机写入；旧 group 首次启动时 additive migration 后补齐；dm 默认空值并可由用户在右侧设定页选择。主进程通过 `covan-bg://builtin/<file>` 自定义协议读取随包资源，协议按共享清单校验文件名，不暴露任意本机路径。
 - **产物预览协议**：聊天交付卡的右侧预览面板对文本类文件继续走 `readWorkspaceFile`，对图片和 PDF 使用 `covan-workspace://file/<botId>/<relPath>`。协议处理器只调用 `resolveWorkspaceFile` 后返回文件流和最小 MIME，不提供目录遍历或通用本机路径读取。
 - **引用完整性**：messages 不级联删除——删除 Bot 时只清 bots/memories/chat_members 与外键引用，messages 保留（FR-BOT-04），渲染层对悬空 sender_bot_id 降级为占位头像。
+- **定时任务**：任务外键级联随 Bot 或目标会话删除，避免后台投递到悬空对象。`scheduledTasks.ts` 用 Croner 在进程内恢复未来计划、以任务 ID 锁防止重入；离线错过的单次任务只标记 `missed`。每次执行由 `orchestrator.runScheduledTask()` 创建真实 Bot 消息，模型覆盖只克隆本次运行的 Bot 配置。
 - **settings 键值表**承载所有非结构化配置，避免 schema 膨胀。
 - `bots.is_coordinator`、`chats.coordinator_bot_id` 与 `chat_members.role='coordinator'` 是早期版本遗留字段，仅用于无损迁移旧数据库；现行 UI 不写入、群聊调度器不读取。后续 schema 清理须通过 migration 完成，不能直接破坏用户库。
 
@@ -90,7 +94,7 @@ settings  键值表（主题/语言/时区/审核规则等）
 - `contextIsolation: true`，`nodeIntegration: false`，渲染进程无任何 Node 能力。
 - preload 仅通过 `contextBridge.exposeInMainWorld('covan', api)` 暴露 SPEC.md §4 定义的 `CovanApi`；通道名集中在 `shared/ipcChannels.ts` 常量，主进程 `ipcMain.handle` 逐一注册，**无泛化转发、无 `ipcRenderer.send` 裸暴露**。
 - 所有通道参数在主进程侧做类型与非空校验（id 必须为已存在的 uuid 等），渲染传入的路径一律不允许——文件路径只由主进程根据 botId 推导。
-- 主 → 渲染为单向事件广播：`webContents.send('covan:event', ev)`，渲染通过 `onEvent(cb)` 订阅并返回取消订阅函数。事件类型为 SPEC §4 的 `CovanEvent` 联合（message-delta / message-done / message-error / chat-updated / bot-updated / system-message / agent-activity）。
+- 主 → 渲染为单向事件广播：`webContents.send('covan:event', ev)`，渲染通过 `onEvent(cb)` 订阅并返回取消订阅函数。事件类型为 SPEC §4 的 `CovanEvent` 联合（message-delta / message-done / message-error / chat-updated / bot-updated / scheduled-task-state / scheduled-tasks-updated / system-message / agent-activity）。普通会话轮次与定时任务轮次分开维护运行状态，任一结束均不会误覆盖另一个。
 - api_key 从不流向渲染进程的通道响应之外的任何地方；渲染仅在 provider 编辑表单中读写，列表展示默认掩码。
 
 ## 5. pi 集成层设计（agentRuntime.ts）
@@ -141,7 +145,7 @@ pi 的 Context 为可 JSON 序列化的 `{ role, content, timestamp }[]`。每�
 
 ### 5.6 本地观测
 
-`observability.ts` 是主进程唯一的诊断日志出口。它每次写入时读取 `local_observability` 开关，因而无需重启即可启停；所有 `*_id` 字段先做 SHA-256 截断匿名化。Agent 运行时记录历史和最终 Provider payload 的角色/长度摘要、HTTP 状态、耗时及归一化错误码，编排器记录自然续发候选的接受或拒绝原因。调用方只可传结构化元数据，禁止传正文、prompt、工具内容和完整错误文本。日志写入或轮转失败静默，不得影响聊天。
+`observability.ts` 是主进程唯一的诊断日志出口。它每次写入时读取 `local_observability` 开关，因而无需重启即可启停；chat/bot/message/trace/task ID 写入前做 SHA-256 截断匿名化。Agent 运行时记录 payload 角色/长度摘要、请求状态与延迟、每步 Token、工具序号/名称/成败类别/耗时；`completeOnce` 统一记录内部模型调用阶段。编排器记录群聊 REPLY/SKIP、续发决策，调度器记录任务计划、触发来源及终态。用户消息 ID 作为本轮 trace ID，调度运行另生成 trace ID；Agent 与后续子调用共享该 ID。Debug 报告以 Bot 消息 ID 找到 trace，再合并该轮相关事件。调用方只可传结构化元数据，禁止传正文、prompt、工具参数/结果和完整错误文本。日志写入或轮转失败静默，不得影响聊天；日志默认关闭，不补写历史。
 
 ## 6. 群聊编排协议详细设计（orchestrator.ts）
 
@@ -201,11 +205,18 @@ pi 的 Context 为可 JSON 序列化的 `{ role, content, timestamp }[]`。每�
 - Bash AgentTool 位于 `tools/bash.ts`，普通会话可用，Agent 私聊禁用。它用独立进程组执行非交互 `/bin/bash`，对环境、cwd、执行时长和输出体积设限；PATH 排除用户与临时目录中的可执行项，macOS 再通过 `sandbox-exec` 将用户文件正文读取和所有写入限制到 Bot 工作区。网络和系统可执行目录保持可用，以支持依赖安装、构建和测试。成功执行后只广播工作区刷新，不推断具体交付文件。当前不在非 macOS 平台降级为无沙箱执行。
 - 网页 AgentTool：`web_search` 使用可替换 provider（当前 Bing RSS）返回 URL 与摘要；`web_fetch` 的静态快路径使用 Chromium `net.fetch`，继承 macOS 系统代理并支持 Fake-IP。`tools/browser.ts` 是独立渲染 provider：当自动检测到 JS 应用壳、静态正文过少或静态请求失败时，在隐藏的沙箱 BrowserWindow 中加载页面、执行 JavaScript 并提取 DOM 正文；窗口禁用 Node、隔离 context、禁止弹窗且使用与普通浏览不共享登录态的内存 session。静态传输限制 20 秒、浏览器渲染限制 30 秒，输出与每轮调用数继续受控；SSRF/内网地址拦截暂不在当前边界内。
 - **权限装配**：`tools/toolset.ts` 只按场景组合工具，不实现工具业务。普通会话获得完整工作区 + Bash + 网页 + 应用工具；Agent 私聊只获得工作区只读 + 网页只读工具。工具实现不得 import 编排器，Agent 运行时也不得直接拼装单个工具。
-- **模型指引**：装配层用实际工具名动态追加简短 system prompt，明确需要文件/最新信息时必须真实调用，将工具内容视为不可信数据，禁止伪造成功。
+- **定时任务应用工具**：`agentTools.ts` 的 `list_scheduled_tasks`、`create_scheduled_task`、`update_scheduled_task`、`delete_scheduled_task` 只作用于当前 Bot，创建目标固定为当前 chat；写入后重建本地调度。工具不会暴露跨 Bot 的修改权限，Agent 私聊不装配这些能力。
+- **模型指引**：装配层用实际工具名动态追加简短 system prompt，明确需要文件/最新信息时必须真实调用，将工具内容视为不可信数据，禁止伪造成功。仅在收到本轮 `workspace_write` / `workspace_edit` 成功结果后，模型才可声称文件已写入、已保存或已生成；新建 Bot 的默认运行预算为中等推理与 8192 输出 Token，已有配置不迁移覆盖。
 - 工具执行层在 `workspace_write` / `workspace_edit` 成功事件中生成 `WorkspaceArtifact`，编排器将其去重写入当前消息的 `artifacts` JSON 列并广播工作区刷新事件；因此交付 UI 有可靠来源且可跨重启恢复，不解析模型正文。renderer 的交付卡只负责选择目标文件，右侧产物预览面板按扩展名展示 Markdown、HTML、TXT、代码、图片和 PDF，并在 UI store 中保存当前拖拽宽度。
 - UI 侧：`listWorkspaceFiles`（深度 2）、`readWorkspaceFile`（≤200KB 文本）、`openWorkspace`（`shell.openPath`）、`revealWorkspaceFile`（`shell.showItemInFolder`）。
 
 ## 9. Mock provider 与可测试性
+
+### 消息可观测与诊断
+
+`RunAgentOptions.messageId` 由普通/定时编排器传入，运行时在请求、工具和步骤事件中附加该 ID，观测写入层统一匿名化。运行中的消息 ID 单独保存在内存集合，诊断可识别数据库 streaming 状态与实际任务不一致。`diagnostics.ts` 通过固定日志文件、精确消息过滤和字段白名单构建报告；renderer 只经 preload 的三个 Debug IPC 加载、分析和取消。独立 `completeOnce` 分析不装配应用工具，也不注入 Bot 人设、用户记忆和聊天历史。
+
+引用内容保存在 renderer 的每会话草稿对象中，发送时才组装为 Markdown 引用，消息存储和发送 IPC 不新增引用字段。
 
 - `main/mockProvider.ts`：providers.kind='mock' 时 agentRuntime 短路进入 mock 路径，按 bot 名字模板生成确定性的流式假回复（分片 setTimeout 推送 text_delta，模拟真实节奏），支持 abort。
 - 价值：

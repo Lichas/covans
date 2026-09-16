@@ -42,6 +42,10 @@ await build({
     personas: path.join(root, 'renderer/src/lib/personaTemplates.ts'),
     webTools: path.join(root, 'main/tools/web.ts'),
     bashTools: path.join(root, 'main/tools/bash.ts'),
+    agentTools: path.join(root, 'main/agentTools.ts'),
+    scheduledTasks: path.join(root, 'main/scheduledTasks.ts'),
+    diagnostics: path.join(root, 'main/diagnostics.ts'),
+    observability: path.join(root, 'main/observability.ts'),
   },
   outdir: bundleDir,
   bundle: true,
@@ -73,9 +77,19 @@ const webTools = await import(
 const bashTools = await import(
   pathToFileURL(path.join(bundleDir, 'bashTools.js')).href
 )
+const agentTools = await import(
+  pathToFileURL(path.join(bundleDir, 'agentTools.js')).href,
+)
+const scheduledTasks = await import(
+  pathToFileURL(path.join(bundleDir, 'scheduledTasks.js')).href,
+)
+const diagnostics = await import(pathToFileURL(path.join(bundleDir, 'diagnostics.js')).href)
+const observability = await import(pathToFileURL(path.join(bundleDir, 'observability.js')).href)
 
 // 2. 初始化（临时目录，WAL）
 db.initDb(userData)
+observability.initObservability(userData)
+db.setSetting('local_observability', '1')
 workspace.initWorkspace(userData)
 const events = []
 orchestrator.initOrchestrator({ emit: (ev) => events.push(ev) })
@@ -95,6 +109,7 @@ console.log('\n[1] 建库 & migration')
     'messages',
     'memories',
     'settings',
+    'scheduled_tasks',
   ]) {
     assert(tables.includes(t), `表 ${t} 已创建`)
   }
@@ -317,8 +332,10 @@ const botC = db.createBot({
   provider_id: provider.id,
 })
 const kimiBot = db.createBot({ name: 'Kimi Bot', provider_id: kimi.id })
-assert(botB.reasoning_effort === 'off', '普通 Bot 默认关闭推理')
-assert(kimiBot.reasoning_effort === 'high', 'Kimi Bot 保留高推理默认值')
+assert(botB.reasoning_effort === 'medium', '普通 Bot 默认使用中等推理')
+assert(botB.max_tokens === 8192, '普通 Bot 默认最大输出为 8192 Token')
+assert(kimiBot.reasoning_effort === 'medium', 'Kimi Bot 默认也使用中等推理')
+assert(kimiBot.max_tokens === 8192, 'Kimi Bot 默认最大输出为 8192 Token')
 db.deleteBot(kimiBot.id)
 assert(db.listBots().length === 3, '3 个 bot 已创建')
 workspace.ensureWorkspace(botA.id)
@@ -376,6 +393,13 @@ console.log(
 )
 
 const msgs = db.listMessages(group.id, undefined, 100)
+const firstBotReply = msgs.find((message) => message.sender_type === 'bot' && message.status === 'done')
+const groupReport = diagnostics.getDiagnosticReport(`covan-debug:v1:${firstBotReply.id}`)
+assert(
+  groupReport.events.some((event) => event.event === 'completion.started' && event.fields.operation === 'group_reply_decision') &&
+    groupReport.events.some((event) => event.event === 'group.reply_decision' && ['reply', 'skip', 'forced_reply'].includes(event.fields.outcome)),
+  '群聊判断模型调用及决策结果通过轮次追踪 ID 汇入回复诊断报告',
+)
 assert(
   msgs.some((m) => m.sender_type === 'user' && m.content.includes('新功能')),
   '用户消息已落库',
@@ -540,6 +564,87 @@ assert(
   dmMsgs.some((m) => m.sender_bot_id === botB.id && m.status === 'done'),
   'dm 中 bot B 产生 done 消息',
 )
+
+console.log('\n[4a] 定时 Agent 任务：持久化、工具与消息投递')
+{
+  const appTools = agentTools.createAppTools(botB.id, dm.id)
+  const names = appTools.map((tool) => tool.name)
+  assert(
+    ['list_scheduled_tasks', 'create_scheduled_task', 'update_scheduled_task', 'delete_scheduled_task'].every((name) => names.includes(name)),
+    '普通会话向 Agent 暴露定时任务查看与管理工具',
+  )
+  const create = appTools.find((tool) => tool.name === 'create_scheduled_task')
+  const created = await create.execute(
+    'scheduled-tool-create',
+    {
+      title: '工具创建的日报',
+      prompt: '整理今天的测试重点，给出三条清单。',
+      schedule: 'cron',
+      cron: '0 9 * * *',
+      timezone: 'Asia/Shanghai',
+    },
+    new AbortController().signal,
+  )
+  const createdTask = JSON.parse(created.content[0].text)
+  assert(
+    createdTask.bot_id === undefined &&
+      db.listScheduledTasks(botB.id).some((task) => task.id === createdTask.id && task.model === ''),
+    'Agent 工具创建的任务绑定当前 Bot 并默认继承模型',
+  )
+
+  const task = db.saveScheduledTask({
+    bot_id: botB.id,
+    chat_id: dm.id,
+    title: '立即执行回归',
+    prompt: '只用一句话汇报定时任务完成。',
+    schedule: 'once',
+    run_at: Date.now() + 60 * 60 * 1000,
+    timezone: 'Asia/Shanghai',
+    model: 'mock-scheduled-override',
+    enabled: false,
+  })
+  assert(
+    task.next_run_at === null && task.model === 'mock-scheduled-override',
+    '暂停任务保留模型覆盖但不安排下次执行',
+  )
+  const before = db.listMessages(dm.id, undefined, 100).length
+  const eventStart = events.length
+  scheduledTasks.startScheduledTasks(orchestrator.runScheduledTask)
+  await scheduledTasks.runScheduledTaskNow(task.id)
+  const finished = db.getScheduledTask(task.id)
+  const scheduledMessages = db.listMessages(dm.id, undefined, 100)
+  assert(
+    finished.last_status === 'done' && !finished.enabled,
+    '单次任务手动执行后写入完成状态且保持暂停',
+  )
+  assert(
+    scheduledMessages.length === before + 1 &&
+      scheduledMessages.at(-1).sender_bot_id === botB.id &&
+      scheduledMessages.at(-1).status === 'done',
+    '定时任务完成后只投递 Bot 真实结果，不插入伪造用户消息',
+  )
+  const scheduledReport = diagnostics.getDiagnosticReport(`covan-debug:v1:${scheduledMessages.at(-1).id}`)
+  assert(
+    scheduledReport.events.some((event) => event.event === 'scheduled_task.triggered' && event.fields.trigger_source === 'manual') &&
+      scheduledReport.events.some((event) => event.event === 'scheduled_task.completed' && event.fields.result_status === 'done') &&
+      scheduledReport.events.some((event) => event.event === 'agent.dispatch.started' && event.fields.scheduled_task_id === observability.anonymizeId(task.id)),
+    '定时任务触发、Agent 执行和完成状态通过追踪 ID 汇入同一诊断报告',
+  )
+  const taskLog = fs.readFileSync(path.join(userData, 'logs', 'observability.jsonl'), 'utf8')
+  assert(
+    !/整理今天的测试重点|只用一句话汇报定时任务完成/.test(taskLog),
+    '定时任务提示词不写入观测日志',
+  )
+  const taskStates = events
+    .slice(eventStart)
+    .filter((event) => event.type === 'scheduled-task-state')
+    .map((event) => event.running)
+  assert(
+    JSON.stringify(taskStates) === '[true,false]',
+    '定时任务运行状态成对发送，渲染可可靠结束回复状态',
+  )
+  scheduledTasks.stopScheduledTasks()
+}
 
 console.log('\n[4b] 单聊自然追问：有价值才续发，过滤元话术，最多两条')
 const naturalDm = db.createDm(botC.id)

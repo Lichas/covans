@@ -5,6 +5,8 @@ import { useSettingsStore, type ThemeMode } from '../stores/settingsStore'
 import { useUiStore } from '../stores/uiStore'
 import { Dialog } from './Dialog'
 import { AvatarSettingsSection } from './AvatarSettings'
+import { ScheduledTasksPanel } from './ScheduledTasksPanel'
+import { DebugPanel } from './DebugPanel'
 import { Field, Toggle, btnGhostCls, btnPrimaryCls, inputCls } from './controls'
 import {
   CheckIcon,
@@ -16,7 +18,7 @@ import {
 } from './icons'
 import { getProviderPreset, PROVIDER_PRESETS } from '../lib/providers'
 
-type Section = 'general' | 'providers' | 'bot' | 'avatars'
+type Section = 'general' | 'providers' | 'bot' | 'scheduled' | 'avatars' | 'debug'
 
 const PROVIDER_KINDS = PROVIDER_PRESETS
 
@@ -553,7 +555,9 @@ export function SettingsModal() {
     { id: 'general', label: '通用' },
     { id: 'providers', label: 'Provider' },
     { id: 'bot', label: 'Bot' },
+    { id: 'scheduled', label: '定时任务' },
     { id: 'avatars', label: '头像生成' },
+    { id: 'debug', label: 'Debug' },
   ]
 
   return (
@@ -563,12 +567,12 @@ export function SettingsModal() {
       width="w-[560px]"
       onClose={() => setOpen(false)}
     >
-      <div className="flex border-b border-stone-200 px-4 dark:border-stone-700">
+      <div className="flex shrink-0 overflow-x-auto border-b border-stone-200 px-4 dark:border-stone-700">
         {sections.map((s) => (
           <button
             key={s.id}
             onClick={() => setSection(s.id)}
-            className={`relative px-4 py-2.5 text-[13px] transition ${
+            className={`relative shrink-0 px-3 py-2.5 text-[13px] transition ${
               section === s.id
                 ? 'font-medium text-stone-800 dark:text-stone-100'
                 : 'text-stone-400 hover:text-stone-600 dark:hover:text-stone-300'
@@ -584,7 +588,9 @@ export function SettingsModal() {
       {section === 'general' && <GeneralSection />}
       {section === 'providers' && <ProvidersSection />}
       {section === 'bot' && <BotSection />}
+      {section === 'scheduled' && <ScheduledTasksPanel global />}
       {section === 'avatars' && <AvatarSettingsSection />}
+      {section === 'debug' && <DebugPanel />}
     </Dialog>
   )
 }

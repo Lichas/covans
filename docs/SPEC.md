@@ -9,6 +9,7 @@ Covan 是一个 macOS 风格三栏布局的桌面应用（Electron + React），
 - 与单个 Bot 私聊，或把多个 Bot 拉入群聊讨论
 - 群聊可选「主动回复」或「顺序回复」，由每位成员结合上下文自主判断是否发言
 - 每个 Bot 有持久记忆（自动提取 + 手动管理）、独立文件工作区
+- 每个 Bot 可拥有持久化定时 Agent 任务；可在 Bot 侧或设置全局管理，运行结果投递回绑定会话
 - 所有对话通过 pi-mono agent runtime 调用用户配置的 LLM provider
 
 ## 1. 技术栈（固定）
@@ -16,6 +17,7 @@ Covan 是一个 macOS 风格三栏布局的桌面应用（Electron + React），
 - Electron ^38（pi 包 engines 要求 Node >= 22.19），electron-vite ^2，TypeScript ^5.6
 - React ^18.3 + react-dom，状态管理 zustand ^5，样式 Tailwind CSS ^3.4
 - 数据库：better-sqlite3 ^11（主进程内，WAL 模式）
+- 本地调度：croner ^10（Cron、IANA 时区、下一次执行计算；无服务端依赖）
 - Agent runtime：pi-mono（具体包名与 API 见 §8，依据调研结果填写）
 - 构建：electron-vite build；打包说明用 electron-builder（README 中说明，不要求交付时产出安装包）
 - Node >= 22.19（系统 Node 用于构建；原生模块及冒烟测试使用 Electron 的 ABI）
@@ -30,6 +32,7 @@ main/           Electron 主进程（Node）
   agentRuntime.ts   pi-mono 封装：provider 解析、agent 会话创建、流式转发
   orchestrator.ts   群聊编排（成员判断 → 并发/顺序回复 → 落库）
   memory.ts         实时短摘要、场景归纳、检索与注入
+  scheduledTasks.ts 本地定时器恢复、无重入执行与状态更新
   workspace.ts      每 Bot 工作区目录管理
 preload/
   index.ts          contextBridge.exposeInMainWorld('covan', api)
@@ -69,8 +72,8 @@ CREATE TABLE bots (
   provider_id TEXT REFERENCES providers(id),
   model TEXT NOT NULL DEFAULT '',    -- 空 = 用 provider 默认
   temperature REAL NOT NULL DEFAULT 0.7,
-  max_tokens INTEGER NOT NULL DEFAULT 4096,
-  reasoning_effort TEXT NOT NULL DEFAULT 'off', -- off|low|medium|high|xhigh
+  max_tokens INTEGER NOT NULL DEFAULT 8192,
+  reasoning_effort TEXT NOT NULL DEFAULT 'medium', -- off|low|medium|high|xhigh
   workspace_dir TEXT NOT NULL DEFAULT '',  -- 相对 workspaces/ 的目录名
   notify INTEGER NOT NULL DEFAULT 1,
   is_coordinator INTEGER NOT NULL DEFAULT 0, -- legacy：仅兼容旧库，现行调度不读取
@@ -129,6 +132,25 @@ CREATE TABLE memories (
   last_recalled_at INTEGER
 );
 CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE scheduled_tasks (
+  id TEXT PRIMARY KEY,
+  bot_id TEXT NOT NULL REFERENCES bots(id) ON DELETE CASCADE,
+  chat_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  prompt TEXT NOT NULL,
+  schedule TEXT NOT NULL,          -- 'once' | 'cron'
+  cron TEXT NOT NULL DEFAULT '',
+  run_at INTEGER,                  -- 单次任务的 Unix 毫秒
+  timezone TEXT NOT NULL,
+  model TEXT NOT NULL DEFAULT '',  -- 空 = 运行时继承 Bot 模型
+  enabled INTEGER NOT NULL DEFAULT 1,
+  next_run_at INTEGER,
+  last_run_at INTEGER,
+  last_status TEXT NOT NULL DEFAULT 'idle', -- idle|running|done|error|stopped|missed
+  last_error TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
 ```
 
 ## 4. IPC 接口契约（preload 暴露 `window.covan`）
@@ -151,6 +173,12 @@ interface CovanApi {
   getAgentThread(id: string): Promise<{ thread: AgentThread; messages: AgentPrivateMessage[] }>;
   startAgentConversation(chatId: string, fromBotId: string, toBotId: string, message: string): Promise<string>;
   stopAgentConversation(threadId: string): Promise<void>;
+
+  // scheduled tasks
+  listScheduledTasks(botId?: string): Promise<ScheduledTask[]>;
+  saveScheduledTask(input: ScheduledTaskInput): Promise<ScheduledTask>;
+  deleteScheduledTask(id: string): Promise<void>;
+  runScheduledTask(id: string): Promise<void>;
 
   // providers
   listProviders(): Promise<Provider[]>;
@@ -213,12 +241,14 @@ type CovanEvent =
   | { type: 'agent-thread-updated'; chatId: string; threadId: string }
   | { type: 'message-start'; chatId: string; message: Message }
   | { type: 'generation-state'; chatId: string; generating: boolean }
+  | { type: 'scheduled-task-state'; chatId: string; taskId: string; running: boolean }
   | { type: 'agent-activity'; chatId: string; botId: string; state: 'preparing'|'speaking'|'idle' }
   | { type: 'message-delta'; chatId: string; messageId: string; delta: string }
   | { type: 'message-done'; chatId: string; message: Message }
   | { type: 'message-error'; chatId: string; messageId: string; error: string }
   | { type: 'chat-updated'; chatId: string }
   | { type: 'bot-updated'; botId: string }
+  | { type: 'scheduled-tasks-updated'; taskId?: string }
   | { type: 'system-message'; chatId: string; message: Message };
 ```
 
@@ -238,7 +268,29 @@ type CovanEvent =
 
 普通 Agent 生成不再把最新用户消息预填进历史后调用 `agent.continue()`；历史只初始化到上一条消息，最新的 user/toolResult 通过 `agent.prompt(message)` 显式开始本轮，兼容要求本轮必须存在 user query 的 LM Studio Jinja 模板。
 
-设置项 `local_observability` 默认关闭。开启后，主进程向 `<userData>/logs/observability.jsonl` 写入 JSON Lines 结构化事件：运行阶段、Provider/模型、匿名化后的 chat/bot/message ID、角色序列、各消息字符数、payload 最后角色及 user 索引、耗时、输出长度、HTTP 状态、续发接受/拒绝原因和归一化错误码。禁止写入消息正文、prompt、工具输入输出、API Key、Provider 完整错误文本；单文件 5MB 后轮转为 `.1`，仅保留当前文件和一份历史。`openObservabilityLogs` 只打开日志目录。
+### 5.1 定时 Agent 任务（scheduledTasks.ts）
+
+- `scheduled_tasks` 保存 Bot、目标 chat、任务提示词、单次 Unix 毫秒或 Cron、IANA 时区、可选模型覆盖与最近状态。`bot_id` 和 `chat_id` 都使用级联外键；保存时额外验证 Bot 仍是目标会话成员。
+- 应用启动后用 Croner 恢复所有已启用的未来任务；单次任务触发后自动停用，重启时错过的单次任务标记 `missed` 而不补跑。重复任务从下一次 Cron 匹配继续。每任务同一时刻最多运行一次。
+- 运行时复用 Bot 当前 Provider/模型/采样参数；`model` 非空时只为该次运行替换模型。编排器插入一个 streaming Bot 消息并用真实 Agent 输出更新；不会落库伪造的 user 消息。运行前后成对广播 `scheduled-task-state`，渲染层将它与用户发起轮次独立计数，避免任务结束时错误清掉普通轮次或遗留“回复中”。完成、失败或停止写入任务最近状态并广播 `scheduled-tasks-updated`。
+- 普通会话应用工具提供 `list_scheduled_tasks`、`create_scheduled_task`、`update_scheduled_task`、`delete_scheduled_task`；所有写操作仅限当前 Bot、当前会话。Agent 私聊不装配这些工具。
+
+设置项 `local_observability` 默认关闭。开启后，主进程向 `<userData>/logs/observability.jsonl` 写入 JSON Lines 结构化事件：运行阶段、Provider/模型、匿名化后的 chat/bot/message/trace/task ID、角色序列、各消息字符数、payload 角色及 user 索引、请求/工具序号、耗时、Token 用量、停止原因、HTTP 状态、续发与群聊决策、定时任务排程/触发/完成/错过/失败、内部 completion 调用及归一化错误码。Agent 与模型调用接受同轮 `trace_id`，用于关联不同回复消息和调度阶段。禁止写入消息正文、prompt、工具参数与返回值、API Key、Provider 完整错误文本；单文件 5MB 后轮转为 `.1`，仅保留当前文件和一份历史。`openObservabilityLogs` 只打开日志目录。
+
+### 5.2 消息诊断
+
+- Bot 回复（包含正在生成、失败和停止状态）旁提供 Bug 图标，复制 `covan-debug:v1:<messageId>`；标识不包含聊天正文。设置 → Debug 可粘贴标识或消息 ID。
+- IPC `getDiagnosticReport(reference): Promise<DiagnosticReport>` 只在主进程查询指定 Bot 消息的状态、输出字符数、归一化错误码、当前模型配置以及是否存在运行任务。只读取固定的当前/上一份本地日志；先按匿名化 message ID 找到消息，再将其 trace ID 下的事件合并，最多返回最近 200 条，字段按白名单输出。不能传入任意日志文件路径或直接将用户粘贴内容作为模型指令。
+- 普通回复和定时任务的 Agent 调用携带消息 ID 与同轮 trace ID；记录 Provider 请求序号、状态和耗时，首段文字耗时，工具序号/名称/输入输出字符数/成败/归一化错误类别/HTTP 状态/耗时，每个模型步骤的 Token 用量及停止原因。所有 `completeOnce` 调用记录开始、payload 摘要、响应、结束或失败、模型参数与用量；已标注群聊判断、续发、记忆摘要、上下文摘要和头像提示等用途。群聊每次 REPLY/SKIP、强制回复、失败降级和过期重试均有事件。工具参数、返回内容、推理正文均不记入日志。
+- 定时器记录启动/停止、计划恢复、下次触发时间、定时/手动触发、重复运行跳过、执行完成/失败、错过单次任务和恢复失败；每次执行关联匿名 task ID 和 trace ID，并与其投递的 Bot 消息共享 trace ID。任务标题、指令和原始异常文本不入观测日志。
+- Debug 显示日志关闭、缺失、轮转、旧版未关联或消息生成态残留等证据限制；开启日志只影响之后的调用，无法补回历史。模型配置标明为当前值，历史执行参数以事件为准。
+- IPC `analyzeDiagnostic(reference, botId): Promise<string>` 在主进程重新采集报告，通过所选 Bot 当前 Provider/模型执行独立 completion，沿用其推理强度、输出上限和温度（新 Bot 默认 medium / 8192），120 秒超时；无工具、无人设/聊天/记忆注入，不落入聊天记录。全局只允许一个分析，`cancelDiagnostic()` 取消分析，离开 Debug 页也取消。空正文、输出截断、网络、鉴权、限流、配置及服务错误分类返回中文建议，取消与超时分别显示，不透传 Provider 原始错误。
+- 分析使用独立 `diagnostic_id`，开启本地日志时记录 `diagnostic.*` 开始、HTTP 响应、结束原因/Token 用量、完成或失败及耗时；关联源消息但以 `phase=diagnostic` 区分，不改变源消息状态。失败提示携带分析编号，刷新报告可查询；不记录分析正文和原始错误。Debug 分别显示源回复当前配置和诊断 Bot 的实际 Provider、模型及预算，隐藏 Electron IPC 错误包装。页面说明发送的数据范围和服务额度，并区分模型推测与证据。
+
+### 5.3 引用草稿
+
+- 点击引用时，草稿保存 `{messageId, author, content}`，在输入框内部上方显示左侧色条、作者和可滚动引用摘录，并可单独取消；正文输入不混入 `>` 原始标记。每个会话独立持久保存引用与正文，重载后恢复。
+- 发送时将作者与原文序列化为 Markdown 引用，再拼接用户正文，经既有发送接口进入模型上下文；仅引用也可发送。输入区和引用区隐藏滚动条但保留滚动、文本选择和中文输入法行为。
 
 ## 6. 分层记忆系统（memory.ts / db.ts）
 
@@ -350,7 +402,7 @@ await agent.prompt(userText)   // agent.abort() 用于 stopChat
 
 **网页工具（只读）**：`web_search` 通过可替换的搜索 provider 返回标题/摘要/URL，当前默认为 Bing RSS；`web_fetch` 获取 HTTP(S) 文本页并把 HTML 简化为可读文本。Electron 主进程注入 Chromium `net.fetch` 传输，继承系统代理并兼容 Clash 等 Fake-IP 模式。`web_fetch.render` 支持 `auto|always|never`（默认 `auto`）：静态内容过少且页面明显依赖脚本，或静态请求失败时，自动改用隐藏、沙箱化、无 Node 权限的 BrowserWindow 执行 JavaScript，等待 DOM 稳定后提取正文与链接。静态抓取限制 20 秒总超时、1MB 直连传输/2MB 解码内容和 5 次跳转；浏览器渲染限制 30 秒；每轮最多 5 次搜索/10 次抓取。当前不做 SSRF/内网地址拦截。网页内容作为不可信数据回灌 Agent，不得覆盖 system/user 指令。
 
-**装配策略**：`main/tools/toolset.ts` 是唯一能力装配入口。普通会话挂载完整工作区、Bash、网页与应用工具；Agent 私聊只挂载 `workspace_read` / `workspace_list` 和只读网页工具，禁止 Bash、文件写入、应用状态修改与递归私聊。装配层向 system prompt 动态注入实际可用工具名和「必须真实执行，不得伪造结果」规则。
+**装配策略**：`main/tools/toolset.ts` 是唯一能力装配入口。普通会话挂载完整工作区、Bash、网页与应用工具；Agent 私聊只挂载 `workspace_read` / `workspace_list` 和只读网页工具，禁止 Bash、文件写入、应用状态修改与递归私聊。装配层向 system prompt 动态注入实际可用工具名和「必须真实执行，不得伪造结果」规则；只有收到本轮 `workspace_write` / `workspace_edit` 成功结果，Agent 才能声称文件已写入、已保存或已生成。
 
 **Provider kind → pi 内置 provider 映射**：`openai→openAIProvider()`、`anthropic→anthropicProvider()`、`google→googleProvider()`、`openrouter→openrouterProvider()`、`kimi→createProvider(...)`（Kimi Coding Plan，模型从 `/v1/models` 动态拉取）、`zhipu→createProvider(...)`（智谱 OpenAI 兼容国内端点）、`deepseek→deepseekProvider()`、`openai-compatible→createProvider(...)`。`testProvider` 用一次 `models.complete(model, {messages:[{role:'user',content:'ping',timestamp:Date.now()}]}, {apiKey})` 验证。OpenAI-compatible 支持 API Key 留空的本地服务：模型目录请求不发送 Authorization，pi-agent-core 运行时使用不落库、无权限的占位值满足其非空校验。LM Studio 预设为 `http://localhost:1234/v1`；误填 `/api/v1/chat` 或 `/v1/chat/completions` 会规范到 `/v1`。Covan 使用支持自定义 tools 与完整历史的 `/v1/chat/completions`，不直接使用 LM Studio 原生 `/api/v1/chat`。
 

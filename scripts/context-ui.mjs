@@ -5,6 +5,7 @@ import path from 'node:path'
 import http from 'node:http'
 import { fileURLToPath } from 'node:url'
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import { _electron as electron } from 'playwright'
 import { expect } from '@playwright/test'
 
@@ -16,6 +17,8 @@ const requests = []
 const proxyRequests = []
 const errors = []
 let sequence = []
+let slowDiagnosis = false
+let diagnosisMode = 'success'
 let app, page
 const png =
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6T90AAAAASUVORK5CYII='
@@ -43,13 +46,28 @@ const server = http.createServer(async (req, res) => {
         .map((m) => m.content)
         .join('\n') || ''
     let content = '已完成，我已经更新设定、记住你的偏好，并咨询了设计伙伴。'
+    let finishReason = 'stop'
+    let reasoningOnly = false
     let tool
     if (system.includes('<<memory-scene-summary>>')) {
       const input = JSON.parse(body.messages?.find((message) => message.role === 'user')?.content || '[]')
       const evidence = Array.isArray(input) ? input : input.evidence || []
       const shortIds = Array.isArray(input) ? evidence.map((item) => item.source_id) : input.short_window_ids || []
       content = JSON.stringify({ short_summary: `当前窗口含 ${shortIds.length} 条交流，参与者正在推进话题，结论和待办尚待确认。`, short_evidence_ids: shortIds, summary: `当前场景含 ${evidence.length} 条交流，参与者正在交换信息，尚未形成需要长期保留的结论。`, evidence_ids: evidence.map((item) => item.source_id), memories: [] })
-    } else if (system.includes('当前为 Agent 私聊'))
+    } else if (system.includes('你是 Covan 执行诊断助手。')) {
+      if (slowDiagnosis) await new Promise((resolve) => setTimeout(resolve, 1000))
+      if (diagnosisMode === 'authentication') {
+        res.writeHead(401, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ error: { message: 'Unauthorized PRIVATE_PROVIDER_ERROR sk-test-private-token', type: 'authentication_error' } }))
+        return
+      }
+      content = '## 已知事实\n工具执行已结束。\n\n## 缺失证据\n未提供聊天正文，无法判断内容质量。'
+      if (diagnosisMode === 'empty') content = ''
+      if (diagnosisMode === 'reasoning-only') { content = ''; reasoningOnly = true; finishReason = 'length' }
+      if (diagnosisMode === 'partial') finishReason = 'length'
+      if (diagnosisMode === 'network') finishReason = 'network_error'
+    }
+    else if (system.includes('当前为 Agent 私聊'))
       content =
         '## 设计建议\n采用清晰层级与柔和留白。\n\n- 顶部只显示已置顶 Bot\n- 私聊放在轻量浮窗中'
     else if (system.includes('橙色的天空来自意大利') &&
@@ -108,8 +126,9 @@ const server = http.createServer(async (req, res) => {
           },
         ],
       })
+    else if (reasoningOnly) send({ reasoning_content: 'PRIVATE_REASONING_CONTENT' })
     else send({ content })
-    send({}, tool ? 'tool_calls' : 'stop')
+    send({}, tool ? 'tool_calls' : finishReason)
     res.end('data: [DONE]\n\n')
   } catch (e) {
     errors.push(String(e))
@@ -585,6 +604,11 @@ try {
       normalToolRequest.body.tools.some((tool) => tool.function?.name === name),
     ),
   )
+  assert.match(
+    JSON.stringify(normalToolRequest.body.messages || []),
+    /只有本轮收到 workspace_write 或 workspace_edit 的成功结果/,
+    '文件完成声明必须以本轮工作区工具成功结果为前提',
+  )
   assert.ok(
     requests.some((r) =>
       JSON.stringify(r.body.messages || []).includes('COVAN_BROWSER_JS_OK'),
@@ -638,6 +662,8 @@ try {
   assert.equal(delivered.artifacts.length, 1)
   assert.equal(delivered.artifacts[0].relPath, 'notes/tool-check.md')
   assert.equal(delivered.artifacts[0].operation, 'edit')
+  await page.locator(`[data-message-id="${delivered.id}"]`).getByRole('button', { name: '复制诊断标识' }).click()
+  assert.equal(await app.evaluate(({ clipboard }) => clipboard.readText()), `covan-debug:v1:${delivered.id}`)
   assert.equal(
     threads[0].origin_message_id,
     messages.find((m) => m.sender_type === 'user').id,
@@ -654,6 +680,44 @@ try {
   console.log(
     '✓ Real tool loop: app actions, workspace tools, automatic Chromium JS fallback through Fake-IP proxy',
   )
+
+  sequence = [
+    {
+      name: 'create_scheduled_task',
+      args: {
+        title: '每晚问好',
+        prompt: '每天晚上向用户问好，语气自然简短。',
+        schedule: 'cron',
+        cron: '0 20 * * *',
+        timezone: 'Asia/Shanghai',
+      },
+    },
+  ]
+  await page.getByRole('textbox', { name: '输入消息' }).fill('每天晚上20点问好')
+  await page.getByRole('button', { name: '发送', exact: true }).click()
+  await expect.poll(async () =>
+    page.evaluate(async () =>
+      (await window.covan.listScheduledTasks()).find(
+        (task) => task.title === '每晚问好',
+      )?.cron,
+    ),
+  ).toBe('0 20 * * *')
+  const scheduledRequest = requests.find((request) =>
+    JSON.stringify(request.body.messages ?? []).includes('每天晚上20点问好'),
+  )
+  assert.ok(
+    scheduledRequest?.body.tools.some(
+      (tool) => tool.function?.name === 'create_scheduled_task',
+    ),
+    '自然语言定时请求向模型提供创建任务工具',
+  )
+  assert.match(
+    JSON.stringify(scheduledRequest?.body.messages?.[0] ?? ''),
+    /不得声称“没有定时主动发消息能力”|不能只记忆或回复“无法主动发送”/,
+    '系统提示明确要求把时间加事项转为真实定时任务',
+  )
+  assert.equal(sequence.length, 0)
+  console.log('✓ Natural-language scheduled task creates a persistent Cron task')
 
   await page.evaluate(
     (f) =>
@@ -776,6 +840,86 @@ try {
   console.log(
     '✓ Private-chat errors and privacy-safe local observation metadata',
   )
+  const debugRef = `covan-debug:v1:${delivered.id}`
+  const messageHash = createHash('sha256').update(delivered.id).digest('hex').slice(0, 12)
+  fs.appendFileSync(path.join(profile, 'logs', 'observability.jsonl'), '\nmalformed-line\n' + JSON.stringify({ timestamp: new Date().toISOString(), event: 'diagnostic.fixture', message_id: messageHash, api_key: 'SHOULD_NOT_LEAK', content: 'SHOULD_NOT_LEAK' }) + '\n')
+  const report = await page.evaluate((ref) => window.covan.getDiagnosticReport(ref), debugRef)
+  assert.equal(report.message.id, delivered.id)
+  assert.equal(report.runtimeActive, false)
+  assert.ok(report.events.some((e) => e.event === 'tool.started' && e.fields.tool_name === 'workspace_write'))
+  assert.ok(report.events.some((e) => e.event === 'tool.completed' && e.fields.tool_name === 'workspace_edit' && e.fields.is_error === false))
+  assert.ok(report.events.some((e) => e.event === 'agent.step.completed' && e.fields.stop_reason === 'stop'))
+  assert.ok(report.events.some((e) => e.fields.message_id === messageHash))
+  assert.ok(report.events.every((e) => !e.fields.message_id || /^[a-f0-9]{12}$/.test(e.fields.message_id)))
+  assert.ok(report.events.every((e) => !e.fields.trace_id || /^[a-f0-9]{12}$/.test(e.fields.trace_id)))
+  assert.ok(report.events.some((e) => e.event === 'completion.started' && e.fields.operation === 'natural_followup_decision'))
+  assert.ok(report.events.some((e) => e.event === 'followup.candidate.evaluated' && e.fields.outcome))
+  assert.ok(report.events.some((e) => e.event === 'tool.started' && typeof e.fields.tool_index === 'number'))
+  assert.doesNotMatch(JSON.stringify(report), /文件工具已连通|请改名为小蓝|蓝色机器人|COVAN_BROWSER_JS_OK|api_key|SHOULD_NOT_LEAK/)
+  await assert.rejects(page.evaluate(() => window.covan.getDiagnosticReport('../../secrets')), /诊断标识|消息 ID/)
+  await assert.rejects(page.evaluate(() => window.covan.getDiagnosticReport('missing-message')), /未找到/)
+  await page.evaluate(() => window.covan.setSetting('local_observability', '0'))
+  const disabledReport = await page.evaluate((ref) => window.covan.getDiagnosticReport(ref), debugRef)
+  assert.equal(disabledReport.loggingEnabled, false)
+  assert.ok(disabledReport.notes.some((note) => note.includes('无法补回历史')))
+  await page.evaluate(() => window.covan.setSetting('local_observability', '1'))
+  await page.getByRole('button', { name: '设置', exact: true }).click()
+  await page.getByRole('button', { name: 'Debug', exact: true }).click()
+  await page.getByLabel('诊断标识', { exact: true }).fill(debugRef)
+  await page.getByRole('button', { name: '加载报告' }).click()
+  await expect(page.locator('.debug-report')).toContainText('workspace_write')
+  await page.getByLabel('诊断 Bot', { exact: true }).selectOption(fixture.bots[1].id)
+  slowDiagnosis = true
+  await page.getByRole('button', { name: '分析原因' }).click()
+  await expect(page.getByRole('button', { name: '取消分析' })).toBeVisible()
+  await page.getByRole('button', { name: '取消分析' }).click()
+  await expect(page.locator('.debug-panel [role="alert"]')).toContainText('取消')
+  slowDiagnosis = false
+  for (const [mode, code, hint] of [
+    ['empty', 'empty_response', '未返回可显示的正文'],
+    ['reasoning-only', 'output_limit', 'Token 上限'],
+    ['partial', 'output_limit', 'Token 上限'],
+    ['network', 'network_error', '无法连接'],
+    ['authentication', 'authentication', '鉴权'],
+  ]) {
+    diagnosisMode = mode
+    await page.getByRole('button', { name: '分析原因' }).click()
+    const alert = page.locator('.debug-panel [role="alert"]')
+    await expect(alert).toContainText(`[${code}]`)
+    await expect(alert).toContainText(hint)
+    await expect(alert).toContainText('分析编号：')
+    await expect(alert).not.toContainText('invoking remote method')
+    await expect(alert).not.toContainText('PRIVATE_PROVIDER_ERROR')
+    await expect(page.getByLabel('诊断分析')).toHaveCount(0)
+  }
+  await page.locator('.debug-panel [role="alert"]').scrollIntoViewIfNeeded()
+  await page.screenshot({ path: path.join(artifacts, 'debug-failure.png') })
+  diagnosisMode = 'success'
+  await page.getByRole('button', { name: '分析原因' }).click()
+  await expect(page.getByLabel('诊断分析')).toContainText('工具执行已结束')
+  const diagnosisRequest = requests.find((r) => JSON.stringify(r.body.messages?.[0] ?? '').includes('你是 Covan 执行诊断助手。'))
+  assert.ok(diagnosisRequest)
+  assert.ok(!diagnosisRequest.body.tools?.length)
+  assert.equal(diagnosisRequest.body.max_tokens, 8192)
+  assert.doesNotMatch(JSON.stringify(diagnosisRequest.body), /请改名为小蓝|文件工具已连通|蓝色机器人|COVAN_BROWSER_JS_OK/)
+  const updatedReport = await page.evaluate((ref) => window.covan.getDiagnosticReport(ref), debugRef)
+  assert.equal(updatedReport.message.status, report.message.status)
+  const diagnosticEvents = updatedReport.events.filter((e) => e.event.startsWith('diagnostic.') && e.event !== 'diagnostic.fixture')
+  assert.ok(diagnosticEvents.some((e) => e.event === 'diagnostic.completed'))
+  assert.ok(diagnosticEvents.some((e) => e.event === 'diagnostic.completion' && e.fields.stop_reason === 'length'))
+  assert.ok(diagnosticEvents.some((e) => e.event === 'diagnostic.failed' && e.fields.status === 401))
+  for (const code of ['aborted', 'empty_response', 'output_limit', 'network_error', 'authentication']) {
+    assert.ok(diagnosticEvents.some((e) => e.event === 'diagnostic.failed' && e.fields.error_code === code), code)
+  }
+  assert.ok(diagnosticEvents.every((e) => e.fields.phase === 'diagnostic' && e.fields.diagnostic_id))
+  assert.equal(new Set(diagnosticEvents.filter((e) => e.event === 'diagnostic.started').map((e) => e.fields.diagnostic_id)).size, 7)
+  assert.doesNotMatch(fs.readFileSync(path.join(profile, 'logs', 'observability.jsonl'), 'utf8'), /PRIVATE_PROVIDER_ERROR|sk-test-private-token|PRIVATE_REASONING_CONTENT/)
+  await page.screenshot({ path: path.join(artifacts, 'debug-analysis.png') })
+  await page.setViewportSize({ width: 960, height: 640 })
+  await page.getByLabel('诊断分析').scrollIntoViewIfNeeded()
+  await page.screenshot({ path: path.join(artifacts, 'debug-compact.png') })
+  assert.deepEqual(errors, [])
+  console.log('✓ Message-scoped diagnostics, redacted logs, invalid references, logging state, LLM analysis UI')
   console.log('Context UI regression passed. Screenshots: ' + artifacts)
 } catch (e) {
   if (page)

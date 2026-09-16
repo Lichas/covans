@@ -13,6 +13,7 @@ import { useChatsStore } from './stores/chatsStore'
 import { useMessagesStore } from './stores/messagesStore'
 import { useSettingsStore } from './stores/settingsStore'
 import { useUiStore } from './stores/uiStore'
+import { useScheduledTasksStore } from './stores/scheduledTasksStore'
 import { api } from './lib/api'
 import { UserProfileDialog } from './components/UserProfileDialog'
 
@@ -25,6 +26,7 @@ export default function App() {
     void useSettingsStore.getState().init()
     void useBotsStore.getState().loadBots()
     void useChatsStore.getState().loadChats()
+    void useScheduledTasksStore.getState().loadTasks()
   }, [])
 
   // 主进程事件订阅（SPEC §4）
@@ -49,6 +51,10 @@ export default function App() {
         case 'bot-updated': {
           void useBotsStore.getState().refreshBot(ev.botId)
           void useChatsStore.getState().loadChats()
+          break
+        }
+        case 'scheduled-tasks-updated': {
+          void useScheduledTasksStore.getState().loadTasks()
           break
         }
         default:

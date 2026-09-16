@@ -5,13 +5,19 @@ import type {
   Message as PiMessage,
   Usage,
 } from '@earendil-works/pi-ai'
-import type { Attachment, Bot, CovanEvent, Message } from '../shared/types'
+import type {
+  Attachment,
+  Bot,
+  CovanEvent,
+  Message,
+  ScheduledTask,
+} from '../shared/types'
 import { imageContent, validateChatImages } from './chatImages'
 import * as db from './db'
 import { abortChat, completeOnce, runAgent } from './agentRuntime'
 import { buildSystemPrompt, noteNewMessages, recallChatMemories, type GroupContext } from './memory'
 import { emitEvent as emit, setEventEmitter } from './events'
-import { classifyObservationError, observe } from './observability'
+import { classifyObservationError, observationErrorStatus, observe } from './observability'
 
 export type EmitFn = (ev: CovanEvent) => void
 
@@ -205,15 +211,135 @@ export function stopTurn(chatId: string): void {
   abortChat(chatId)
 }
 
+/** 执行单个定时任务：不落伪造的用户消息，只把 Bot 的真实结果投递到任务所属会话。 */
+export async function runScheduledTask(task: ScheduledTask, traceId: string): Promise<{
+  status: 'done' | 'error' | 'stopped'
+  error?: string
+}> {
+  emit({
+    type: 'scheduled-task-state',
+    chatId: task.chat_id,
+    taskId: task.id,
+    running: true,
+  })
+  try {
+    const chat = db.getChat(task.chat_id)
+    const bot = db.getBot(task.bot_id)
+    if (!chat || !bot)
+      return { status: 'error', error: 'Bot 或目标会话已删除' }
+    if (!db.listMemberBots(chat.id).some((member) => member.id === bot.id))
+      return { status: 'error', error: 'Bot 已不属于目标会话' }
+
+    const effectiveBot = task.model ? { ...bot, model: task.model } : bot
+    const members = db.listMemberBots(chat.id)
+    const group = chat.type === 'group' ? groupContext(chat.id, members) : null
+    const otherMembers = group?.otherMembers.filter((member) => member.id !== bot.id)
+    const context = group && otherMembers?.length ? { ...group, otherMembers } : undefined
+    const systemPrompt = [
+      buildSystemPrompt(
+        effectiveBot,
+        recallChatMemories(effectiveBot.id, chat.id, task.prompt),
+        context,
+      ),
+      '## 当前为定时任务\n你正在执行用户预先确认的自动任务。直接完成任务并给出可用结果；不要把任务指令当成新的用户聊天，也不要虚构未调用过的工具结果。除非结果需要说明，否则不要反复强调这是定时任务。',
+    ].join('\n\n')
+    const history = toPiHistory(db.listRecentMessages(chat.id, 30), effectiveBot)
+    history.push({
+      role: 'user',
+      content: `定时任务「${task.title}」：\n${task.prompt}`,
+      timestamp: Date.now(),
+    })
+    const placeholder = db.insertMessage({
+      chat_id: chat.id,
+      sender_type: 'bot',
+      sender_bot_id: bot.id,
+      content: '',
+      status: 'streaming',
+    })
+    emit({ type: 'message-start', chatId: chat.id, message: placeholder })
+
+    let content = ''
+    let completed = false
+    let error = ''
+    await runAgent(
+      chat.id,
+      effectiveBot,
+      history,
+      {
+        onImages: (images) => {
+          const current = db.getMessage(placeholder.id)
+          if (!current) return
+          const message = db.updateMessage(placeholder.id, {
+            content,
+            attachments: [...current.attachments, ...images],
+          })
+          emit({ type: 'message-start', chatId: chat.id, message })
+        },
+        onArtifact: (artifact) => {
+          const current = db.getMessage(placeholder.id)
+          if (!current) return
+          const message = db.updateMessage(placeholder.id, {
+            content,
+            artifacts: [
+              ...current.artifacts.filter((item) => item.relPath !== artifact.relPath),
+              artifact,
+            ],
+          })
+          emit({ type: 'message-start', chatId: chat.id, message })
+          emit({ type: 'workspace-updated', botId: bot.id })
+        },
+        onWorkspaceChanged: () =>
+          emit({ type: 'workspace-updated', botId: bot.id }),
+        onDelta: (delta) => {
+          content += delta
+          emit({
+            type: 'message-delta',
+            chatId: chat.id,
+            messageId: placeholder.id,
+            delta,
+          })
+        },
+        onDone: (full) => {
+          content = full || content
+          completed = true
+        },
+        onError: (message) => {
+          error = message
+        },
+      },
+      { systemPrompt, messageId: placeholder.id, traceId, taskId: task.id },
+    )
+
+    const status = completed ? 'done' : error ? 'error' : 'stopped'
+    const message = db.updateMessage(placeholder.id, {
+      content,
+      status,
+      error,
+    })
+    db.touchChat(chat.id, Date.now(), true)
+    emit({ type: 'message-done', chatId: chat.id, message })
+    emit({ type: 'chat-updated', chatId: chat.id })
+    if (status === 'done') noteNewMessages(chat.id, [bot.id], 1)
+    return { status, error: error || undefined }
+  } finally {
+    emit({
+      type: 'scheduled-task-state',
+      chatId: task.chat_id,
+      taskId: task.id,
+      running: false,
+    })
+  }
+}
+
 function appendUserMessage(
   chatId: string,
   content: string,
   mentions: string[],
   attachments: Attachment[],
-): void {
+): string {
   const text = content.trim()
   if (!text && !attachments.length) throw new Error('消息内容不能为空')
-  db.insertMessage({
+  const message = db.insertMessage({
     chat_id: chatId,
     sender_type: 'user',
     content: text,
@@ -222,6 +348,7 @@ function appendUserMessage(
   })
   db.touchChat(chatId, Date.now())
   emit({ type: 'chat-updated', chatId })
+  return message.id
 }
 
 async function runTurn(
@@ -239,7 +366,7 @@ async function runTurn(
   if (members.length === 0) throw new Error('会话内没有 Bot 成员')
 
   // 1. 落库用户消息；发 chat-updated
-  appendUserMessage(chatId, content, mentions, attachments)
+  const traceId = appendUserMessage(chatId, content, mentions, attachments)
   let newMessageCount = 1
 
   if (chat.type === 'dm') {
@@ -259,15 +386,16 @@ async function runTurn(
             '请用即时聊天的节奏回答。若内容较长且适合多条消息，本条只发送一个自然完整的小段，把其余非重复内容留给最多两条后续消息；不要先一次说完再复述，也不要预告或解释分段。若一条即可清楚回答，就在本条完整回答。',
           ].join('\n\n')
         : '',
+      traceId,
     )
     if (replied) {
       newMessageCount += 1
-      newMessageCount += await runNaturalFollowUps(chat.id, bot, signal)
+      newMessageCount += await runNaturalFollowUps(chat.id, bot, signal, traceId)
     }
   } else if (chat.reply_mode === 'active') {
-    newMessageCount += await runActiveGroup(chat.id, members, signal)
+    newMessageCount += await runActiveGroup(chat.id, members, signal, traceId)
   } else {
-    newMessageCount += await runSequentialGroup(chat.id, members, signal)
+    newMessageCount += await runSequentialGroup(chat.id, members, signal, traceId)
   }
 
   if (!signal.aborted) {
@@ -276,7 +404,7 @@ async function runTurn(
       members.map((m) => m.id),
       newMessageCount,
     )
-    if (chat.type === 'group') void refreshGroupSummary(chat.id, members)
+    if (chat.type === 'group') void refreshGroupSummary(chat.id, members, traceId)
   }
 }
 
@@ -320,6 +448,7 @@ async function shouldReply(
   forced: boolean,
   signal: AbortSignal,
   round: number,
+  traceId: string,
 ): Promise<boolean> {
   emit({ type: 'agent-activity', chatId, botId: bot.id, state: 'preparing' })
   try {
@@ -343,10 +472,13 @@ async function shouldReply(
           '被用户直接点名时必须回复。不要在判断阶段输出正式回答。',
         ].join('\n\n'),
         decisionTranscript(chatId),
-        { signal, reasoning: 'low', maxTokens: 32, temperature: 0 },
+        { signal, reasoning: 'low', maxTokens: 32, temperature: 0, observation: { operation: 'group_reply_decision', chatId, traceId } },
       )
-      return forced || !/^\s*SKIP\b/i.test(raw)
+      const reply = forced || !/^\s*SKIP\b/i.test(raw)
+      observe('group.reply_decision', { chat_id: chatId, bot_id: bot.id, trace_id: traceId, round, outcome: forced ? 'forced_reply' : reply ? 'reply' : 'skip' })
+      return reply
     } catch (error) {
+      observe('group.reply_decision.failed', { chat_id: chatId, bot_id: bot.id, trace_id: traceId, round, error_code: classifyObservationError(error), outcome: signal.aborted ? 'aborted' : 'fallback_reply' })
       if (signal.aborted) throw error
       // 判断请求失败时仍让 Bot 尝试正式回复，由消息气泡展示具体错误。
       return true
@@ -362,6 +494,7 @@ async function speakWithActivity(
   members: Bot[],
   signal: AbortSignal,
   round: number,
+  traceId: string,
 ): Promise<boolean> {
   emit({ type: 'agent-activity', chatId, botId: bot.id, state: 'speaking' })
   try {
@@ -381,6 +514,7 @@ async function speakWithActivity(
       round > 1
         ? `这是本次话题的第 ${round} 轮延展讨论。只说能推进讨论的新内容：补充事实、回应具体观点、提出有依据的异议或收敛下一步。不要复述、客套附和或重复自己的上一轮。`
         : '',
+      traceId,
     )
   } finally {
     emit({ type: 'agent-activity', chatId, botId: bot.id, state: 'idle' })
@@ -391,10 +525,11 @@ async function runSequentialGroup(
   chatId: string,
   members: Bot[],
   signal: AbortSignal,
+  traceId: string,
 ): Promise<number> {
   let repliedTotal = 0
   for (let round = 1; round <= MAX_GROUP_DISCUSSION_ROUNDS; round++) {
-    const replied = await runSequentialRound(chatId, members, signal, round)
+    const replied = await runSequentialRound(chatId, members, signal, round, traceId)
     repliedTotal += replied
     if (signal.aborted || replied === 0) return repliedTotal
   }
@@ -406,6 +541,7 @@ async function runSequentialRound(
   members: Bot[],
   signal: AbortSignal,
   round: number,
+  traceId: string,
 ): Promise<number> {
   const session = groupSessions.get(chatId)
   if (!session) return 0
@@ -417,9 +553,9 @@ async function runSequentialRound(
   let replied = 0
   for (const bot of ordered) {
     if (signal.aborted) return replied
-    if (await decideWithLatestContext(chatId, bot, signal, round)) {
+    if (await decideWithLatestContext(chatId, bot, signal, round, traceId)) {
       replied += 1
-      await speakWithActivity(chatId, bot, members, signal, round)
+      await speakWithActivity(chatId, bot, members, signal, round, traceId)
     }
   }
   return replied
@@ -429,12 +565,13 @@ async function runActiveGroup(
   chatId: string,
   members: Bot[],
   signal: AbortSignal,
+  traceId: string,
 ): Promise<number> {
   const session = groupSessions.get(chatId)
   if (!session) return 0
   let repliedTotal = 0
   for (let round = 1; round <= MAX_GROUP_DISCUSSION_ROUNDS; round++) {
-    const replied = await runActiveRound(chatId, members, signal, round)
+    const replied = await runActiveRound(chatId, members, signal, round, traceId)
     repliedTotal += replied
     if (signal.aborted || replied === 0) return repliedTotal
   }
@@ -446,18 +583,19 @@ async function runActiveRound(
   members: Bot[],
   signal: AbortSignal,
   round: number,
+  traceId: string,
 ): Promise<number> {
   const session = groupSessions.get(chatId)
   if (!session) return 0
   while (!signal.aborted) {
     const revision = session.revision
     const decisions = await Promise.all(
-      members.map((bot) => decideWithLatestContext(chatId, bot, signal, round)),
+      members.map((bot) => decideWithLatestContext(chatId, bot, signal, round, traceId)),
     )
     if (signal.aborted) return 0
     if (session.revision !== revision) continue
     const speakers = members.filter((_, index) => decisions[index])
-    await Promise.all(speakers.map((bot) => speakWithActivity(chatId, bot, members, signal, round)))
+    await Promise.all(speakers.map((bot) => speakWithActivity(chatId, bot, members, signal, round, traceId)))
     if (session.revision === revision) return speakers.length
   }
   return 0
@@ -472,6 +610,7 @@ async function decideWithLatestContext(
   bot: Bot,
   signal: AbortSignal,
   round: number,
+  traceId: string,
 ): Promise<boolean> {
   const session = groupSessions.get(chatId)
   if (!session) return false
@@ -486,8 +625,10 @@ async function decideWithLatestContext(
         round === 1 && session.forcedMentions.has(bot.id),
         AbortSignal.any([signal, controller.signal]),
         round,
+        traceId,
       )
       if (session.revision === revision) return reply
+      observe('group.reply_decision.invalidated', { chat_id: chatId, bot_id: bot.id, trace_id: traceId, round })
     } catch {
       if (signal.aborted) return false
       // 补充消息导致的取消由循环重试；普通判断错误已在 shouldReply 内降级为正式回复。
@@ -567,6 +708,7 @@ async function draftNaturalFollowUp(
   bot: Bot,
   signal: AbortSignal,
   index: number,
+  traceId: string,
 ): Promise<string | null> {
   try {
     const recentReplies = db
@@ -586,12 +728,13 @@ async function draftNaturalFollowUp(
         '只允许输出以下两种格式之一：\nSKIP\nREPLY\n<一条可直接展示给用户的短消息>',
       ].join('\n\n'),
       decisionTranscript(chatId),
-      { signal, reasoning: 'low', maxTokens: 180, temperature: 0 },
+      { signal, reasoning: 'low', maxTokens: 180, temperature: 0, observation: { operation: 'natural_followup_decision', chatId, traceId } },
     )
     const parsed = parseNaturalFollowUpCandidate(raw, recentReplies)
     observe('followup.candidate.evaluated', {
       chat_id: chatId,
       bot_id: bot.id,
+      trace_id: traceId,
       iteration: index + 1,
       outcome: parsed.outcome,
       raw_chars: raw.length,
@@ -603,6 +746,7 @@ async function draftNaturalFollowUp(
     observe('followup.candidate.failed', {
       chat_id: chatId,
       bot_id: bot.id,
+      trace_id: traceId,
       iteration: index + 1,
       error_code: classifyObservationError(error),
     })
@@ -615,6 +759,7 @@ function publishNaturalFollowUp(
   chatId: string,
   bot: Bot,
   content: string,
+  traceId: string,
 ): void {
   const placeholder = db.insertMessage({
     chat_id: chatId,
@@ -635,8 +780,10 @@ function publishNaturalFollowUp(
   emit({ type: 'message-done', chatId, message })
   emit({ type: 'chat-updated', chatId })
   observe('followup.message.published', {
+    message_id: message.id,
     chat_id: chatId,
     bot_id: bot.id,
+    trace_id: traceId,
     output_chars: content.length,
   })
 }
@@ -645,14 +792,15 @@ async function runNaturalFollowUps(
   chatId: string,
   bot: Bot,
   signal: AbortSignal,
+  traceId: string,
 ): Promise<number> {
   if (!naturalFollowUpEnabled()) return 0
   let sentCount = 0
   for (let index = 0; index < MAX_NATURAL_FOLLOW_UPS; index++) {
     if (signal.aborted) return sentCount
-    const candidate = await draftNaturalFollowUp(chatId, bot, signal, index)
+    const candidate = await draftNaturalFollowUp(chatId, bot, signal, index, traceId)
     if (signal.aborted || !candidate || !db.getChat(chatId)) return sentCount
-    publishNaturalFollowUp(chatId, bot, candidate)
+    publishNaturalFollowUp(chatId, bot, candidate, traceId)
     sentCount += 1
   }
   return sentCount
@@ -661,6 +809,7 @@ async function runNaturalFollowUps(
 async function refreshGroupSummary(
   chatId: string,
   members: Bot[],
+  traceId: string,
 ): Promise<void> {
   const bot = members[0]
   const chat = db.getChat(chatId)
@@ -673,7 +822,7 @@ async function refreshGroupSummary(
       bot,
       '把群聊压缩成中立、准确的前文总结，保留人物立场、决定和未解决问题。只输出总结，不超过500字。',
       `${chat.context_summary ? `已有总结：${chat.context_summary}\n\n` : ''}${buildTranscript(chatId)}`,
-      { reasoning: 'off', maxTokens: 700, temperature: 0 },
+      { reasoning: 'off', maxTokens: 700, temperature: 0, observation: { operation: 'group_context_summary', chatId, traceId } },
     )
     if (db.listRecentMessages(chatId, 1).at(-1)?.id === newestMessageId)
       db.updateChatSummary(chatId, summary)
@@ -691,6 +840,7 @@ async function speakOne(
   signal?: AbortSignal,
   historyLimit = 30,
   responseInstruction = '',
+  traceId?: string,
 ): Promise<boolean> {
   const memories = recallChatMemories(bot.id, chatId)
   const ctx: GroupContext | undefined = groupContext
@@ -784,6 +934,8 @@ async function speakOne(
         emit({ type: 'message-done', chatId, message: msg })
         emit({ type: 'chat-updated', chatId })
         observe('message.completed', {
+          message_id: placeholder.id,
+          ...(traceId ? { trace_id: traceId } : {}),
           chat_id: chatId,
           bot_id: bot.id,
           phase: responseInstruction.includes('<<natural-followup-primary>>')
@@ -808,6 +960,8 @@ async function speakOne(
         emit({ type: 'message-done', chatId, message: msg })
         emit({ type: 'chat-updated', chatId })
         observe('message.failed', {
+          message_id: placeholder.id,
+          ...(traceId ? { trace_id: traceId } : {}),
           chat_id: chatId,
           bot_id: bot.id,
           phase: responseInstruction.includes('<<natural-followup-primary>>')
@@ -817,10 +971,11 @@ async function speakOne(
               : 'dm',
           partial_chars: acc.length,
           error_code: classifyObservationError(error),
+          error_status: observationErrorStatus(error),
         })
       },
     },
-    { systemPrompt, signal },
+    { systemPrompt, signal, messageId: placeholder.id, traceId },
   )
   if (signal?.aborted && db.getChat(chatId)) {
     const msg = db.updateMessage(placeholder.id, {
@@ -828,6 +983,14 @@ async function speakOne(
       status: 'stopped',
     })
     emit({ type: 'message-done', chatId, message: msg })
+    observe('message.stopped', {
+      message_id: placeholder.id,
+      ...(traceId ? { trace_id: traceId } : {}),
+      chat_id: chatId,
+      bot_id: bot.id,
+      phase: ctx ? 'group' : 'dm',
+      partial_chars: acc.length,
+    })
   }
   return completed
 }
