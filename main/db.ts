@@ -234,6 +234,10 @@ export function initDb(dir: string): Db {
   d.pragma('foreign_keys = ON')
   d.exec(MIGRATION)
   const botColumns = d.pragma('table_info(bots)') as { name: string }[]
+  for (const [name, fallback] of [['backend', 'api'], ['cli_path', ''], ['cli_access', 'read-only']]) {
+    if (!botColumns.some((column) => column.name === name))
+      d.exec(`ALTER TABLE bots ADD COLUMN ${name} TEXT NOT NULL DEFAULT '${fallback}'`)
+  }
   if (!botColumns.some((column) => column.name === 'reasoning_effort')) {
     d.exec(
       "ALTER TABLE bots ADD COLUMN reasoning_effort TEXT NOT NULL DEFAULT 'off'",
@@ -582,6 +586,9 @@ interface ProviderRow {
   created_at: number
 }
 interface BotRow {
+  backend: Bot['backend']
+  cli_path: string
+  cli_access: Bot['cli_access']
   gender: Bot['gender']
   id: string
   name: string
@@ -809,6 +816,7 @@ export function getBot(id: string): Bot | null {
 }
 
 export function createBot(input: BotInput): Bot {
+  assertCliConfiguration(input)
   assertGender(input.gender ?? 'female')
   if (input.pinned && listBots().filter((b) => b.pinned).length >= 3)
     throw new Error('最多置顶 3 个 Bot，请先取消一个置顶')
@@ -827,8 +835,8 @@ export function createBot(input: BotInput): Bot {
   getDb()
     .prepare(
       `INSERT INTO bots (id,name,avatar,gender,description,tags,system_prompt,provider_id,model,
-        temperature,max_tokens,reasoning_effort,response_decision_strategy,workspace_dir,notify,is_coordinator,pinned,sort_order,created_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        temperature,max_tokens,reasoning_effort,response_decision_strategy,workspace_dir,notify,is_coordinator,pinned,sort_order,created_at,backend,cli_path,cli_access)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     )
     .run(
       id,
@@ -850,6 +858,9 @@ export function createBot(input: BotInput): Bot {
       input.pinned ? 1 : 0,
       maxSort + 1,
       now,
+      input.backend ?? 'api',
+      input.cli_path?.trim() ?? '',
+      input.cli_access ?? 'read-only',
     )
   return getBot(id)!
 }
@@ -858,6 +869,7 @@ export function updateBot(
   id: string,
   patch: Partial<BotInput> & { avatar?: string },
 ): Bot {
+  assertCliConfiguration(patch)
   const existing = getBot(id)
   if (!existing) throw new Error('Bot 不存在')
   if (
@@ -879,6 +891,9 @@ export function updateBot(
   if (patch.max_tokens !== undefined) assertMaxTokens(patch.max_tokens)
   const merged: Bot = {
     ...existing,
+    backend: patch.backend ?? existing.backend,
+    cli_path: patch.cli_path?.trim() ?? existing.cli_path,
+    cli_access: patch.cli_access ?? existing.cli_access,
     name: patch.name ?? existing.name,
     avatar: patch.avatar ?? existing.avatar,
     gender: patch.gender ?? existing.gender,
@@ -907,7 +922,7 @@ export function updateBot(
   getDb()
     .prepare(
       `UPDATE bots SET name=?, avatar=?, gender=?, description=?, tags=?, system_prompt=?, provider_id=?,
-       model=?, temperature=?, max_tokens=?, reasoning_effort=?, response_decision_strategy=?, notify=?, is_coordinator=?, pinned=? WHERE id=?`,
+       model=?, temperature=?, max_tokens=?, reasoning_effort=?, response_decision_strategy=?, notify=?, is_coordinator=?, pinned=?, backend=?, cli_path=?, cli_access=? WHERE id=?`,
     )
     .run(
       merged.name,
@@ -925,10 +940,22 @@ export function updateBot(
       merged.notify,
       merged.is_coordinator,
       merged.pinned,
+      merged.backend,
+      merged.cli_path,
+      merged.cli_access,
       id,
     )
   emitEvent({ type: 'bot-updated', botId: id })
   return getBot(id)!
+}
+
+function assertCliConfiguration(input: Partial<BotInput>): void {
+  if (input.backend !== undefined && !['api', 'codex-cli', 'claude-cli'].includes(input.backend))
+    throw new Error('未知 Bot 运行方式')
+  if (input.cli_access !== undefined && !['read-only', 'workspace-write'].includes(input.cli_access))
+    throw new Error('未知 CLI 文件权限')
+  if (input.cli_path !== undefined && (typeof input.cli_path !== 'string' || input.cli_path.length > 4096 || /[\r\n\0]/.test(input.cli_path)))
+    throw new Error('CLI 路径必须是可执行文件路径，不能包含命令参数或换行')
 }
 
 function assertGender(value: string): void {

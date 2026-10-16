@@ -986,6 +986,9 @@ export async function testProviderConnection(
       }
     const probe: Bot = {
       id: '__probe__',
+      backend: 'api',
+      cli_path: '',
+      cli_access: 'read-only',
       gender: 'female',
       name: provider.name,
       avatar: '',

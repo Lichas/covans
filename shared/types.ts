@@ -34,6 +34,17 @@ export interface ProviderInput {
   default_model?: string
 }
 
+export type BotBackend = 'api' | 'codex-cli' | 'claude-cli'
+export type LocalCliKind = Exclude<BotBackend, 'api'>
+export type CliAccess = 'read-only' | 'workspace-write'
+export interface LocalCliProbe {
+  kind: LocalCliKind
+  available: boolean
+  path: string
+  version: string
+  error?: string
+}
+
 export type BotGender = 'female' | 'male'
 
 export type McpTransport = 'stdio' | 'http' | 'sse'
@@ -100,6 +111,9 @@ export interface UserPresetAvatar {
 }
 
 export interface Bot {
+  backend: BotBackend
+  cli_path: string
+  cli_access: CliAccess
   id: string
   name: string
   avatar: string
@@ -122,6 +136,9 @@ export interface Bot {
 }
 
 export interface BotInput {
+  backend?: BotBackend
+  cli_path?: string
+  cli_access?: CliAccess
   name: string
   avatar?: string
   gender?: BotGender
@@ -431,6 +448,7 @@ export interface DiagnosticReport {
 }
 
 export interface CovanApi {
+  probeLocalCli(kind: LocalCliKind, executablePath?: string): Promise<LocalCliProbe>
   listExtensions(): Promise<ExtensionCatalog>
   saveMcpServer(input: McpServerInput): Promise<McpServer>
   deleteMcpServer(id: string): Promise<void>

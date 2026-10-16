@@ -1,5 +1,6 @@
 // shared/ipcChannels.ts — IPC 通道名常量（主/preload 共用）
 export const CH = {
+  probeLocalCli: 'cli:probe',
   listExtensions: 'extensions:list',
   saveMcpServer: 'extensions:mcp:save',
   deleteMcpServer: 'extensions:mcp:delete',
