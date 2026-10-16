@@ -18,6 +18,7 @@ import { MemoryPanel } from './MemoryPanel'
 import { WorkspacePanel } from './WorkspacePanel'
 import { ScheduledTasksPanel } from './ScheduledTasksPanel'
 import { ExtensionsPanel } from './ExtensionsPanel'
+import { LocalCliFields, isCliBackend } from './LocalCliFields'
 import { Field, Toggle, inputCls } from './controls'
 import { PencilIcon, ProviderIcon, UsersIcon } from './icons'
 import { MarkdownContent } from './MarkdownContent'
@@ -382,7 +383,17 @@ function ModelTab({ bot }: { bot: Bot }) {
         <div className="text-[12.5px] font-medium text-stone-600 dark:text-stone-300">
           模型配置
         </div>
-        <Field label="Provider">
+        <LocalCliFields
+          value={{
+            backend: bot.backend,
+            cliPath: bot.cli_path,
+            cliAccess: bot.cli_access,
+          }}
+          onChange={(patch) => save(patch)}
+        />
+        <Field
+          label={isCliBackend(bot.backend) ? 'Provider（判断用，可选）' : 'Provider'}
+        >
           <div className="flex items-center gap-2">
             {bot.provider_id ? (
               <ProviderIcon

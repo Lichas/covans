@@ -156,6 +156,20 @@ pi 的 Context 为可 JSON 序列化的 `{ role, content, timestamp }[]`。每�
 
 Jev 使用固定官方 HTTPS endpoint 和 Electron `net.fetch`，继承系统代理。TypeSafe Key 经 `safeStorage` 加密保存在 settings，IPC 只返回 `has_api_key`。置信度低于阈值或 Jev 不可用时回退传统策略；Abort 直接向上传播，避免用户停止后又发起 LLM。结构化 state 与问题不写入日志，只记录模型、策略、置信度、阈值、耗时和归一化回退原因。默认使用可滚动别名 `jev-latest`；需要稳定阈值的用户可填明确版本。
 
+### 5.8 本地 CLI 运行后端（cli/）
+
+`cli/index.ts` 与 `agentRuntime.runAgent` 的分派点平级：mock、`cli`、pi 三条分支互斥，`runCliAgent` 复用同一套 `AgentCallbacks`（正文增量、失败、工作区产物），因此编排器、定时任务和 Agent 私聊不需要知道正文来自 API 还是 CLI。
+
+**为什么不是 t3code 的 `codex app-server`。** 参考实现 t3code 为每个会话常驻一个 `codex app-server` 子进程并自实现的 JSON-RPC 协议，协议类型由上游 `codex-rs/app-server-protocol` 的固定提交生成，随 CLI 版本漂移；它还必须应答审批请求、用户输入请求与 MCP 相关通知。Covan 选择 `codex exec --json`：一次性进程、官方自动化接口、事件词表更小，且不需要在聊天界面里再造一套审批流。代价是 CLI 的会话由 `exec resume` 承载，沙箱与工作目录在首次会话确定后不可按轮次更改（已在 SPEC 记录）。
+
+**会话归属。** Covan 数据库仍是聊天记录的唯一事实来源。`bot_cli_sessions` 只保存「这个 Bot 在这个会话中对应哪个 CLI 会话」，并以 `运行方式|可执行文件|权限|工作区` 的指纹约束复用；清空聊天记录、开始新话题、删除会话或修改上述任一配置都会让指纹失配并重新建立会话。这样 CLI 侧的上下文永远无法超出 Covan 当前的上下文边界。
+
+**提示词分层。** 新建会话时把系统提示（人设、记忆、审核规则）与既有转录合并为起始提示词，让 CLI 从一个自洽的起点开始；续接时只发送最新用户消息，避免每轮重放整段历史。图片在 Codex 走 `-i`，在缺少该参数的 Claude 走「把路径写进提示词」。
+
+**判断引擎与正文生成解耦。** CLI Bot 的正文生成不需要 Provider，但「是否发言 / 是否续发」判断需要。若既无 Provider 也未配置 Jev，判断会落到「失败即回复」的兜底，导致每条群消息都启动一次 CLI（昂贵且有文件副作用），因此该类 Bot 降级为只响应 @提及、不做自然追问，并写入可观测事件。
+
+**风险。** Claude 适配器目前只有契约实现与假 CLI 回归，没有真机验证；`codex exec --json` 的 item 字段名按防御式解析（兼容 `text`/`content`/`content_items`/`message`），未识别结构会转成可见错误而不是静默空回复。
+
 ## 6. 群聊编排协议详细设计（orchestrator.ts）
 
 ### 6.1 共同输入与轮次控制

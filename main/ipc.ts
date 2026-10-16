@@ -48,6 +48,7 @@ import { observabilityDirectory } from './observability'
 import { getDiagnosticReport, analyzeDiagnostic, cancelDiagnostic } from './diagnostics'
 import { observeScheduledTaskChange, refreshScheduledTasks, runScheduledTaskNow } from './scheduledTasks'
 import { registerExtensionIpc } from './extensions/ipc'
+import { registerCliIpc } from './cli/ipc'
 import { getJevConfig, saveJevConfig, testJev } from './decisionStrategy'
 
 // ---------- 参数校验 ----------
@@ -90,6 +91,7 @@ function handle<TArgs extends unknown[], TRet>(
 
 export function registerIpc(): void {
   registerExtensionIpc()
+  registerCliIpc()
   handle(CH.importChatImage, (name: string, bytes: Uint8Array) => {
     assertStr(name, 'name')
     if (!(bytes instanceof Uint8Array) || bytes.byteLength > MAX_IMAGE_BYTES)

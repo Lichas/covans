@@ -20,7 +20,8 @@ import { abortChat, completeOnce, runAgent } from './agentRuntime'
 import { buildSystemPrompt, noteNewMessages, recallChatMemories, type GroupContext } from './memory'
 import { emitEvent as emit, setEventEmitter } from './events'
 import { classifyObservationError, observationErrorStatus, observe } from './observability'
-import { decideResponse } from './decisionStrategy'
+import { decideResponse, getJevConfig } from './decisionStrategy'
+import { isCliBot } from './cli'
 
 export type EmitFn = (ev: CovanEvent) => void
 
@@ -638,6 +639,16 @@ function decisionState(
   }
 }
 
+/**
+ * 判断该 Bot 是否有可用的“是否发言 / 是否续发”判断引擎。
+ * 本地 CLI Bot 不依赖 Provider 也能回复正文，但判断需要 Provider 或已配置的 Jev。
+ */
+function hasResponseDecisionEngine(bot: Bot): boolean {
+  if (!isCliBot(bot)) return true
+  if (bot.response_decision_strategy === 'jev' && getJevConfig().has_api_key) return true
+  return Boolean(bot.provider_id)
+}
+
 async function shouldReply(
   chatId: string,
   bot: Bot,
@@ -659,6 +670,21 @@ async function shouldReply(
         outcome: 'forced_reply',
       })
       return true
+    }
+    // 本地 CLI Bot 没有 Provider 又没有 Jev 时不存在可用的判断引擎。
+    // 此时若沿用“判断失败即回复”的兜底，每条群消息都会启动一次 CLI（昂贵且有副作用），
+    // 因此改为只响应 @提及。
+    if (!hasResponseDecisionEngine(bot)) {
+      observe('group.reply_decision', {
+        chat_id: chatId,
+        bot_id: bot.id,
+        trace_id: traceId,
+        round,
+        requested_strategy: bot.response_decision_strategy,
+        used_strategy: 'mention_only',
+        outcome: 'skip_no_decision_engine',
+      })
+      return false
     }
     try {
       const result = await decideResponse({
@@ -955,6 +981,9 @@ async function draftNaturalFollowUp(
   index: number,
   traceId: string,
 ): Promise<string | null> {
+  // 没有判断引擎时不做自然追问：追问判断本身需要一次模型调用，
+  // 否则只能无条件追问，与“确有补充价值才发”的契约冲突。
+  if (!hasResponseDecisionEngine(bot)) return null
   try {
     const recentReplies = db
       .listCurrentTopicMessages(chatId, 5)

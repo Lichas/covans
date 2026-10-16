@@ -32,6 +32,7 @@ main/           Electron 主进程（Node）
   agentRuntime.ts   pi-mono 封装：provider 解析、agent 会话创建、流式转发
   orchestrator.ts   群聊编排（成员判断 → 并发/顺序回复 → 落库）
   decisionStrategy.ts Bot 响应决策策略（自动 / 传统 LLM / TypeSafe Jev）
+  cli/              本地 CLI 运行后端（codex / claude 适配器、探测、会话续接）
   memory.ts         实时短摘要、场景归纳、检索与注入
   scheduledTasks.ts 本地定时器恢复、无重入执行与状态更新
   workspace.ts      每 Bot 工作区目录管理
@@ -78,6 +79,9 @@ CREATE TABLE bots (
   max_tokens INTEGER NOT NULL DEFAULT 8192,
   reasoning_effort TEXT NOT NULL DEFAULT 'medium', -- off|low|medium|high|xhigh
   response_decision_strategy TEXT NOT NULL DEFAULT 'auto', -- auto|llm|jev
+  backend TEXT NOT NULL DEFAULT 'api',    -- api|codex-cli|claude-cli
+  cli_path TEXT NOT NULL DEFAULT '',      -- 空 = 在 PATH 中按命令名查找
+  cli_access TEXT NOT NULL DEFAULT 'read-only', -- read-only|workspace-write
   workspace_dir TEXT NOT NULL DEFAULT '',  -- 相对 workspaces/ 的目录名
   notify INTEGER NOT NULL DEFAULT 1,
   is_coordinator INTEGER NOT NULL DEFAULT 0, -- legacy：仅兼容旧库，现行调度不读取
@@ -126,6 +130,15 @@ CREATE TABLE chat_topics (
   summary TEXT NOT NULL,                  -- 分界前累计上下文摘要，最多 6000 字
   previous_message_count INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL
+);
+CREATE TABLE bot_cli_sessions (
+  bot_id TEXT NOT NULL REFERENCES bots(id) ON DELETE CASCADE,
+  chat_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+  backend TEXT NOT NULL,
+  fingerprint TEXT NOT NULL,              -- 运行方式|可执行文件|权限|工作区
+  session_id TEXT NOT NULL,               -- CLI 自身返回的会话 ID
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (bot_id, chat_id)
 );
 CREATE TABLE memories (
   id TEXT PRIMARY KEY,
@@ -202,6 +215,7 @@ interface CovanApi {
   getJevConfig(): Promise<JevConfig>;              // 只返回 has_api_key，不返回密钥
   saveJevConfig(input: JevConfigInput): Promise<JevConfig>; // api_key 省略保留、空串清除
   testJev(): Promise<TestJevResult>;
+  probeLocalCli(kind: LocalCliKind, executablePath?: string): Promise<LocalCliProbe>; // 只探测本机可执行文件与版本
 
   // bots
   listBots(): Promise<Bot[]>;
@@ -321,6 +335,16 @@ type CovanEvent =
 
 - 点击引用时，草稿保存 `{messageId, author, content}`，在输入框内部上方显示左侧色条、作者和可滚动引用摘录，并可单独取消；正文输入不混入 `>` 原始标记。每个会话独立持久保存引用与正文，重载后恢复。
 - 发送时将作者与原文序列化为 Markdown 引用，再拼接用户正文，经既有发送接口进入模型上下文；仅引用也可发送。输入区和引用区隐藏滚动条但保留滚动、文本选择和中文输入法行为。
+
+### 5.4 本地 CLI 运行后端（main/cli/）
+
+- 每个 Bot 有一种运行方式 `backend`：`api`（默认，走 Provider）或 `codex-cli` / `claude-cli`（正文由本机已登录的 CLI 生成）。CLI Bot 仍可配置 Provider，仅用于「是否发言 / 是否续发」判断，不影响正文生成。`cli_access` 为 `read-only`（默认）或 `workspace-write`；`cli_path` 为空时在 PATH 中按命令名查找。
+- 运行方式、可执行文件路径、文件权限与工作区组成会话指纹。首次发言以 `cli_path` 启动一次 CLI，把系统提示（人设、记忆、审核规则）、既有转录与当前用户消息合并为起始提示词，并记录 CLI 返回的会话 ID；同一 Bot 在同一会话中后续轮次改为续接，只发送最新一条用户消息。指纹变化、清空聊天记录、开始新话题或删除会话都会丢弃映射并重新建立会话。会话映射存 `bot_cli_sessions`，CLI 自身的会话与登录状态仍由 CLI 管理。
+- Codex：`codex exec --json --sandbox <read-only|workspace-write> -C <工作区> --skip-git-repo-check [-i 图片] <提示词>`；续接为 `codex exec resume <会话 ID> --json --skip-git-repo-check`（resume 不支持 `--sandbox` 与 `-C`，沙箱与工作目录在首次会话确定后继承）。解析 stdout 的 JSONL：`thread.started` 取会话 ID，`item.completed` 中 `agent_message` 取正文增量、`file_change` 转为交付产物、`command_execution`/`reasoning`/`mcp_tool_call` 仅记入观测，`turn.completed` 取 Token 用量，`turn.failed` 与顶层 `error` 视为失败。
+- Claude：`claude -p <提示词> --output-format stream-json --verbose [--resume <会话 ID>] --permission-mode <plan|acceptEdits>`，只读映射为 `plan`、可写映射为 `acceptEdits`。解析 `system(init)` 取会话 ID，`assistant` 的文本块取正文，`result.subtype!=='success'` 或 `is_error` 视为失败。Claude 适配器按文档化契约实现，尚未在真机验证。
+- 两条适配器都不存储用户凭据，完全依赖 CLI 自身的登录状态；子进程继承用户真实 HOME 与 PATH（并补齐 Homebrew 等常见安装目录，避免 GUI 启动时找不到命令），以 Bot 工作区为工作目录。正文为空、CLI 未安装、未登录或额度用尽都转为可见错误，不产生空白完成消息。
+- 本地 CLI Bot 没有 Provider 且未配置 Jev 时不存在可用的判断引擎：群聊中只响应 @提及（不沿用“判断失败即回复”的兜底，否则每条群消息都会启动一次 CLI），私聊不做自然追问；两种情况都写入脱敏观测事件。
+- `cli:probe` 只在本机按命令名或给定路径查找可执行文件并运行 `--version`，返回 `{kind, available, path, version, error}`，不读取登录凭据，也不发起网络请求。
 
 ## 6. 分层记忆系统（memory.ts / db.ts）
 
@@ -470,7 +494,7 @@ await agent.prompt(userText)   // agent.abort() 用于 stopChat
 
 ## 11. 非功能需求
 
-- 无任何网络遥测；网络访问限用户配置的 LLM/生图 Provider、用户选择的 TypeSafe Jev 决策、任务需要的搜索/网页、启用的 MCP 服务及用户主动安装的 Git 来源。Provider API key 仍明文存本地 SQLite；TypeSafe API Key 与 MCP env/headers 使用 safeStorage 加密，边界明确区分。
+- 无任何网络遥测；网络访问限用户配置的 LLM/生图 Provider、用户选择的 TypeSafe Jev 决策、任务需要的搜索/网页、启用的 MCP 服务、用户主动安装的 Git 来源，以及用户选择的本地 CLI（由其自身发起）。Provider API key 仍明文存本地 SQLite；TypeSafe API Key 与 MCP env/headers 使用 safeStorage 加密，边界明确区分。Covan 不为本地 CLI 保存任何凭据，只以用户身份启动已登录的 CLI；`cli:probe` 不联网。
 - 所有外部调用可中断；生成中 UI 可继续浏览其他会话。
 - 错误（key 无效/超时/限流）在气泡内联显示并可重试。
 - 代码质量：`tsc --noEmit` 通过、`electron-vite build` 通过。

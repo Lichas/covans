@@ -32,6 +32,7 @@ import * as db from './db'
 import { mockComplete, mockStream } from './mockProvider'
 import { appendToolGuidance, createAgentToolset } from './tools/toolset'
 import { prepareBotExtensions } from './extensions/runtime'
+import { isCliBot, runCliAgent } from './cli'
 import { describeWorkspaceArtifact } from './workspace'
 import {
   classifyObservationError,
@@ -445,6 +446,10 @@ export async function runAgent(
     observe('agent.dispatch.started', { chat_id: chatId, bot_id: bot.id, message_id: opts.messageId ?? '', ...(opts.traceId ? { trace_id: opts.traceId } : {}), ...(opts.taskId ? { scheduled_task_id: opts.taskId } : {}), max_tokens: bot.max_tokens, reasoning: bot.reasoning_effort })
     if (isMockBot(bot)) {
       await runMockAgent(bot, historyMessages, callbacks, opts, ctrl.signal)
+      return
+    }
+    if (isCliBot(bot)) {
+      await runCliAgent(chatId, bot, historyMessages, callbacks, opts, ctrl.signal)
       return
     }
     await runPiAgent(chatId, bot, historyMessages, callbacks, opts, ctrl.signal)

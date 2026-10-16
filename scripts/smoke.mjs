@@ -48,6 +48,7 @@ await build({
     diagnostics: path.join(root, 'main/diagnostics.ts'),
     observability: path.join(root, 'main/observability.ts'),
     decisionStrategy: path.join(root, 'main/decisionStrategy.ts'),
+    cli: path.join(root, 'main/cli/index.ts'),
   },
   outdir: bundleDir,
   bundle: true,
@@ -90,6 +91,7 @@ const observability = await import(pathToFileURL(path.join(bundleDir, 'observabi
 const decisionStrategy = await import(
   pathToFileURL(path.join(bundleDir, 'decisionStrategy.js')).href,
 )
+const cli = await import(pathToFileURL(path.join(bundleDir, 'cli.js')).href)
 
 // 2. 初始化（临时目录，WAL）
 const legacyDatabaseFile = 'legacy.db'
@@ -374,6 +376,163 @@ console.log('\n[1d] Bash 工作区沙箱')
     'Bash 输出按流限制为40KB并标记截断',
   )
   db.deleteBot(bot.id)
+}
+
+console.log('\n[1e] 本地 CLI 运行后端')
+{
+  const fakeCli = path.join(root, 'scripts/fixtures/fake-cli.mjs')
+  const cliLog = path.join(tmp, 'cli-calls.jsonl')
+  process.env.COVAN_FAKE_CLI_LOG = cliLog
+  const calls = () =>
+    fs.existsSync(cliLog)
+      ? fs
+          .readFileSync(cliLog, 'utf8')
+          .trim()
+          .split('\n')
+          .filter(Boolean)
+          .map((line) => JSON.parse(line))
+      : []
+  const TINY_PNG =
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg=='
+  const userTurn = (text, withImage = false) => ({
+    role: 'user',
+    content: [
+      { type: 'text', text },
+      ...(withImage
+        ? [{ type: 'image', data: TINY_PNG, mimeType: 'image/png' }]
+        : []),
+    ],
+    timestamp: Date.now(),
+  })
+  const runTurn = async (bot, chat, history, systemPrompt) => {
+    let text = ''
+    const artifacts = []
+    const errors = []
+    await cli.runCliAgent(
+      chat.id,
+      db.getBot(bot.id),
+      history,
+      {
+        onDelta: (delta) => {
+          text += delta
+        },
+        onDone: () => {},
+        onError: (message) => errors.push(message),
+        onArtifact: (artifact) => artifacts.push(artifact),
+      },
+      { systemPrompt },
+      new AbortController().signal,
+    )
+    return { text, artifacts, errors }
+  }
+
+  const probe = await cli.probeLocalCli('codex-cli', fakeCli)
+  assert(
+    probe.available && probe.version === '0.149.0' && probe.path === fakeCli,
+    '探测本地 CLI 返回可用性、版本与真实路径',
+  )
+  const missing = await cli.probeLocalCli(
+    'codex-cli',
+    path.join(tmp, 'nope', 'missing-cli'),
+  )
+  assert(
+    !missing.available && missing.error.includes('找不到'),
+    'CLI 路径不存在时返回可读错误而不是抛异常',
+  )
+
+  const cliBot = db.createBot({
+    name: 'CLI 冒烟',
+    backend: 'codex-cli',
+    cli_path: fakeCli,
+    cli_access: 'read-only',
+  })
+  const cliChat = db.createDm(cliBot.id)
+
+  // 首轮：新会话，提示词应包含人设与既有转录
+  const first = await runTurn(
+    cliBot,
+    cliChat,
+    [userTurn('第一句')],
+    '你是 CLI 冒烟 Bot',
+  )
+  const firstCall = calls().at(-1)
+  assert(
+    first.text.includes('假 CLI 回复（新会话）') && !first.errors.length,
+    '本地 CLI 正文按增量流式回传并正常结束',
+  )
+  assert(
+    firstCall.prompt.includes('你是 CLI 冒烟 Bot') &&
+      firstCall.prompt.includes('第一句') &&
+      firstCall.isResume === false,
+    '首次发言把系统提示与转录一并交给 CLI 建立会话',
+  )
+  assert(
+    firstCall.sandbox === 'read-only',
+    'Codex CLI 的只读权限映射为 --sandbox read-only',
+  )
+  assert(
+    first.artifacts.some((artifact) => artifact.relPath === 'cli-note.txt'),
+    'CLI 报告的文件改动转换为工作区交付产物',
+  )
+
+  // 会话续接：只发送新的用户消息
+  const second = await runTurn(cliBot, cliChat, [userTurn('第二句')], '不会再用到')
+  const secondCall = calls().at(-1)
+  assert(
+    secondCall.isResume === true && secondCall.prompt === '第二句',
+    '同一会话后续轮次续接 CLI 会话且只发送最新用户消息',
+  )
+  assert(
+    second.text.includes('续接'),
+    '续接轮次的正文同样写回聊天',
+  )
+
+  // 图片：Codex 走 -i 附图参数
+  await runTurn(cliBot, cliChat, [userTurn('看图', true)], '')
+  assert(calls().at(-1).imageCount === 1, 'Codex CLI 通过 -i 传递用户图片')
+
+  // 失败路径：CLI 报错时进入错误回调而不是产生空回复
+  const failed = await runTurn(cliBot, cliChat, [userTurn('FAIL_ME')], '')
+  assert(
+    failed.errors.length === 1 && failed.errors[0].includes('假 CLI 主动失败'),
+    'CLI 运行失败时把真实错误交给聊天气泡',
+  )
+
+  // 清空聊天记录后必须重建 CLI 会话
+  db.clearChatMessages(cliChat.id)
+  assert(
+    db.getCliSession(cliBot.id, cliChat.id, cli.cliFingerprint(db.getBot(cliBot.id))) === '',
+    '清空聊天记录后丢弃 CLI 会话映射',
+  )
+  await runTurn(cliBot, cliChat, [userTurn('清空之后')], '')
+  assert(calls().at(-1).isResume === false, '清空后重新建立 CLI 会话')
+
+  // Claude 方言：改用 -p/stream-json，且只读映射为 plan 权限模式
+  process.env.COVAN_FAKE_CLI_DIALECT = 'claude'
+  const claudeBot = db.createBot({
+    name: 'Claude CLI 冒烟',
+    backend: 'claude-cli',
+    cli_path: fakeCli,
+    cli_access: 'read-only',
+  })
+  const claudeChat = db.createDm(claudeBot.id)
+  const claudeFirst = await runTurn(claudeBot, claudeChat, [userTurn('你好')], '人设')
+  const claudeCall = calls().at(-1)
+  assert(
+    claudeFirst.text.includes('假 CLI 回复（新会话）') &&
+      claudeCall.permissionMode === 'plan',
+    'Claude CLI 适配器解析 stream-json 并把只读映射为 plan 权限模式',
+  )
+  const claudeSecond = await runTurn(claudeBot, claudeChat, [userTurn('再来')], '')
+  assert(
+    calls().at(-1).isResume === true && claudeSecond.text.includes('续接'),
+    'Claude CLI 通过 --resume 续接会话',
+  )
+  delete process.env.COVAN_FAKE_CLI_DIALECT
+  delete process.env.COVAN_FAKE_CLI_LOG
+
+  db.deleteBot(cliBot.id)
+  db.deleteBot(claudeBot.id)
 }
 
 console.log('\n[2] 注入 mock provider + bot A/B/C')

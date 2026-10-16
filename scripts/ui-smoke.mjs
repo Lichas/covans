@@ -612,6 +612,41 @@ try {
   assert.ok(quoteSent.content.startsWith('> 设计搭档\n> '))
   assert.ok(quoteSent.content.endsWith('\n\n针对引用内容补充一句'))
   await expect(page.getByRole('button', { name: '停止生成', exact: true })).toHaveCount(0, { timeout: 20000 })
+
+  // 新建 Bot 支持本地 CLI 运行方式（用确定性假 CLI，不消耗任何真实订阅）
+  await page.getByRole('button', { name: '新建', exact: true }).click()
+  await page.locator('button', { hasText: '新建 Bot' }).last().click()
+  const cliDialog = page.getByRole('dialog', { name: '新建 Bot' })
+  await expect(cliDialog).toBeVisible()
+  await cliDialog.getByLabel('运行方式').selectOption('codex-cli')
+  await cliDialog
+    .getByLabel('CLI 可执行文件（留空自动查找）')
+    .fill(path.join(root, 'scripts', 'fixtures', 'fake-cli.mjs'))
+  await expect(cliDialog.getByRole('status')).toContainText('已安装', { timeout: 20000 })
+  await expect(cliDialog.getByRole('status')).toContainText('0.149.0')
+  await expect(cliDialog.getByRole('status')).toContainText('fake-cli.mjs')
+  await cliDialog.getByLabel('文件权限').selectOption('workspace-write')
+  await cliDialog.getByPlaceholder('给你的 Bot 起个名字').fill('CLI 伙伴')
+  await page.screenshot({ path: path.join(artifacts, 'new-bot-cli.png') })
+  await cliDialog.getByRole('button', { name: '创建并开始聊天' }).click()
+  await expect(cliDialog).toHaveCount(0)
+  const cliBot = await page.evaluate(async () => {
+    const bots = await window.covan.listBots()
+    const bot = bots.find((item) => item.name === 'CLI 伙伴')
+    return bot
+      ? { backend: bot.backend, cli_path: bot.cli_path, cli_access: bot.cli_access }
+      : null
+  })
+  assert.equal(cliBot?.backend, 'codex-cli')
+  assert.equal(cliBot?.cli_access, 'workspace-write')
+  assert.ok(cliBot?.cli_path.endsWith('fake-cli.mjs'))
+  await page.evaluate(async () => {
+    const bots = await window.covan.listBots()
+    const bot = bots.find((item) => item.name === 'CLI 伙伴')
+    if (bot) await window.covan.deleteBot(bot.id)
+  })
+  console.log('✓ New Bot dialog detects a local CLI and persists backend with access mode')
+
   assert.deepEqual(errors, [])
   console.log('✓ Compact window layout and private-chat avatar activity ring, no renderer exceptions')
   console.log('Electron UX regression passed. Screenshots: ' + artifacts)

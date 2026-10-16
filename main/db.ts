@@ -125,6 +125,15 @@ CREATE TABLE IF NOT EXISTS chat_topics (
   created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_chat_topics_chat ON chat_topics(chat_id, created_at);
+CREATE TABLE IF NOT EXISTS bot_cli_sessions (
+  bot_id TEXT NOT NULL REFERENCES bots(id) ON DELETE CASCADE,
+  chat_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+  backend TEXT NOT NULL,
+  fingerprint TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (bot_id, chat_id)
+);
 CREATE TABLE IF NOT EXISTS memories (
   id TEXT PRIMARY KEY,
   bot_id TEXT NOT NULL REFERENCES bots(id),
@@ -1179,6 +1188,7 @@ export function clearChatMessages(chatId: string): void {
   const d = getDb()
   d.transaction(() => {
     d.prepare('DELETE FROM agent_threads WHERE parent_chat_id=?').run(chatId)
+    d.prepare('DELETE FROM bot_cli_sessions WHERE chat_id=?').run(chatId)
     d.prepare('DELETE FROM messages WHERE chat_id=?').run(chatId)
     d.prepare(
       "UPDATE chats SET last_message_at=0, unread=0, context_summary='' WHERE id=?",
@@ -1190,6 +1200,7 @@ export function deleteChat(id: string): void {
   const d = getDb()
   const tx = d.transaction(() => {
     d.prepare('DELETE FROM messages WHERE chat_id = ?').run(id)
+    d.prepare('DELETE FROM bot_cli_sessions WHERE chat_id = ?').run(id)
     d.prepare('DELETE FROM chat_members WHERE chat_id = ?').run(id)
     d.prepare('DELETE FROM chats WHERE id = ?').run(id)
   })
@@ -1210,6 +1221,53 @@ export function touchChat(
       'UPDATE chats SET last_message_at = ?, unread = unread + ? WHERE id = ?',
     )
     .run(at, bumpUnread ? 1 : 0, chatId)
+}
+
+// ---------- 本地 CLI 会话 ----------
+
+/**
+ * 读取该 Bot 在该会话中已建立的 CLI 会话 ID。
+ * fingerprint 覆盖后端、可执行文件、权限与工作区；任一变化都视为需要重新建会话。
+ */
+export function getCliSession(
+  botId: string,
+  chatId: string,
+  fingerprint: string,
+): string {
+  const row = getDb()
+    .prepare(
+      'SELECT session_id, fingerprint FROM bot_cli_sessions WHERE bot_id=? AND chat_id=?',
+    )
+    .get(botId, chatId) as
+    | { session_id: string; fingerprint: string }
+    | undefined
+  if (!row || row.fingerprint !== fingerprint) return ''
+  return row.session_id
+}
+
+export function saveCliSession(
+  botId: string,
+  chatId: string,
+  backend: string,
+  fingerprint: string,
+  sessionId: string,
+): void {
+  getDb()
+    .prepare(
+      `INSERT INTO bot_cli_sessions (bot_id,chat_id,backend,fingerprint,session_id,updated_at)
+       VALUES (?,?,?,?,?,?)
+       ON CONFLICT(bot_id,chat_id) DO UPDATE SET
+         backend=excluded.backend,
+         fingerprint=excluded.fingerprint,
+         session_id=excluded.session_id,
+         updated_at=excluded.updated_at`,
+    )
+    .run(botId, chatId, backend, fingerprint, sessionId, Date.now())
+}
+
+/** 清空聊天记录或开始新话题后，CLI 侧上下文不再对应当前聊天，必须重新建会话。 */
+export function clearCliSessionsForChat(chatId: string): void {
+  getDb().prepare('DELETE FROM bot_cli_sessions WHERE chat_id=?').run(chatId)
 }
 
 // ---------- scheduled tasks ----------
@@ -1589,6 +1647,8 @@ export function createChatTopic(
     d.prepare(
       "UPDATE chats SET context_summary='', last_message_at=? WHERE id=?",
     ).run(createdAt, chatId)
+    // 新话题边界之外的历史不再进入模型上下文，CLI 会话必须随之重建。
+    d.prepare('DELETE FROM bot_cli_sessions WHERE chat_id=?').run(chatId)
     return {
       topic: getLatestChatTopic(chatId)!,
       marker: getMessage(markerId)!,

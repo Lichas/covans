@@ -28,6 +28,7 @@
 - **产物预览**：工作区交付文件在右侧预览 Markdown、HTML、TXT、代码、图片和 PDF；拖动边缘调整预览宽度，也可定位文件或打开工作区
 - **定时 Agent 任务**：每个 Bot 可在右侧「定时」页建立单次或 Cron 重复任务；默认继承 Bot 模型，也可为任务覆盖模型。完成结果自动发回目标会话，并可从「设置 → 定时任务」统一查看、暂停、立即执行或删除；也可以直接用自然语言让 Bot 设置自己的任务
 - **多 LLM Provider**：OpenAI / Anthropic / Google / OpenRouter / Kimi Coding Plan / 智谱 / DeepSeek / LM Studio / 任意 OpenAI 兼容端点（Ollama、vLLM、公司网关）/ 内置 Mock（离线体验）；每 Bot 可绑定不同 provider 与模型
+- **本地 CLI 运行方式**：新建 Bot 时可直接选用本机已登录的 **Codex CLI** 或 **Claude CLI**，用它自己的订阅额度与本机文件能力生成回复，无需再配 API Key；可选只读或允许在该 Bot 工作区内改文件
 - **MCP 与 Skills**：在「设置 → MCP」或「设置 → Skills」分别安装 MCP 服务和导入技能，在 Bot 右栏「扩展」独立装配；定时任务继承同一配置，也能用自然语言让 Bot 装配已安装的扩展。
 - **流式输出 / 随时停止 / 错误重试**；主题跟随系统（浅色/深色）
 - **回复诊断**：回复旁 Bug 按钮复制诊断标识，在「设置 → Debug」加载对应执行记录，选择 Bot 模型分析原因。日志默认关闭，开启后记录后续执行；分析只发送诊断元数据，不发送聊天正文、工具内容或密钥。
@@ -95,6 +96,16 @@ Configure the TypeSafe key, Jev model, and confidence threshold under **Settings
 
 生图使用 [Images API](https://developers.openai.com/api/reference/resources/images/methods/generate) 的 `POST /images/generations`，兼容 base64 或图片 URL 响应；不预置或猜测生图模型。自动模式未配置服务时使用本地 SVG，显式选择 AI 生图时配置不足会显示错误。生图最多等待 120 秒、下载限制 16MB。调用会消耗所选服务额度，API 兼容性需以该服务文档为准。
 
+## 本地 CLI（Codex / Claude）
+
+1. 先在终端里完成 CLI 自己的登录（例如 `codex login`），确认 `codex` 或 `claude` 能直接运行。
+2. 新建 Bot 时把 **运行方式** 从「模型 API」改为「本地 Codex CLI」或「本地 Claude CLI」。界面会自动检测本机可执行文件并显示版本；装在非标准位置时可填写完整路径。
+3. 选择文件权限：**只读**（可以查看文件、不能修改）或**可写**（可在该 Bot 的工作区内改文件）。保存后直接聊天即可。
+
+Covan 不保存本地 CLI 的任何凭据，完全使用 CLI 自身的登录状态与额度，并以 Bot 的工作区作为它的工作目录。首次发言会把该 Bot 的人设、记忆和既有对话交给 CLI 建立会话，之后在同一聊天中续接，只发送新消息；**清空聊天记录或开始新话题**会重新建立会话，避免 CLI 记得已经被压缩或删除的内容。CLI 写入的文件照常出现在「交付文件」卡片里。
+
+两点限制：本地 CLI Bot 若没有配置 Provider 也没有配置 Jev，群聊中只响应 @提及（判断发言需要模型，否则每条群消息都会启动一次 CLI）；Claude 适配器尚未在真机验证，使用时如遇解析问题会以可见错误提示而不是空回复。运行失败（未安装、未登录、额度用尽）都会直接显示在气泡里。
+
 ## MCP 与 Skills
 
 1. 打开 **设置 → MCP → 安装**，选择本地 stdio 命令、Streamable HTTP 或 SSE，填写名称与连接配置。参数使用 JSON 数组；环境变量和认证请求头使用 JSON 对象，编辑留空保留、`{}` 清除。保存后点测试图标，可查看服务返回的工具清单。
@@ -134,6 +145,7 @@ CHANGELOG.md  面向用户的版本变化
 - 本机数据根目录默认为 `~/.covans/`：`covan.db`、`avatars/`、`chat-images/` 与每个 Bot 的 `workspaces/<botId>/` 都在这里；首次启动自动创建。若此前使用旧默认目录且 `~/.covans/` 尚不存在，会安全复制旧数据，旧目录不会删除。无遥测；聊天内容、使用到的工作区内容、个人资料与共同记忆会发送给对应模型服务，头像提示词会发送给所选生图服务
 - ⚠️ API Key 当前以**明文**存于本地 SQLite，请勿与他人共享该目录；safeStorage 加密已列入 [ROADMAP](docs/ROADMAP.md#provider-密钥保护)
 - MCP 环境变量/认证请求头单独使用系统 `safeStorage` 加密，列表仅返回键名，系统加密不可用时拒绝保存；这不代表现有 Provider API Key 已加密。启用的 MCP 会收到模型发起的工具参数，Skill 正文及所读内容会进入所选模型上下文；本地观测日志只保存脱敏元数据。
+- 本地 CLI 运行方式不保存任何 CLI 凭据：Covan 只以你的身份启动已登录的 `codex` / `claude` 进程，认证与额度都由 CLI 自己管理。CLI 具备你自己 shell 的权限，只在你指定为「可写」时才允许改动该 Bot 的工作区；`cli:probe` 只在本机查找可执行文件并读取版本，不联网。
 - 工作区文件工具通过词法路径 + realpath 校验拒绝绝对路径、`..` 和符号链接逃逸；网页工具不携带登录态，限制超时、响应大小和内容类型，当前不拦截内网地址；应用工具不向模型返回 Provider 密钥
 - 私聊仅转发咨询问题，不自动转发主会话；接收方只开放工作区读取/列表工具，禁止修改资料和递归私聊。每轮最多 3 次咨询，每个主会话最多同时运行 3 个
 
@@ -153,6 +165,7 @@ Covan is an Electron + React desktop chat app for working with multiple AI agent
 - Includes layered memory, streaming responses, Markdown and LaTeX rendering, image attachments, and Agent-to-Agent consultation.
 - Copy a reply's diagnostic reference with its Bug button, then inspect execution events and request model-assisted analysis in Settings → Debug. Local logging is opt-in; analysis excludes chat text, tool contents, and credentials.
 - Supports OpenAI, Anthropic, Google, OpenRouter, Kimi, Zhipu, DeepSeek, LM Studio, OpenAI-compatible endpoints, and an offline mock provider.
+- A Bot can also run on a **local CLI** instead of an API provider: pick the Codex or Claude CLI, let Covan detect the binary, and choose read-only or workspace-write access. The CLI uses its own login and quota; Covan stores no CLI credentials, injects the Bot persona and memory, and resumes the CLI session per chat until you clear the history or start a new topic.
 
 ### Quick start
 

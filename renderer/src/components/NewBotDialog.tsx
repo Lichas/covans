@@ -1,5 +1,5 @@
 // components/NewBotDialog.tsx — 新建 Bot 对话框
-import type { BotGender } from '@shared/types'
+import type { BotBackend, BotGender, CliAccess } from '@shared/types'
 import {
   GenderPicker,
   PresetAvatarPicker,
@@ -15,6 +15,7 @@ import { useUiStore } from '../stores/uiStore'
 import { Dialog } from './Dialog'
 import { Field, btnGhostCls, btnPrimaryCls, inputCls } from './controls'
 import { ProviderIcon } from './icons'
+import { LocalCliFields, isCliBackend } from './LocalCliFields'
 
 export function NewBotDialog() {
   const open = useUiStore((s) => s.newBotOpen)
@@ -35,6 +36,9 @@ export function NewBotDialog() {
   const [description, setDescription] = useState('')
   const [providerId, setProviderId] = useState('')
   const [model, setModel] = useState('')
+  const [backend, setBackend] = useState<BotBackend>('api')
+  const [cliPath, setCliPath] = useState('')
+  const [cliAccess, setCliAccess] = useState<CliAccess>('read-only')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [acceptMatureContent, setAcceptMatureContent] = useState(false)
@@ -94,6 +98,9 @@ export function NewBotDialog() {
     setDescription('')
     setProviderId('')
     setModel('')
+    setBackend('api')
+    setCliPath('')
+    setCliAccess('read-only')
     setError('')
   }
 
@@ -131,6 +138,9 @@ export function NewBotDialog() {
         system_prompt: prompt,
         provider_id: providerId || null,
         model: model.trim(),
+        backend,
+        cli_path: cliPath.trim(),
+        cli_access: cliAccess,
       })
       close()
       await createDm(bot.id)
@@ -219,8 +229,20 @@ export function NewBotDialog() {
           />
         </Field>
 
+        <LocalCliFields
+          value={{ backend, cliPath, cliAccess }}
+          disabled={busy}
+          onChange={(patch) => {
+            if (patch.backend !== undefined) setBackend(patch.backend)
+            if (patch.cliPath !== undefined) setCliPath(patch.cliPath)
+            if (patch.cliAccess !== undefined) setCliAccess(patch.cliAccess)
+          }}
+        />
+
         <div className="grid grid-cols-2 gap-3">
-          <Field label="Provider">
+          <Field
+            label={isCliBackend(backend) ? 'Provider（判断用，可选）' : 'Provider'}
+          >
             <div className="flex items-center gap-2">
               {providerId ? (
                 <ProviderIcon
