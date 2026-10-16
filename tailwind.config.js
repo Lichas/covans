@@ -8,7 +8,14 @@ export default {
         bubble: '18px',
       },
       colors: {
-        ink: '#171717',
+        // Shared cool neutrals keep form controls and secondary panels aligned.
+        stone: {
+          50: '#f5f8ff', 100: '#eaf0fa', 200: '#d5e0f0',
+          300: '#b7c8e0', 400: 'rgb(var(--neutral-muted) / <alpha-value>)', 500: '#617695',
+          600: '#496080', 700: '#30496d', 800: '#1d3152',
+          900: '#122342', 950: '#0b1730',
+        },
+        ink: '#244e99',
         paper: '#f5f5f4',
         bubbleBot: '#f0f0ee',
       },

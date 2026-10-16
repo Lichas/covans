@@ -75,7 +75,7 @@ export function Dialog({
   if (!open) return null
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-[2px]"
+      className="dialog-backdrop fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-[2px]"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose()
       }}
@@ -86,7 +86,7 @@ export function Dialog({
         aria-modal="true"
         aria-labelledby={titleId}
         tabIndex={-1}
-        className={`${width} max-w-[92vw] max-h-[85vh] animate-fadeIn overflow-hidden rounded-2xl border border-stone-200 bg-white shadow-xl dark:border-stone-700 dark:bg-stone-800`}
+        className={`glass-dialog ${width} max-w-[92vw] max-h-[85vh] animate-fadeIn overflow-hidden rounded-2xl border border-stone-200 bg-white shadow-xl dark:border-stone-700 dark:bg-stone-800`}
       >
         <div className="flex items-center justify-between border-b border-stone-200 px-5 py-3.5 dark:border-stone-700">
           <h2

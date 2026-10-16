@@ -1,3 +1,4 @@
+import { ThemeSwitcher } from './ThemeSwitcher'
 // components/SettingsModal.tsx — 设置弹窗：通用 / Provider 管理 / Bot
 import { useEffect, useState } from 'react'
 import type {
@@ -6,7 +7,7 @@ import type {
   ProviderInput,
   ProviderKind,
 } from '@shared/types'
-import { useSettingsStore, type ThemeMode } from '../stores/settingsStore'
+import { useSettingsStore } from '../stores/settingsStore'
 import { useUiStore, type SettingsSection } from '../stores/uiStore'
 import { Dialog } from './Dialog'
 import { AvatarSettingsSection } from './AvatarSettings'
@@ -38,38 +39,17 @@ import {
 const PROVIDER_KINDS = PROVIDER_PRESETS
 
 function GeneralSection() {
-  const theme = useSettingsStore((s) => s.theme)
-  const setTheme = useSettingsStore((s) => s.setTheme)
   const settings = useSettingsStore((s) => s.settings)
   const setSettingValue = useSettingsStore((s) => s.setSettingValue)
   const openObservabilityLogs = useSettingsStore((s) => s.openObservabilityLogs)
   const localObservability = settings['local_observability'] === '1'
-  const options: { value: ThemeMode; label: string }[] = [
-    { value: 'system', label: '跟随系统' },
-    { value: 'light', label: '浅色' },
-    { value: 'dark', label: '深色' },
-  ]
   return (
     <div className="space-y-5 p-5">
       <div>
         <div className="mb-2 text-[13px] font-medium text-stone-700 dark:text-stone-200">
           外观主题
         </div>
-        <div className="flex gap-2">
-          {options.map((o) => (
-            <button
-              key={o.value}
-              onClick={() => void setTheme(o.value)}
-              className={`rounded-lg border px-4 py-1.5 text-[13px] transition ${
-                theme === o.value
-                  ? 'border-stone-700 bg-stone-800 text-white dark:border-stone-300 dark:bg-stone-100 dark:text-stone-900'
-                  : 'border-stone-300 text-stone-600 hover:bg-stone-100 dark:border-stone-600 dark:text-stone-300 dark:hover:bg-stone-700'
-              }`}
-            >
-              {o.label}
-            </button>
-          ))}
-        </div>
+        <ThemeSwitcher />
       </div>
       <div className="space-y-3 rounded-xl border border-stone-200 px-3.5 py-3 dark:border-stone-700">
         <div className="flex items-center justify-between gap-4">

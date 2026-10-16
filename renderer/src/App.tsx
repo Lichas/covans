@@ -86,7 +86,7 @@ export default function App() {
   }, [setNewBotOpen, setNewGroupOpen])
 
   return (
-    <div className="flex h-full w-full overflow-hidden">
+    <div className="app-shell flex h-full w-full overflow-hidden">
       <Sidebar />
       <ChatView />
       <BotSettingsPanel />

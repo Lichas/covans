@@ -554,7 +554,7 @@ function GroupSettingsPanel({ chat }: { chat: ChatSummary }) {
 
   return (
     <aside
-      className="flex h-full w-[320px] shrink-0 flex-col border-l border-stone-200 bg-stone-50/60 dark:border-stone-800 dark:bg-stone-900/40"
+      className="bot-settings-panel flex h-full w-[320px] shrink-0 flex-col border-l border-stone-200 bg-stone-50/60 dark:border-stone-800 dark:bg-stone-900/40"
       aria-label="群聊设定"
     >
       <div className="flex items-center gap-3 border-b border-stone-200 px-4 py-4 dark:border-stone-800">
@@ -653,7 +653,7 @@ export function BotSettingsPanel() {
 
   if (!bot) {
     return (
-      <aside className="flex w-[320px] shrink-0 flex-col items-center justify-center gap-2 border-l border-stone-200 bg-stone-50/60 text-stone-400 dark:border-stone-800 dark:bg-stone-900/40">
+      <aside className="bot-settings-panel flex w-[320px] shrink-0 flex-col items-center justify-center gap-2 border-l border-stone-200 bg-stone-50/60 text-stone-400 dark:border-stone-800 dark:bg-stone-900/40">
         <p className="px-8 text-center text-[13px] leading-relaxed">
           {chat.type === 'group'
             ? '点击群聊中某位成员的头像，即可查看与编辑它的设置'
@@ -675,7 +675,7 @@ export function BotSettingsPanel() {
 
   return (
     <aside
-      className="flex h-full w-[320px] shrink-0 flex-col border-l border-stone-200 bg-stone-50/60 dark:border-stone-800 dark:bg-stone-900/40"
+      className="bot-settings-panel flex h-full w-[320px] shrink-0 flex-col border-l border-stone-200 bg-stone-50/60 dark:border-stone-800 dark:bg-stone-900/40"
       aria-label="Bot 设定"
     >
       {/* 头部：头像 + 名称 */}

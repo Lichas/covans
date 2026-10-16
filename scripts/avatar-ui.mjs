@@ -138,10 +138,10 @@ try {
   await expect(
     page.getByRole('button', { name: '生活照', exact: true }),
   ).toHaveAttribute('aria-pressed', 'true')
-  await expect(page.getByLabel('人设 System Prompt')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '编辑人设', exact: true })).toHaveCount(0)
   await page.getByRole('button', { name: '设定', exact: true }).click()
   await expect(showcase).toHaveCount(0)
-  await expect(page.getByLabel('人设 System Prompt')).toBeVisible()
+  await expect(page.getByRole('button', { name: '编辑人设', exact: true })).toBeVisible()
   await page.getByRole('button', { name: '生活照', exact: true }).click()
   await expect(showcase).toBeVisible()
   await expect(showcase.locator('img.is-active')).toHaveAttribute(
@@ -179,7 +179,10 @@ try {
   const pausedPhoto = await showcase
     .locator('img.is-active')
     .getAttribute('src')
+  await expect(showcase.getByRole('button', { name: '播放生活照' })).toBeVisible()
   await page.waitForTimeout(5300)
+  await expect(showcase.getByRole('button', { name: '播放生活照' })).toBeVisible()
+
   assert.equal(
     await showcase.locator('img.is-active').getAttribute('src'),
     pausedPhoto,

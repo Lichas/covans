@@ -50,6 +50,46 @@ try {
   await expect(page.getByRole('dialog')).toHaveCount(0)
   console.log('✓ Welcome actions and dialog dismissal')
 
+  // Theme controls share one persisted setting across the dock and settings.
+  const themeDock = page.locator('.theme-dock')
+  await page.emulateMedia({ colorScheme: 'light', reducedMotion: 'reduce' })
+  await themeDock.getByRole('button', { name: '切换到浅色主题' }).click()
+  await expect(page.locator('html')).not.toHaveClass(/dark/)
+  await expect.poll(() => page.evaluate(() => window.covan.getSetting('theme'))).toBe('light')
+  await page.screenshot({ path: path.join(artifacts, 'glass-welcome-light.png') })
+  await themeDock.getByRole('button', { name: '切换到深色主题' }).click()
+  await expect.poll(() => page.evaluate(() => window.covan.getSetting('theme'))).toBe('dark')
+  await page.reload()
+  await expect(themeDock.getByRole('button', { name: '切换到深色主题' })).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.locator('html')).toHaveClass(/dark/)
+  await expect(page.locator('.welcome-content h1')).toHaveCSS('color', 'rgb(238, 244, 255)')
+  await expect(page.locator('.sidebar-brand')).toHaveCSS('color', 'rgb(238, 244, 255)')
+  // Electron can capture a compositor frame before inherited colors repaint.
+  const settleAppearance = () => page.evaluate(() => new Promise((resolve) =>
+    requestAnimationFrame(() => requestAnimationFrame(resolve)),
+  ))
+  await settleAppearance()
+  await page.screenshot({ path: path.join(artifacts, 'glass-welcome-dark.png') })
+  await page.getByRole('button', { name: '设置', exact: true }).click()
+  await expect(page.getByRole('button', { name: '深色', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  await page.getByRole('button', { name: '浅色', exact: true }).click()
+  await expect(themeDock.getByRole('button', { name: '切换到浅色主题' })).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.locator('.theme-picker .theme-option-label').first()).toHaveCSS('color', 'rgb(33, 53, 82)')
+  await settleAppearance()
+  await page.screenshot({ path: path.join(artifacts, 'glass-theme-settings.png') })
+  await page.keyboard.press('Escape')
+  await themeDock.getByRole('button', { name: '切换到跟随系统主题' }).click()
+  await expect.poll(() => page.evaluate(() => window.covan.getSetting('theme'))).toBe('system')
+  await page.emulateMedia({ colorScheme: 'dark' })
+  await expect(page.locator('html')).toHaveClass(/dark/)
+  await page.emulateMedia({ colorScheme: 'light' })
+  await expect(page.locator('html')).not.toHaveClass(/dark/)
+  await themeDock.getByRole('button', { name: '切换到浅色主题' }).focus()
+  await page.keyboard.press('Enter')
+  await expect(themeDock.getByRole('button', { name: '切换到浅色主题' })).toHaveAttribute('aria-pressed', 'true')
+  console.log('✓ Theme dock, settings sync, reload persistence, system appearance and keyboard activation')
+
+
   const fixture = await page.evaluate(async () => {
     const p = await window.covan.saveProvider({
       name: 'Local test',
@@ -510,7 +550,14 @@ try {
   console.log('✓ Group completion and recoverable configuration errors')
 
   await page.getByRole('button', { name: 'Covan 首页' }).click()
+  await expect(page.locator('.welcome-bot-card')).toHaveCount(3)
   await page.screenshot({ path: path.join(artifacts, 'welcome.png') })
+  await themeDock.getByRole('button', { name: '切换到深色主题' }).click()
+  await expect(page.locator('.welcome-content h1')).toHaveCSS('color', 'rgb(238, 244, 255)')
+  await settleAppearance()
+  await page.screenshot({ path: path.join(artifacts, 'glass-bots-dark.png') })
+  await themeDock.getByRole('button', { name: '切换到浅色主题' }).click()
+
   await page
     .locator('aside')
     .getByRole('button', { name: /设计搭档/ })
@@ -526,6 +573,16 @@ try {
     false,
   )
   await page.screenshot({ path: path.join(artifacts, 'compact.png') })
+  for (const control of [
+    page.getByRole('button', { name: '关于我', exact: true }),
+    themeDock.getByRole('button', { name: '切换到深色主题' }),
+    page.getByRole('button', { name: '发送', exact: true }),
+    page.getByRole('textbox', { name: '输入消息' }),
+  ]) await expect(control).toBeInViewport()
+  await themeDock.getByRole('button', { name: '切换到深色主题' }).click()
+  await page.screenshot({ path: path.join(artifacts, 'glass-compact-dark.png') })
+  await themeDock.getByRole('button', { name: '切换到浅色主题' }).click()
+
   await page.getByRole('button', { name: '定时', exact: true }).click()
   await page
     .getByRole('button', { name: '立即执行 每日灵感整理' })

@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-10-16
+
+- 升级整体视觉为冰蓝 / 深海蓝液态玻璃：渐变背景、磨砂侧栏、高光边框与柔和阴影统一首页、聊天和设置弹窗。
+- 侧栏底部新增浅色 / 深色 / 跟随系统快捷切换，与设置中的主题预览卡同步并记住选择。
+- 调整个人头像与快捷导航布局；输入框改为上方文本、下方附件和发送工具栏，保留草稿、引用、群聊提及和停止操作。
+
+
 本文件记录 Covan 面向用户的变化，格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
 ## [Unreleased]

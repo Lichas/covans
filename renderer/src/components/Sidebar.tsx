@@ -1,10 +1,12 @@
 // components/Sidebar.tsx — 左栏：+菜单 / 搜索 / 置顶头像 / 会话列表 / 底部导航
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ChatSummary, UserProfile } from '@shared/types'
+import { useBotsStore } from '../stores/botsStore'
 import { useChatsStore } from '../stores/chatsStore'
 import { useUiStore } from '../stores/uiStore'
 import { useMessagesStore } from '../stores/messagesStore'
 import { Avatar } from './Avatar'
+import { ThemeSwitcher } from './ThemeSwitcher'
 import { api } from '../lib/api'
 import { PinnedBots } from './PinnedBots'
 import { ChatContextMenu } from './ChatContextMenu'
@@ -86,11 +88,7 @@ function ChatListItem({ chat }: { chat: ChatSummary }) {
           void selectChat(chat.id)
           if (chat.type === 'dm' && chat.bot_id) inspectBot(null)
         }}
-        className={`flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left transition ${
-          active
-            ? 'bg-stone-200/80 dark:bg-stone-700/60'
-            : 'hover:bg-stone-200/50 dark:hover:bg-stone-800'
-        }`}
+        className={`chat-list-item ${active ? 'is-active' : ''}`}
       >
         {chat.type === 'group' ? (
           <GroupAvatar chat={chat} />
@@ -187,6 +185,8 @@ function PlusMenu({ onClose }: { onClose: () => void }) {
 
 export function Sidebar() {
   const chats = useChatsStore((s) => s.chats)
+  const activeChatId = useChatsStore((s) => s.activeChatId)
+  const botCount = useBotsStore((s) => s.bots.length)
   const selectChat = useChatsStore((s) => s.selectChat)
   const setSettingsOpen = useUiStore((s) => s.setSettingsOpen)
   const setNewGroupOpen = useUiStore((s) => s.setNewGroupOpen)
@@ -255,29 +255,26 @@ export function Sidebar() {
   }, [chats, query])
 
   return (
-    <aside className="flex h-full w-[256px] shrink-0 flex-col border-r border-stone-200 bg-stone-100/70 dark:border-stone-800 dark:bg-stone-900/60">
+    <aside className="app-sidebar" aria-label="会话导航">
       {/* 顶部：标题 + 新建 */}
       <div
-        className="relative flex items-center justify-between px-4 pb-3 pt-10"
+        className="sidebar-brand-row"
         style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
       >
         <button
           onClick={() => void selectChat(null)}
-          className="flex items-center gap-2 text-[16px] font-semibold tracking-tight text-stone-700 dark:text-stone-200"
+          className="sidebar-brand"
           aria-label="Covan 首页"
         >
-          <SparkIcon
-            width={19}
-            height={19}
-            className="text-emerald-800 dark:text-emerald-300"
-          />
-          Covan
+          <span className="brand-symbol"><SparkIcon width={23} height={23} /></span>
+          Covan<span className="brand-caption">空间</span>
         </button>
         <button
           onClick={() => setMenuOpen((v) => !v)}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
           className="rounded-lg p-1.5 text-stone-500 transition hover:bg-stone-200 hover:text-stone-700 dark:hover:bg-stone-700 dark:hover:text-stone-200"
           aria-label="新建"
+          title="新建 Bot 或群聊"
         >
           <PlusIcon />
         </button>
@@ -286,7 +283,7 @@ export function Sidebar() {
 
       {/* 搜索框 */}
       <div className="px-3 pb-2">
-        <div className="flex items-center gap-2 rounded-lg bg-stone-200/70 px-2.5 py-1.5 dark:bg-stone-800">
+        <div className="sidebar-search">
           <SearchIcon
             width={15}
             height={15}
@@ -328,6 +325,11 @@ export function Sidebar() {
         </div>
       </div>
 
+      <nav className="sidebar-actions" aria-label="快捷入口">
+        <button aria-current={activeChatId ? undefined : 'page'} onClick={() => void selectChat(null)}><SparkIcon width={18} height={18} />我的 Bot<span>{botCount}</span></button>
+        <button onClick={() => setNewGroupOpen(true)}><UsersIcon width={18} height={18} />新建群聊<PlusIcon width={14} height={14} /></button>
+      </nav>
+
       {/* 置顶区：横排圆形头像 */}
       <PinnedBots />
 
@@ -336,7 +338,7 @@ export function Sidebar() {
         <span>{query ? '搜索结果' : '最近对话'}</span>
         <span>{filteredChats.length}</span>
       </div>
-      <div className="scroll-thin flex-1 space-y-0.5 overflow-y-auto px-2 py-1">
+      <div className="sidebar-chats scroll-thin flex-1 space-y-1 overflow-y-auto px-3 py-1">
         {filteredChats.map((c) => (
           <ChatListItem key={c.id} chat={c} />
         ))}
@@ -349,44 +351,16 @@ export function Sidebar() {
         )}
       </div>
 
-      {/* 底部导航占位 */}
-      <button className="profile-entry" onClick={() => setProfileOpen(true)}>
-        <span>
-          <Avatar
-            name={profile.name || '我'}
-            avatar={profile.avatar}
-            size={30}
-          />
-        </span>
-        <div>
-          <strong>关于我</strong>
-          <small>我的资料与共同记忆</small>
+      <div className="sidebar-footer">
+        <div className="profile-row">
+          <button className="profile-entry" aria-label="关于我" title="我的资料与共同记忆" onClick={() => setProfileOpen(true)}>
+            <span className="profile-avatar"><Avatar name={profile.name || '我'} avatar={profile.avatar} size={42} /></span>
+            <span className="profile-copy"><strong>{profile.name || '关于我'}</strong><small>很高兴见到你</small></span>
+          </button>
+          <button className="icon-button profile-settings" onClick={() => setSettingsOpen(true)} aria-label="设置" title="设置 · ⌘ ,"><GearIcon width={19} height={19} /></button>
         </div>
-        <span className="ml-auto">↗</span>
-      </button>
-      <div className="flex items-center justify-around border-t border-stone-200 px-2 py-2 dark:border-stone-800">
-        <button
-          onClick={() => selectChat(null)}
-          className="flex flex-col items-center gap-0.5 rounded-lg px-3 py-1 text-stone-500 transition hover:text-stone-700 dark:text-stone-400 dark:hover:text-stone-200"
-        >
-          <SparkIcon width={19} height={19} />
-          <span className="text-[10.5px]">我的 Bot</span>
-        </button>
-        <button
-          onClick={() => setNewGroupOpen(true)}
-          className="flex flex-col items-center gap-0.5 rounded-lg px-3 py-1 text-stone-500 transition hover:text-stone-700 dark:text-stone-400 dark:hover:text-stone-200"
-        >
-          <UsersIcon width={19} height={19} />
-          <span className="text-[10.5px]">新建群聊</span>
-        </button>
-        <button
-          onClick={() => setSettingsOpen(true)}
-          className="flex flex-col items-center gap-0.5 rounded-lg px-3 py-1 text-stone-500 transition hover:text-stone-700 dark:text-stone-400 dark:hover:text-stone-200"
-          aria-label="设置"
-        >
-          <GearIcon width={19} height={19} />
-          <span className="text-[10.5px]">设置</span>
-        </button>
+        <ThemeSwitcher compact />
+        <div className="sidebar-footnote"><span />你的 Bot，你的空间。</div>
       </div>
     </aside>
   )

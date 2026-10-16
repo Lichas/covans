@@ -15,11 +15,15 @@ export function WelcomeView() {
         className="welcome-drag"
         style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
       />
+      <div className="welcome-ribbon" aria-hidden="true">
+        <svg viewBox="0 0 900 900" fill="none"><path d="M770 190C370-100 70 340 340 485S940 490 635 765C420 940 100 710 205 530" stroke="currentColor" strokeWidth="110" strokeLinecap="round" /></svg>
+      </div>
+      <div className="welcome-topline"><span>Covan <span>/</span> 我的空间</span><span>让灵感自在发生</span></div>
       <div className="welcome-content">
         <span className="welcome-mark">
           <SparkIcon width={32} height={32} />
         </span>
-        <span className="eyebrow">YOUR OWN LITTLE UNIVERSE</span>
+        <span className="eyebrow">A LITTLE SPACE, ENDLESS POSSIBILITIES</span>
         <h1>好想法，从对话开始。</h1>
         <p>
           工作里的搭档，生活里的灵感。
@@ -51,7 +55,7 @@ export function WelcomeView() {
                   className="welcome-bot-card"
                   onClick={() => void createDm(bot.id)}
                 >
-                  <Avatar name={bot.name} avatar={bot.avatar} size={36} />
+                  <Avatar name={bot.name} avatar={bot.avatar} size={46} />
                   <div>
                     <strong>{bot.name}</strong>
                     <span>{bot.description || '随时准备和你聊聊'}</span>

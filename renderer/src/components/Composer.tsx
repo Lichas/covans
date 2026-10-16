@@ -343,28 +343,6 @@ export function Composer({ chat }: Props) {
             </button>
           </div>
         )}
-        <div className="composer-controls">
-        <button
-          type="button"
-          className="rounded-lg p-1.5 text-stone-400 hover:bg-stone-100 disabled:opacity-30 dark:hover:bg-stone-700"
-          aria-label="添加图片"
-          title="添加图片 · 支持多选、粘贴与拖放（最多8张）"
-          disabled={importing || attachments.length >= 8}
-          onClick={() => fileRef.current?.click()}
-        >
-          <PlusIcon width={20} height={20} />
-        </button>
-        {/* @ 提及按钮（群聊） */}
-        {isGroup && (
-          <button
-            onClick={insertAt}
-            className="rounded-lg p-1.5 text-stone-400 transition hover:bg-stone-100 hover:text-stone-600 dark:hover:bg-stone-700 dark:hover:text-stone-300"
-            title="提及成员"
-            aria-label="提及成员"
-          >
-            <AtIcon width={18} height={18} />
-          </button>
-        )}
         <textarea
           ref={taRef}
           id="message-composer"
@@ -388,6 +366,28 @@ export function Composer({ chat }: Props) {
           }
           className="selectable max-h-40 flex-1 resize-none bg-transparent py-1.5 text-[14px] leading-relaxed text-stone-800 outline-none placeholder:text-stone-400 dark:text-stone-100"
         />
+        <div className="composer-controls">
+        <button
+          type="button"
+          className="rounded-lg p-1.5 text-stone-400 hover:bg-stone-100 disabled:opacity-30 dark:hover:bg-stone-700"
+          aria-label="添加图片"
+          title="添加图片 · 支持多选、粘贴与拖放（最多8张）"
+          disabled={importing || attachments.length >= 8}
+          onClick={() => fileRef.current?.click()}
+        >
+          <PlusIcon width={20} height={20} />
+        </button>
+        {/* @ 提及按钮（群聊） */}
+        {isGroup && (
+          <button
+            onClick={insertAt}
+            className="rounded-lg p-1.5 text-stone-400 transition hover:bg-stone-100 hover:text-stone-600 dark:hover:bg-stone-700 dark:hover:text-stone-300"
+            title="提及成员"
+            aria-label="提及成员"
+          >
+            <AtIcon width={18} height={18} />
+          </button>
+        )}
         {generating && (
           <button
             onClick={() => void stop(chat.id)}
