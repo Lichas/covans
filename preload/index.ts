@@ -11,6 +11,17 @@ import type {
 } from '../shared/types'
 
 const api: CovanApi = {
+  listExtensions: () => ipcRenderer.invoke(CH.listExtensions),
+  saveMcpServer: (input) => ipcRenderer.invoke(CH.saveMcpServer, input),
+  deleteMcpServer: (id) => ipcRenderer.invoke(CH.deleteMcpServer, id),
+  testMcpServer: (id) => ipcRenderer.invoke(CH.testMcpServer, id),
+  pickSkillDirectory: () => ipcRenderer.invoke(CH.pickSkillDirectory),
+  installSkills: (source, subdirectory) => ipcRenderer.invoke(CH.installSkills, source, subdirectory),
+  readInstalledSkill: (id) => ipcRenderer.invoke(CH.readInstalledSkill, id),
+  setSkillEnabled: (id, enabled) => ipcRenderer.invoke(CH.setSkillEnabled, id, enabled),
+  deleteSkill: (id) => ipcRenderer.invoke(CH.deleteSkill, id),
+  getBotExtensions: (botId) => ipcRenderer.invoke(CH.getBotExtensions, botId),
+  setBotExtensions: (botId, config) => ipcRenderer.invoke(CH.setBotExtensions, botId, config),
   importChatImage: (name, bytes) =>
     ipcRenderer.invoke(CH.importChatImage, name, bytes),
   getUserProfile: () => ipcRenderer.invoke(CH.getUserProfile),
@@ -44,6 +55,9 @@ const api: CovanApi = {
   listProviderModels: (id: string) =>
     ipcRenderer.invoke(CH.listProviderModels, id),
   testProvider: (id: string) => ipcRenderer.invoke(CH.testProvider, id),
+  getJevConfig: () => ipcRenderer.invoke(CH.getJevConfig),
+  saveJevConfig: (input) => ipcRenderer.invoke(CH.saveJevConfig, input),
+  testJev: () => ipcRenderer.invoke(CH.testJev),
 
   // bots
   listPresetAvatars: () => ipcRenderer.invoke(CH.listPresetAvatars),
@@ -86,6 +100,10 @@ const api: CovanApi = {
   // messages
   listMessages: (chatId: string, before?: number, limit?: number) =>
     ipcRenderer.invoke(CH.listMessages, chatId, before, limit),
+  getChatTopicState: (chatId: string) =>
+    ipcRenderer.invoke(CH.getChatTopicState, chatId),
+  startChatTopic: (chatId: string) =>
+    ipcRenderer.invoke(CH.startChatTopic, chatId),
   sendUserMessage: (chatId, content, mentions, attachments) =>
     ipcRenderer.invoke(
       CH.sendUserMessage,

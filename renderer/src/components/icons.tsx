@@ -1,7 +1,11 @@
 // components/icons.tsx — 内联 SVG 图标（heroicons 风格手写简版）
 import type { CSSProperties, HTMLAttributes, SVGProps } from 'react'
 import type { ProviderKind } from '@shared/types'
-export { Quote as QuoteIcon, Bug as BugIcon } from 'lucide-react'
+export {
+  Quote as QuoteIcon,
+  Bug as BugIcon,
+  MessageSquarePlus as NewTopicIcon,
+} from 'lucide-react'
 import anthropicIcon from '../assets/provider-icons/anthropic.svg'
 import deepseekIcon from '../assets/provider-icons/deepseek.svg'
 import googleIcon from '../assets/provider-icons/google.svg'

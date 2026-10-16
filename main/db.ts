@@ -17,6 +17,8 @@ import type {
   Chat,
   ChatMember,
   ChatSummary,
+  ChatTopic,
+  ChatTopicState,
   ChatType,
   Memory,
   MemoryKind,
@@ -44,6 +46,9 @@ let db: Db | null = null
 
 const DEFAULT_MAX_TOKENS = 8192
 const DEFAULT_REASONING_EFFORT: Bot['reasoning_effort'] = 'medium'
+const RESPONSE_DECISION_AUTO_MIGRATION = 'response_decision_auto_migrated_v1'
+const DATABASE_FILE = 'covan.db'
+const LEGACY_DATABASE_FILE = 'legacy.db'
 
 const MIGRATION = `
 CREATE TABLE IF NOT EXISTS providers (
@@ -68,6 +73,7 @@ CREATE TABLE IF NOT EXISTS bots (
   temperature REAL NOT NULL DEFAULT 0.7,
   max_tokens INTEGER NOT NULL DEFAULT 8192,
   reasoning_effort TEXT NOT NULL DEFAULT 'medium',
+  response_decision_strategy TEXT NOT NULL DEFAULT 'auto',
   workspace_dir TEXT NOT NULL DEFAULT '',
   notify INTEGER NOT NULL DEFAULT 1,
   is_coordinator INTEGER NOT NULL DEFAULT 0,
@@ -106,9 +112,19 @@ CREATE TABLE IF NOT EXISTS messages (
   mentions TEXT NOT NULL DEFAULT '[]',
   status TEXT NOT NULL DEFAULT 'done',
   error TEXT NOT NULL DEFAULT '',
+  system_kind TEXT NOT NULL DEFAULT '',
   created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_messages_chat ON messages(chat_id, created_at);
+CREATE TABLE IF NOT EXISTS chat_topics (
+  id TEXT PRIMARY KEY,
+  chat_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+  boundary_message_id TEXT NOT NULL UNIQUE REFERENCES messages(id) ON DELETE CASCADE,
+  summary TEXT NOT NULL,
+  previous_message_count INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_chat_topics_chat ON chat_topics(chat_id, created_at);
 CREATE TABLE IF NOT EXISTS memories (
   id TEXT PRIMARY KEY,
   bot_id TEXT NOT NULL REFERENCES bots(id),
@@ -169,12 +185,50 @@ CREATE TABLE IF NOT EXISTS scheduled_tasks (
 );
 CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_bot ON scheduled_tasks(bot_id, next_run_at);
 CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_chat ON scheduled_tasks(chat_id);
+CREATE TABLE IF NOT EXISTS mcp_servers (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  transport TEXT NOT NULL,
+  command TEXT NOT NULL DEFAULT '',
+  args TEXT NOT NULL DEFAULT '[]',
+  cwd TEXT NOT NULL DEFAULT '',
+  url TEXT NOT NULL DEFAULT '',
+  enabled INTEGER NOT NULL DEFAULT 1,
+  secrets TEXT NOT NULL DEFAULT '',
+  env_keys TEXT NOT NULL DEFAULT '[]',
+  header_keys TEXT NOT NULL DEFAULT '[]',
+  tools TEXT NOT NULL DEFAULT '[]',
+  last_checked_at INTEGER,
+  last_error TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS installed_skills (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE,
+  description TEXT NOT NULL,
+  compatibility TEXT NOT NULL DEFAULT '',
+  source TEXT NOT NULL,
+  directory TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  file_count INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS bot_mcp_servers (
+  bot_id TEXT NOT NULL REFERENCES bots(id) ON DELETE CASCADE,
+  server_id TEXT NOT NULL REFERENCES mcp_servers(id) ON DELETE CASCADE,
+  PRIMARY KEY (bot_id, server_id)
+);
+CREATE TABLE IF NOT EXISTS bot_skills (
+  bot_id TEXT NOT NULL REFERENCES bots(id) ON DELETE CASCADE,
+  skill_id TEXT NOT NULL REFERENCES installed_skills(id) ON DELETE CASCADE,
+  PRIMARY KEY (bot_id, skill_id)
+);
 `
 
 /** 打开（必要时创建）数据库并执行 migration。dir 为 userData 目录。 */
 export function initDb(dir: string): Db {
   fs.mkdirSync(dir, { recursive: true })
-  const file = path.join(dir, 'legacy.db')
+  migrateDatabaseFilename(dir)
+  const file = path.join(dir, DATABASE_FILE)
   const d = new Database(file)
   d.pragma('journal_mode = WAL')
   d.pragma('foreign_keys = ON')
@@ -187,6 +241,24 @@ export function initDb(dir: string): Db {
     // 旧版本的 Kimi Coding Plan 固定使用 high，迁移时保留原有行为。
     d.exec(
       "UPDATE bots SET reasoning_effort='high' WHERE provider_id IN (SELECT id FROM providers WHERE kind='kimi')",
+    )
+  }
+  if (!botColumns.some((column) => column.name === 'response_decision_strategy'))
+    d.exec(
+      "ALTER TABLE bots ADD COLUMN response_decision_strategy TEXT NOT NULL DEFAULT 'auto'",
+    )
+  if (
+    !d
+      .prepare('SELECT value FROM settings WHERE key=?')
+      .get(RESPONSE_DECISION_AUTO_MIGRATION)
+  ) {
+    // 该字段此前默认 llm；一次性转为 auto，之后用户显式选择 llm 会保留。
+    d.exec(
+      "UPDATE bots SET response_decision_strategy='auto' WHERE response_decision_strategy='llm'",
+    )
+    d.prepare('INSERT OR REPLACE INTO settings (key,value) VALUES (?,?)').run(
+      RESPONSE_DECISION_AUTO_MIGRATION,
+      '1',
     )
   }
   if (!botColumns.some((column) => column.name === 'gender')) {
@@ -214,6 +286,8 @@ export function initDb(dir: string): Db {
   const messageColumns = d.pragma('table_info(messages)') as { name: string }[]
   if (!messageColumns.some((column) => column.name === 'artifacts'))
     d.exec("ALTER TABLE messages ADD COLUMN artifacts TEXT NOT NULL DEFAULT '[]'")
+  if (!messageColumns.some((column) => column.name === 'system_kind'))
+    d.exec("ALTER TABLE messages ADD COLUMN system_kind TEXT NOT NULL DEFAULT ''")
   // 仅迁移明确指向 LM Studio 默认端口的旧“OpenAI 兼容”配置。
   d.exec(
     `UPDATE providers SET kind='lm-studio'
@@ -225,6 +299,44 @@ export function initDb(dir: string): Db {
   seedMissingGroupBackgrounds()
   migrateMemories()
   return d
+}
+
+/**
+ * 将旧文件名原地改为 Covan 的数据库名。迁移发生在首次打开 SQLite 前，
+ * 并连同 WAL/SHM 一起处理；目标已存在时绝不覆盖。
+ */
+function migrateDatabaseFilename(dir: string): void {
+  const destination = path.join(dir, DATABASE_FILE)
+  const source = path.join(dir, LEGACY_DATABASE_FILE)
+  if (!fs.existsSync(source) || fs.existsSync(destination)) return
+
+  const suffixes = ['', '-wal', '-shm']
+  const files = suffixes
+    .map((suffix) => ({
+      source: `${source}${suffix}`,
+      destination: `${destination}${suffix}`,
+    }))
+    .filter(({ source: candidate }) => fs.existsSync(candidate))
+
+  if (files.some(({ destination: candidate }) => fs.existsSync(candidate)))
+    throw new Error('无法迁移旧数据库：Covan 数据库文件已存在')
+
+  const moved: typeof files = []
+  try {
+    for (const entry of files) {
+      fs.renameSync(entry.source, entry.destination)
+      moved.push(entry)
+    }
+  } catch (error) {
+    for (const entry of moved.reverse()) {
+      try {
+        fs.renameSync(entry.destination, entry.source)
+      } catch {
+        // 保留原始错误，避免掩盖无法继续启动的迁移失败。
+      }
+    }
+    throw new Error('无法迁移旧数据库文件', { cause: error })
+  }
 }
 
 export function getDb(): Db {
@@ -482,6 +594,7 @@ interface BotRow {
   temperature: number
   max_tokens: number
   reasoning_effort: Bot['reasoning_effort']
+  response_decision_strategy: Bot['response_decision_strategy']
   workspace_dir: string
   notify: number
   is_coordinator: number
@@ -514,6 +627,7 @@ interface MessageRow {
   mentions: string
   status: string
   error: string
+  system_kind: string
   created_at: number
 }
 interface ScheduledTaskRow {
@@ -575,6 +689,8 @@ function toMessage(r: MessageRow): Message {
     mentions: safeJsonArray<string>(r.mentions),
     status: r.status as MessageStatus,
     error: r.error,
+    system_kind:
+      r.system_kind === 'topic_boundary' ? 'topic_boundary' : '',
     created_at: r.created_at,
   }
 }
@@ -706,11 +822,13 @@ export function createBot(input: BotInput): Bot {
   assertMaxTokens(input.max_tokens ?? DEFAULT_MAX_TOKENS)
   const reasoningEffort = input.reasoning_effort ?? DEFAULT_REASONING_EFFORT
   assertReasoningEffort(reasoningEffort)
+  const responseDecisionStrategy = input.response_decision_strategy ?? 'auto'
+  assertResponseDecisionStrategy(responseDecisionStrategy)
   getDb()
     .prepare(
       `INSERT INTO bots (id,name,avatar,gender,description,tags,system_prompt,provider_id,model,
-        temperature,max_tokens,reasoning_effort,workspace_dir,notify,is_coordinator,pinned,sort_order,created_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        temperature,max_tokens,reasoning_effort,response_decision_strategy,workspace_dir,notify,is_coordinator,pinned,sort_order,created_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     )
     .run(
       id,
@@ -725,6 +843,7 @@ export function createBot(input: BotInput): Bot {
       input.temperature ?? 0.7,
       input.max_tokens ?? DEFAULT_MAX_TOKENS,
       reasoningEffort,
+      responseDecisionStrategy,
       id, // workspace_dir 默认用 bot id
       input.notify === false ? 0 : 1,
       input.is_coordinator ? 1 : 0,
@@ -755,6 +874,8 @@ export function updateBot(
   if (patch.gender !== undefined) assertGender(patch.gender)
   if (patch.reasoning_effort !== undefined)
     assertReasoningEffort(patch.reasoning_effort)
+  if (patch.response_decision_strategy !== undefined)
+    assertResponseDecisionStrategy(patch.response_decision_strategy)
   if (patch.max_tokens !== undefined) assertMaxTokens(patch.max_tokens)
   const merged: Bot = {
     ...existing,
@@ -772,6 +893,8 @@ export function updateBot(
     temperature: patch.temperature ?? existing.temperature,
     max_tokens: patch.max_tokens ?? existing.max_tokens,
     reasoning_effort: patch.reasoning_effort ?? existing.reasoning_effort,
+    response_decision_strategy:
+      patch.response_decision_strategy ?? existing.response_decision_strategy,
     notify: patch.notify === undefined ? existing.notify : patch.notify ? 1 : 0,
     is_coordinator:
       patch.is_coordinator === undefined
@@ -784,7 +907,7 @@ export function updateBot(
   getDb()
     .prepare(
       `UPDATE bots SET name=?, avatar=?, gender=?, description=?, tags=?, system_prompt=?, provider_id=?,
-       model=?, temperature=?, max_tokens=?, reasoning_effort=?, notify=?, is_coordinator=?, pinned=? WHERE id=?`,
+       model=?, temperature=?, max_tokens=?, reasoning_effort=?, response_decision_strategy=?, notify=?, is_coordinator=?, pinned=? WHERE id=?`,
     )
     .run(
       merged.name,
@@ -798,6 +921,7 @@ export function updateBot(
       merged.temperature,
       merged.max_tokens,
       merged.reasoning_effort,
+      merged.response_decision_strategy,
       merged.notify,
       merged.is_coordinator,
       merged.pinned,
@@ -816,6 +940,13 @@ function assertReasoningEffort(
 ): asserts value is Bot['reasoning_effort'] {
   if (!['off', 'low', 'medium', 'high', 'xhigh'].includes(value))
     throw new Error('未知推理强度')
+}
+
+function assertResponseDecisionStrategy(
+  value: string,
+): asserts value is Bot['response_decision_strategy'] {
+  if (value !== 'auto' && value !== 'llm' && value !== 'jev')
+    throw new Error('未知响应决策策略')
 }
 
 function assertMaxTokens(value: number): void {
@@ -1221,6 +1352,7 @@ export interface InsertMessageInput {
   mentions?: string[]
   status?: MessageStatus
   error?: string
+  system_kind?: '' | 'topic_boundary'
 }
 
 export function insertMessage(input: InsertMessageInput): Message {
@@ -1229,8 +1361,8 @@ export function insertMessage(input: InsertMessageInput): Message {
   return getDb().transaction(() => {
     getDb()
       .prepare(
-        `INSERT INTO messages (id,chat_id,sender_type,sender_bot_id,content,attachments,artifacts,mentions,status,error,created_at)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+        `INSERT INTO messages (id,chat_id,sender_type,sender_bot_id,content,attachments,artifacts,mentions,status,error,system_kind,created_at)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
       )
       .run(
         id,
@@ -1243,6 +1375,7 @@ export function insertMessage(input: InsertMessageInput): Message {
         JSON.stringify(input.mentions ?? []),
         input.status ?? 'done',
         input.error ?? '',
+        input.system_kind ?? '',
         now,
       )
     const message = getMessage(id)!
@@ -1334,6 +1467,108 @@ export function listRecentMessages(chatId: string, limit: number): Message[] {
   return rows.map(toMessage).reverse()
 }
 
+export function getLatestChatTopic(chatId: string): ChatTopic | null {
+  return (
+    (getDb()
+      .prepare(
+        'SELECT * FROM chat_topics WHERE chat_id=? ORDER BY created_at DESC, rowid DESC LIMIT 1',
+      )
+      .get(chatId) as ChatTopic | undefined) ?? null
+  )
+}
+
+/** 只返回当前话题边界之后的消息；UI 的完整历史仍由 listMessages 提供。 */
+export function listCurrentTopicMessages(
+  chatId: string,
+  limit: number,
+): Message[] {
+  const topic = getLatestChatTopic(chatId)
+  const rows = topic
+    ? (getDb()
+        .prepare(
+          `SELECT m.* FROM messages m
+           WHERE m.chat_id=?
+             AND m.rowid > (SELECT rowid FROM messages WHERE id=?)
+           ORDER BY m.created_at DESC, m.rowid DESC LIMIT ?`,
+        )
+        .all(chatId, topic.boundary_message_id, limit) as MessageRow[])
+    : (getDb()
+        .prepare(
+          'SELECT * FROM messages WHERE chat_id=? ORDER BY created_at DESC, rowid DESC LIMIT ?',
+        )
+        .all(chatId, limit) as MessageRow[])
+  return rows.map(toMessage).reverse()
+}
+
+export function getChatTopicState(chatId: string): ChatTopicState {
+  if (!getChat(chatId)) throw new Error('会话不存在')
+  const latestTopic = getLatestChatTopic(chatId)
+  const boundaryRowId = latestTopic
+    ? ((getDb()
+        .prepare('SELECT rowid AS value FROM messages WHERE id=?')
+        .get(latestTopic.boundary_message_id) as { value: number } | undefined)
+        ?.value ?? 0)
+    : 0
+  const state = getDb()
+    .prepare(
+      `SELECT COUNT(*) AS count, MAX(created_at) AS last_at
+       FROM messages
+       WHERE chat_id=? AND rowid>?
+         AND sender_type IN ('user','bot') AND status!='streaming'`,
+    )
+    .get(chatId, boundaryRowId) as { count: number; last_at: number | null }
+  const inactive =
+    state.count >= 12 &&
+    state.last_at !== null &&
+    Date.now() - state.last_at >= 24 * 60 * 60 * 1000
+  return {
+    latest_topic: latestTopic,
+    current_message_count: state.count,
+    last_message_at: state.last_at,
+    suggestion_reason:
+      state.count >= 40 ? 'long_context' : inactive ? 'inactive' : null,
+  }
+}
+
+export function createChatTopic(
+  chatId: string,
+  summary: string,
+  previousMessageCount: number,
+): { topic: ChatTopic; marker: Message } {
+  if (!getChat(chatId)) throw new Error('会话不存在')
+  const d = getDb()
+  return d.transaction(() => {
+    const markerId = newId()
+    const topicId = newId()
+    const createdAt = Date.now()
+    const markerText = `新话题 · 已压缩此前 ${previousMessageCount} 条消息`
+    d.prepare(
+      `INSERT INTO messages
+       (id,chat_id,sender_type,sender_bot_id,content,attachments,artifacts,mentions,status,error,system_kind,created_at)
+       VALUES (?,?,'system',NULL,?,'[]','[]','[]','done','','topic_boundary',?)`,
+    ).run(markerId, chatId, markerText, createdAt)
+    d.prepare(
+      `INSERT INTO chat_topics
+       (id,chat_id,boundary_message_id,summary,previous_message_count,created_at)
+       VALUES (?,?,?,?,?,?)`,
+    ).run(
+      topicId,
+      chatId,
+      markerId,
+      summary.slice(0, 6000),
+      previousMessageCount,
+      createdAt,
+    )
+    d.prepare(
+      "UPDATE chats SET context_summary='', last_message_at=? WHERE id=?",
+    ).run(createdAt, chatId)
+    return {
+      topic: getLatestChatTopic(chatId)!,
+      marker: getMessage(markerId)!,
+    }
+  })()
+}
+
 /** 把 chat 里仍处在 streaming 状态的消息标记为 stopped（stopChat 用） */
 export function stopStreamingMessages(chatId: string): void {
   getDb()
@@ -1341,6 +1576,16 @@ export function stopStreamingMessages(chatId: string): void {
       "UPDATE messages SET status='stopped' WHERE chat_id = ? AND status = 'streaming'",
     )
     .run(chatId)
+}
+
+export function hasStreamingMessages(chatId: string): boolean {
+  return Boolean(
+    getDb()
+      .prepare(
+        "SELECT 1 FROM messages WHERE chat_id=? AND status='streaming' LIMIT 1",
+      )
+      .get(chatId),
+  )
 }
 
 // ---------- memories ----------

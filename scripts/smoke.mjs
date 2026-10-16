@@ -7,6 +7,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { build } from 'esbuild'
+import Database from 'better-sqlite3'
 import { runMemoryRegression } from './memory-regression.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -46,6 +47,7 @@ await build({
     scheduledTasks: path.join(root, 'main/scheduledTasks.ts'),
     diagnostics: path.join(root, 'main/diagnostics.ts'),
     observability: path.join(root, 'main/observability.ts'),
+    decisionStrategy: path.join(root, 'main/decisionStrategy.ts'),
   },
   outdir: bundleDir,
   bundle: true,
@@ -85,17 +87,78 @@ const scheduledTasks = await import(
 )
 const diagnostics = await import(pathToFileURL(path.join(bundleDir, 'diagnostics.js')).href)
 const observability = await import(pathToFileURL(path.join(bundleDir, 'observability.js')).href)
+const decisionStrategy = await import(
+  pathToFileURL(path.join(bundleDir, 'decisionStrategy.js')).href,
+)
 
 // 2. 初始化（临时目录，WAL）
+const legacyDatabaseFile = 'legacy.db'
+fs.mkdirSync(userData, { recursive: true })
+const oldDb = new Database(path.join(userData, legacyDatabaseFile))
+oldDb.exec('CREATE TABLE migration_probe (id INTEGER PRIMARY KEY)')
+oldDb.close()
 db.initDb(userData)
 observability.initObservability(userData)
 db.setSetting('local_observability', '1')
+const jevRequests = []
+decisionStrategy.initResponseDecisionEngine({
+  codec: {
+    seal: (value) => Buffer.from(value, 'utf8').toString('base64'),
+    unseal: (value) => Buffer.from(value, 'base64').toString('utf8'),
+  },
+  fetch: async (_url, init) => {
+    const request = JSON.parse(String(init.body))
+    jevRequests.push({
+      authorization: init.headers.Authorization,
+      state: request.state,
+      question: request.questions.response_action,
+    })
+    const natural = request.state.decision_kind === 'natural_follow_up'
+    const lowConfidence = JSON.stringify(request.state).includes('Jev 低置信度冒烟')
+    const choice = natural
+      ? request.state.follow_up_number === 1
+        ? 'reply'
+        : 'skip'
+      : request.state.round === 1
+        ? 'reply'
+        : 'skip'
+    return new Response(
+      JSON.stringify({
+        model: 'jev-1.13.0',
+        answers: {
+          response_action: {
+            type: 'choice',
+            choice,
+            probabilities: { reply: choice === 'reply' ? 0.94 : 0.06, skip: choice === 'skip' ? 0.94 : 0.06 },
+            confidence: lowConfidence ? 0.3 : 0.88,
+          },
+        },
+        usage: { input_tokens: 120, output_tokens: 8 },
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    )
+  },
+})
 workspace.initWorkspace(userData)
 const events = []
 orchestrator.initOrchestrator({ emit: (ev) => events.push(ev) })
 
 console.log('\n[1] 建库 & migration')
 {
+  assert(
+    fs.existsSync(path.join(userData, 'covan.db')) &&
+      !fs.existsSync(path.join(userData, legacyDatabaseFile)),
+    '旧数据库文件已迁移为 covan.db',
+  )
+  assert(
+    Boolean(
+      db
+        .getDb()
+        .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='migration_probe'")
+        .get(),
+    ),
+    '数据库文件名迁移保留已有数据',
+  )
   const tables = db
     .getDb()
     .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
@@ -107,12 +170,23 @@ console.log('\n[1] 建库 & migration')
     'chats',
     'chat_members',
     'messages',
+    'chat_topics',
     'memories',
     'settings',
     'scheduled_tasks',
   ]) {
     assert(tables.includes(t), `表 ${t} 已创建`)
   }
+  const config = decisionStrategy.saveJevConfig({
+    api_key: 'jev-smoke-secret',
+    model: 'jev-latest',
+    confidence_threshold: 0.6,
+  })
+  assert(config.has_api_key && !('api_key' in config), 'Jev 配置只向渲染层返回密钥状态')
+  assert(
+    !db.getSetting('jev_api_key_sealed').includes('jev-smoke-secret'),
+    'Jev API Key 加密后写入本地设置',
+  )
 }
 
 console.log('\n[1b] 成熟内容偏好与伴侣模板')
@@ -334,9 +408,12 @@ const botC = db.createBot({
 const kimiBot = db.createBot({ name: 'Kimi Bot', provider_id: kimi.id })
 assert(botB.reasoning_effort === 'medium', '普通 Bot 默认使用中等推理')
 assert(botB.max_tokens === 8192, '普通 Bot 默认最大输出为 8192 Token')
+assert(botB.response_decision_strategy === 'auto', 'Bot 默认自动优先使用可用的 Jev 响应决策')
 assert(kimiBot.reasoning_effort === 'medium', 'Kimi Bot 默认也使用中等推理')
 assert(kimiBot.max_tokens === 8192, 'Kimi Bot 默认最大输出为 8192 Token')
 db.deleteBot(kimiBot.id)
+for (const bot of [botA, botB, botC])
+  db.updateBot(bot.id, { response_decision_strategy: 'llm' })
 assert(db.listBots().length === 3, '3 个 bot 已创建')
 workspace.ensureWorkspace(botA.id)
 assert(
@@ -565,7 +642,99 @@ assert(
   'dm 中 bot B 产生 done 消息',
 )
 
-console.log('\n[4a] 定时 Agent 任务：持久化、工具与消息投递')
+console.log('\n[4a] 新话题：保留历史、压缩摘要并切断原文上下文')
+{
+  const before = db.listMessages(dm.id, undefined, 100)
+  const beforeIds = new Set(before.map((message) => message.id))
+  const initialState = orchestrator.getChatTopicState(dm.id)
+  assert(initialState.current_message_count >= 2, '新话题前统计当前上下文消息')
+  const result = await orchestrator.startChatTopic(dm.id)
+  const after = db.listMessages(dm.id, undefined, 100)
+  const nextState = orchestrator.getChatTopicState(dm.id)
+  assert(
+    result.marker.sender_type === 'system' &&
+      result.marker.system_kind === 'topic_boundary' &&
+      after.some((message) => message.id === result.marker.id),
+    '创建可见的新话题分界消息',
+  )
+  assert(
+    [...beforeIds].every((id) => after.some((message) => message.id === id)),
+    '开始新话题不会删除历史消息',
+  )
+  assert(
+    result.topic.summary.length > 0 &&
+      nextState.current_message_count === 0 &&
+      db.listCurrentTopicMessages(dm.id, 30).length === 0,
+    '旧话题保存摘要且当前模型原文上下文归零',
+  )
+  await orchestrator.sendUserMessage(dm.id, '新话题里的第一条消息', [])
+  const current = db.listCurrentTopicMessages(dm.id, 30)
+  assert(
+    current.some((message) => message.content.includes('新话题里的第一条')) &&
+      current.every((message) => !beforeIds.has(message.id)),
+    '边界后的消息独立进入新上下文',
+  )
+  const topicEvents = events.filter(
+    (event) =>
+      event.type === 'system-message' && event.message.id === result.marker.id,
+  )
+  assert(topicEvents.length === 1, '新话题边界通过实时事件推送到 UI')
+  const topicLog = fs.readFileSync(
+    path.join(userData, 'logs', 'observability.jsonl'),
+    'utf8',
+  )
+  assert(
+    topicLog.includes('chat.topic.summary.started') &&
+      topicLog.includes('chat.topic.started'),
+    '新话题摘要与边界写入可观测日志',
+  )
+
+  const topicGroup = db.createGroup('群聊新话题冒烟', [botA.id])
+  db.insertMessage({
+    chat_id: topicGroup.id,
+    sender_type: 'user',
+    content: '群聊旧话题的目标与约束',
+  })
+  db.insertMessage({
+    chat_id: topicGroup.id,
+    sender_type: 'bot',
+    sender_bot_id: botA.id,
+    content: '群聊旧话题已有一个结论',
+  })
+  db.updateChatSummary(topicGroup.id, '旧滚动摘要')
+  const groupTopicResult = await orchestrator.startChatTopic(topicGroup.id)
+  assert(
+    groupTopicResult.topic.previous_message_count === 2 &&
+      db.getChat(topicGroup.id).context_summary === '' &&
+      db.listCurrentTopicMessages(topicGroup.id, 5).length === 0,
+    '群聊同样创建话题边界，并从新话题重新计算滚动摘要',
+  )
+  db.deleteChat(topicGroup.id)
+
+  const unconfigured = db.createBot({ name: '无摘要模型' })
+  const failedTopicChat = db.createDm(unconfigured.id)
+  db.insertMessage({
+    chat_id: failedTopicChat.id,
+    sender_type: 'user',
+    content: '摘要失败时必须保留原状',
+  })
+  const failedBefore = db.listMessages(failedTopicChat.id).length
+  let topicFailed = false
+  try {
+    await orchestrator.startChatTopic(failedTopicChat.id)
+  } catch {
+    topicFailed = true
+  }
+  assert(
+    topicFailed &&
+      db.getLatestChatTopic(failedTopicChat.id) === null &&
+      db.listMessages(failedTopicChat.id).length === failedBefore,
+    '摘要模型失败时不写入半成品话题或系统分界',
+  )
+  db.deleteBot(unconfigured.id)
+}
+
+console.log('\n[4b] 定时 Agent 任务：持久化、工具与消息投递')
 {
   const appTools = agentTools.createAppTools(botB.id, dm.id)
   const names = appTools.map((tool) => tool.name)
@@ -709,7 +878,58 @@ assert(
 )
 db.setSetting('natural_follow_up', '1')
 
-console.log('\n[4c] 群聊延展讨论：有新观点才进入下一轮，最多五轮')
+console.log('\n[4c] Jev 响应策略：自动优先、群聊判断、自然续发与低置信度回退')
+{
+  const jevBot = db.createBot({
+    name: 'Jev 决策测试',
+    provider_id: provider.id,
+  })
+  const jevGroup = db.createGroup('Jev 群聊', [jevBot.id])
+  await orchestrator.sendUserMessage(jevGroup.id, 'Jev 群聊冒烟', [])
+  const groupReplies = db
+    .listMessages(jevGroup.id, undefined, 20)
+    .filter((message) => message.sender_type === 'bot' && message.status === 'done')
+  assert(groupReplies.length === 1, '自动策略在 Jev 已配置时优先使用 Jev')
+
+  const jevDm = db.createDm(jevBot.id)
+  await orchestrator.sendUserMessage(jevDm.id, 'Jev 续发冒烟', [])
+  const dmReplies = db
+    .listMessages(jevDm.id, undefined, 20)
+    .filter((message) => message.sender_type === 'bot' && message.status === 'done')
+  assert(
+    dmReplies.length === 2 &&
+      dmReplies[1].content === '还需要你确认更看重速度还是稳定性？',
+    'Jev 只决定续发，正文仍由 Bot 当前生成模型起草',
+  )
+
+  const fallbackGroup = db.createGroup('Jev 低置信度', [jevBot.id])
+  await orchestrator.sendUserMessage(fallbackGroup.id, 'Jev 低置信度冒烟', [])
+  const fallbackReplies = db
+    .listMessages(fallbackGroup.id, undefined, 20)
+    .filter((message) => message.sender_type === 'bot' && message.status === 'done')
+  assert(fallbackReplies.length === 1, 'Jev 低置信度时回退传统 LLM 判断')
+  const log = fs.readFileSync(
+    path.join(userData, 'logs', 'observability.jsonl'),
+    'utf8',
+  )
+  assert(
+    log.includes('decision.jev.completed') &&
+      log.includes('low_confidence') &&
+      !log.includes('jev-smoke-secret'),
+    'Jev 决策、置信度回退可观测且日志不含 API Key',
+  )
+  assert(
+    jevRequests.every(
+      (request) =>
+        request.authorization === 'Bearer jev-smoke-secret' &&
+        request.question.type === 'choice',
+    ),
+    'Jev 请求使用加密配置中的密钥和 Choice 结构化问题',
+  )
+  db.deleteBot(jevBot.id)
+}
+
+console.log('\n[4d] 群聊延展讨论：有新观点才进入下一轮，最多五轮')
 const multiRound = db.createGroup('多轮冒烟组', [botA.id, botC.id])
 await orchestrator.sendUserMessage(
   multiRound.id,
@@ -773,8 +993,9 @@ assert(
 db.clearChatMessages(dm.id)
 assert(
   db.listMessages(dm.id, undefined, 10).length === 0 &&
-    db.getChat(dm.id).last_message_at === 0,
-  '清空聊天记录不删除单聊',
+    db.getChat(dm.id).last_message_at === 0 &&
+    db.getLatestChatTopic(dm.id) === null,
+  '清空聊天记录不删除单聊，并同步清除话题边界',
 )
 db.hideChat(dm.id)
 assert(

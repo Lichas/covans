@@ -20,6 +20,11 @@ const SAFE_FIELDS = new Set([
   'result_status', 'error_status', 'latency_ms',
   'input_chars', 'result_chars',
   'has_model_override',
+  'server_id', 'skill_id', 'transport', 'server_count', 'skill_count', 'tool_count', 'file_count',
+  'strategy', 'requested_strategy', 'used_strategy', 'confidence', 'threshold',
+  'decision_kind', 'fallback_reason',
+  'context_window_tokens', 'input_context_ratio', 'output_budget_ratio',
+  'reasoning_output_ratio', 'visible_output_chars',
 ])
 
 export function getDiagnosticReport(reference: string): DiagnosticReport {

@@ -31,6 +31,7 @@ main/           Electron 主进程（Node）
   ipc.ts            ipcMain.handle 注册全部通道（白名单）
   agentRuntime.ts   pi-mono 封装：provider 解析、agent 会话创建、流式转发
   orchestrator.ts   群聊编排（成员判断 → 并发/顺序回复 → 落库）
+  decisionStrategy.ts Bot 响应决策策略（自动 / 传统 LLM / TypeSafe Jev）
   memory.ts         实时短摘要、场景归纳、检索与注入
   scheduledTasks.ts 本地定时器恢复、无重入执行与状态更新
   workspace.ts      每 Bot 工作区目录管理
@@ -50,6 +51,8 @@ shared/
 ```
 
 ## 3. 数据模型（SQLite）
+
+数据库文件为 `~/.covans/covan.db`。首次启动发现旧版 `legacy.db` 时，会在打开 SQLite 前原地迁移数据库及其 WAL/SHM 文件；若目标已存在，绝不覆盖。
 
 ```sql
 CREATE TABLE providers (
@@ -74,6 +77,7 @@ CREATE TABLE bots (
   temperature REAL NOT NULL DEFAULT 0.7,
   max_tokens INTEGER NOT NULL DEFAULT 8192,
   reasoning_effort TEXT NOT NULL DEFAULT 'medium', -- off|low|medium|high|xhigh
+  response_decision_strategy TEXT NOT NULL DEFAULT 'auto', -- auto|llm|jev
   workspace_dir TEXT NOT NULL DEFAULT '',  -- 相对 workspaces/ 的目录名
   notify INTEGER NOT NULL DEFAULT 1,
   is_coordinator INTEGER NOT NULL DEFAULT 0, -- legacy：仅兼容旧库，现行调度不读取
@@ -112,6 +116,15 @@ CREATE TABLE messages (
   mentions TEXT NOT NULL DEFAULT '[]',    -- JSON [botId]
   status TEXT NOT NULL DEFAULT 'done',    -- 'streaming'|'done'|'error'|'stopped'
   error TEXT NOT NULL DEFAULT '',
+  system_kind TEXT NOT NULL DEFAULT '',   -- ''|'topic_boundary'
+  created_at INTEGER NOT NULL
+);
+CREATE TABLE chat_topics (
+  id TEXT PRIMARY KEY,
+  chat_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+  boundary_message_id TEXT NOT NULL UNIQUE REFERENCES messages(id) ON DELETE CASCADE,
+  summary TEXT NOT NULL,                  -- 分界前累计上下文摘要，最多 6000 字
+  previous_message_count INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL
 );
 CREATE TABLE memories (
@@ -186,6 +199,9 @@ interface CovanApi {
   deleteProvider(id: string): Promise<void>;
   listProviderModels(id: string): Promise<string[]>;
   testProvider(id: string): Promise<{ ok: boolean; error?: string; models?: string[] }>;
+  getJevConfig(): Promise<JevConfig>;              // 只返回 has_api_key，不返回密钥
+  saveJevConfig(input: JevConfigInput): Promise<JevConfig>; // api_key 省略保留、空串清除
+  testJev(): Promise<TestJevResult>;
 
   // bots
   listBots(): Promise<Bot[]>;
@@ -212,6 +228,8 @@ interface CovanApi {
 
   // messages
   listMessages(chatId: string, before?: number, limit?: number): Promise<Message[]>;
+  getChatTopicState(chatId: string): Promise<ChatTopicState>;
+  startChatTopic(chatId: string): Promise<StartChatTopicResult>;
   sendUserMessage(chatId: string, content: string, mentions: string[], attachments?: Attachment[]): Promise<void>;
   stopChat(chatId: string): Promise<void>;             // 停止该会话所有进行中的生成
 
@@ -254,9 +272,17 @@ type CovanEvent =
 
 ## 5. 群聊编排协议（orchestrator.ts）
 
+### 5.0 新话题与上下文边界
+
+- 单聊和群聊顶部都提供「开始新话题」。用户确认后，主进程先用该会话 Bot（群聊优先协调者，否则首位成员）把更早话题摘要、当前群滚动摘要和当前话题原文压缩成累计摘要；摘要成功后才在同一事务中写入 `chat_topics` 和 `system_kind='topic_boundary'` 的可见系统分界消息。摘要失败不得创建半成品边界。
+- `listMessages`、导出和 UI 分页继续返回完整历史；模型历史、群聊判断、自然续发、定时任务和记忆检索查询只读取最新边界之后的原文，并把最新 `chat_topics.summary` 作为只读旧话题资料注入 system prompt。群聊 `context_summary` 在分界成功后清空，从新话题重新滚动。
+- 当前话题达到 40 条 user/bot 消息，或至少 12 条消息且连续 24 小时未活动时，UI 提醒开始新话题；阈值只触发提示，未经用户确认不得调用摘要模型或改变上下文。
+- 边界按 SQLite `rowid` 截断而非只按时间戳，避免同一毫秒消息越界。正在生成或已经执行摘要时，UI 禁用入口；主进程还必须拒绝与普通会话轮次并发创建边界。
+- 开始新话题不删除消息、记忆、产物、定时任务或 Agent 私聊。清空/删除会话时，关联 `chat_topics` 随消息或会话级联删除。观测日志只记录消息数、输入/输出字符数、耗时和错误分类，不记录摘要或聊天正文。
+
 触发：`sendUserMessage(groupChatId, …)`。
 1. 落库用户消息；发 `chat-updated`。
-2. 每位成员使用自己的 Provider/Model，读取 `context_summary` + 最新 5 条消息，输出 `REPLY` 或 `SKIP`。被用户 @mention 的成员必须回复。
+2. 每位成员按自己的 `response_decision_strategy` 判断：默认 `auto` 在 TypeSafe Key 已配置时优先 Jev，否则使用当前 LLM；`llm` 强制使用当前 Provider/Model 输出 `REPLY` 或 `SKIP`；`jev` 将经过裁剪的 Bot 身份、前文总结和最新 5 条消息作为结构化 state，向 TypeSafe System One 提交 `reply|skip` Choice。传统 LLM 的群聊与续发轻量判断关闭推理，避免短输出预算被 reasoning 消耗。被用户 @mention 的成员跳过模型判断并必须回复。
 3. `reply_mode='active'`：所有成员并发判断，决定回复的成员并发输出。
 4. `reply_mode='sequential'`：成员按群成员顺序逐个判断、回复，后面成员可以看到前面成员的输出。
 5. 两种模式生成期间 Composer 都保持可发送。新用户消息立即落库并提高群修订号；所有尚未完成的成员判断被取消，再基于包含新消息的最新 5 条上下文重新开始。已在流式输出的回复不截断，后续成员或下一轮读取新消息。过期修订的判断结果必须丢弃。
@@ -264,7 +290,11 @@ type CovanEvent =
 7. 准备判断/正在输出通过 `agent-activity` 推送。回复机制不写入 system 消息，不在聊天消息区显示调度文案。
 8. 流式 delta → `message-delta`；完成 → 落库 + `message-done`。轮次完成后异步刷新群聊前文总结，并触发分层记忆归纳。
 
-单聊（dm）：直接调用该 bot agent。设置项 `natural_follow_up` 默认开启；开启时主回复提示要求按即时聊天节奏输出：较长内容先发送一个自然完整的语义段，一条即可回答时仍完整回答。主回复完成后，Bot 通过轻量 completion 同时返回 `SKIP` 或 `REPLY\n<候选短消息>`；仅在仍有未完成的新内容、遗漏重要具体信息或存在必须由用户回答的明确问题时追加，最多 2 条。候选在写入消息前必须通过 240 字上限、近期回复长片段去重和调度元话术过滤；完整回答、只能复述改写、寒暄、泛泛关心、格式无效、判断失败、停止或主回复失败都不追加。跟进不再对以 assistant 消息结尾的历史调用 `agent.continue()`。
+单聊（dm）：直接调用该 bot agent。设置项 `natural_follow_up` 默认开启；开启时主回复提示要求按即时聊天节奏输出：较长内容先发送一个自然完整的语义段，一条即可回答时仍完整回答。主回复完成后按 Bot 的响应决策策略判断是否续发：传统 LLM 继续用一次轻量 completion 同时返回 `SKIP` 或 `REPLY\n<候选短消息>`；Jev 只返回结构化 `reply|skip`，选择 `reply` 后再由 Bot 当前 LLM 起草正文。仅在仍有未完成的新内容、遗漏重要具体信息或存在必须由用户回答的明确问题时追加，最多 2 条。候选在写入消息前必须通过 240 字上限、近期回复长片段去重和调度元话术过滤；完整回答、只能复述改写、寒暄、泛泛关心、格式无效、判断失败、停止或主回复失败都不追加。跟进不再对以 assistant 消息结尾的历史调用 `agent.continue()`。
+
+`decisionStrategy.ts` 是群聊发言和自然续发共用的策略边界。Jev 固定调用 `POST https://api.typesafe.ai/v1/systemone`，默认模型 `jev-latest`，问题使用显式 `reply|skip` Choice；TypeSafe API Key 使用 Electron `safeStorage` 加密后存入 settings，renderer 只能读取是否已配置。全局可设置模型与 0.50–0.95 置信度阈值（默认 0.60）。Jev 置信度低于阈值、未配置、超时、返回无效或服务失败时回退原有 LLM 判断；取消信号不回退。Jev state 只包含决策所需的 Bot 名称/描述/标签/截断人设、会话名/摘要/最新 5 条消息、轮次及审核规则，不包含 API Key、工具内容或附件二进制。生成回复正文始终使用 Bot 当前 Provider/Model。
+
+普通 Agent 若 Provider 以 `stop_reason=length` 结束且可见正文为空，不得写入 `done` 空白消息；消息标记为失败并提示输出 Token 被推理耗尽。已有部分正文时仍保留部分结果。观测事件同时记录上下文窗口、输入上下文占比、输出预算占比、推理占输出比和可见字符数，以区分输入上下文超限与输出预算耗尽。
 
 普通 Agent 生成不再把最新用户消息预填进历史后调用 `agent.continue()`；历史只初始化到上一条消息，最新的 user/toolResult 通过 `agent.prompt(message)` 显式开始本轮，兼容要求本轮必须存在 user query 的 LM Studio Jinja 模板。
 
@@ -275,7 +305,7 @@ type CovanEvent =
 - 运行时复用 Bot 当前 Provider/模型/采样参数；`model` 非空时只为该次运行替换模型。编排器插入一个 streaming Bot 消息并用真实 Agent 输出更新；不会落库伪造的 user 消息。运行前后成对广播 `scheduled-task-state`，渲染层将它与用户发起轮次独立计数，避免任务结束时错误清掉普通轮次或遗留“回复中”。完成、失败或停止写入任务最近状态并广播 `scheduled-tasks-updated`。
 - 普通会话应用工具提供 `list_scheduled_tasks`、`create_scheduled_task`、`update_scheduled_task`、`delete_scheduled_task`；所有写操作仅限当前 Bot、当前会话。Agent 私聊不装配这些工具。
 
-设置项 `local_observability` 默认关闭。开启后，主进程向 `<userData>/logs/observability.jsonl` 写入 JSON Lines 结构化事件：运行阶段、Provider/模型、匿名化后的 chat/bot/message/trace/task ID、角色序列、各消息字符数、payload 角色及 user 索引、请求/工具序号、耗时、Token 用量、停止原因、HTTP 状态、续发与群聊决策、定时任务排程/触发/完成/错过/失败、内部 completion 调用及归一化错误码。Agent 与模型调用接受同轮 `trace_id`，用于关联不同回复消息和调度阶段。禁止写入消息正文、prompt、工具参数与返回值、API Key、Provider 完整错误文本；单文件 5MB 后轮转为 `.1`，仅保留当前文件和一份历史。`openObservabilityLogs` 只打开日志目录。
+设置项 `local_observability` 默认关闭。开启后，主进程向 `<userData>/logs/observability.jsonl` 写入 JSON Lines 结构化事件：运行阶段、Provider/模型、匿名化后的 chat/bot/message/trace/task ID、角色序列、各消息字符数、payload 角色及 user 索引、请求/工具序号、耗时、Token 用量、上下文窗口与输入占比、输出预算与推理占比、可见字符数、停止原因、HTTP 状态、续发与群聊决策、Jev 模型/置信度/阈值/回退原因、定时任务排程/触发/完成/错过/失败、内部 completion 调用及归一化错误码。Agent 与模型调用接受同轮 `trace_id`，用于关联不同回复消息和调度阶段。禁止写入消息正文、prompt、Jev state、工具参数与返回值、API Key、Provider 完整错误文本；单文件 5MB 后轮转为 `.1`，仅保留当前文件和一份历史。`openObservabilityLogs` 只打开日志目录。
 
 ### 5.2 消息诊断
 
@@ -329,6 +359,17 @@ type CovanEvent =
 - 记忆 IPC 在原有 `listMemories/addMemory/deleteMemory` 外增加 `listMemorySummaryStates(botId)` 和 `refreshMemorySummaries(botId)`；摘要状态通过 `memories-updated` 事件驱动右栏更新。
 - 记忆面板按全部/短时/场景/语义/长期筛选，显示来源、作者、参与者和时间；支持分页展示、手动添加和删除。`memories-updated {botId}` 经现有 typed preload 事件通道即时刷新。
 - 删除带证据记忆会同时删除该 Bot 对同一来源的原文与归纳，避免删后仍从摘要召回；另一位 Bot 的副本独立保留。不会从原聊天定期重建已删除记忆。删除聊天不等同于忘记已保存的记忆，需在记忆面板删除。
+
+### 6.5 MCP 与 Skills 扩展
+
+- 设置 → MCP / Skills 分别作为一级全局安装库，提供 MCP 服务的新增/编辑/停用/删除/测试及工具清单，Skills 的本地目录或 HTTPS Git 仓库导入、预览、停用与卸载。Bot 右栏 → 扩展独立装配；新 Bot 默认无扩展，安装不自动授权给所有 Bot。
+- MCP 使用官方 TypeScript SDK，支持 stdio、Streamable HTTP 和显式 SSE。stdio 由主进程直接启动 command/args（不经 shell），仅继承 SDK 默认环境和显式配置的 env；远程 URL 不接受用户信息、查询参数和 fragment，凭据通过 headers 配置。env/headers 使用 Electron safeStorage 加密存储，系统加密不可用时拒绝保存非空凭据；列表只返回键名，编辑省略保留、传空对象清除。Provider 原有密钥存储方式不变。
+- 每轮为已装配且全局启用的服务建立独立连接，连接/发现各 15 秒、工具调用 60 秒超时，支持停止取消并在结束时关闭连接/子进程。工具名带服务 ID 命名空间；发现最多 128 个工具/服务，单 Bot 最多装配 8 个服务。失败服务以简洁状态加入当前轮上下文，其余能力继续使用。MCP 服务只获知当前 Bot 工作区 root；不提供采样、自动确认或递归调用宿主能力。
+- Skills 遵循 Agent Skills 的 YAML frontmatter + Markdown 格式，必须有合法 name/description；安装复制 SKILL.md 及 scripts/references/assets 到应用管理目录，拒绝符号链接与目录逃逸，不自动执行安装脚本。支持一次导入目录中的多个技能，同名重新导入更新并保留 Bot 绑定。每技能最多 1000 文件、单文件 10MB、总 50MB；SKILL.md 与按需读取的文本最多 200KB，拒绝二进制读取。Git 导入限 HTTPS、浅克隆、不启用仓库 hooks/子模块，支持相对子目录；不自动安装系统依赖。
+- 每轮仅将已启用 Skill 的名称/描述加入上下文，通过 `skill_read` 按需读正文或附属文件，脚本可由已有 bash 工具按当前任务调用。Bash 沙箱只额外允许只读访问当前 Bot 已装配且启用的 Skill 包，所有写入仍限制在工作区。正文不能覆盖用户请求，也不授予额外权限。单 Bot 最多装配 32 个 Skills。用户通过自然语言明确要求时，Agent 可用 `list_extensions` 和 `configure_extensions` 查看安装库并修改自己的绑定，下轮生效；Agent 不安装新进程或修改全局库。
+- 单聊、群聊成员回复与定时任务使用同一套装配；受限 Bot 间咨询维持原有只读工具范围，不加载外部 MCP/Skills。装配在每轮开始快照，删除/停用后禁止发起新调用，已执行的外部动作不回滚。
+- `mcp_servers`、`installed_skills` 与两张 Bot 绑定表独立持久化，删除 Bot/扩展级联清理绑定。IPC 为 `listExtensions/saveMcpServer/deleteMcpServer/testMcpServer/pickSkillDirectory/installSkills/readInstalledSkill/setSkillEnabled/deleteSkill/getBotExtensions/setBotExtensions`，全局或装配变化广播 `extensions-updated`。
+- 开启观测时，全局安装/装配记录匿名扩展或 Bot ID；回复执行中的 MCP 连接/发现/调用/关闭与 Skill 读取事件关联 message/trace ID，手动连接测试不属于聊天 trace。不记录 URL、命令参数、认证值、Skill 正文或工具输入输出。安装配置属于用户信任的软件，MCP 本地进程以当前用户权限运行，MCP 工作区 root 不是操作系统沙箱。当前 MCP 接入 tools 能力，认证使用手动 headers；不含 OAuth 登录、resources/prompts 界面或在线市场。
 
 ## 7. 工作区（workspace.ts）
 
@@ -414,9 +455,9 @@ await agent.prompt(userText)   // agent.abort() 用于 stopChat
 - 三栏：Sidebar 256px / ChatView 自适应 / BotSettingsPanel 320px（默认收起）。
 - 跟随系统浅色/深色主题；暖白/炭灰背景、低饱和绿点缀；用户消息为紧凑浅灰气泡，Bot 回复使用宽阅读区域；代码、表格和块级公式独立滚动。
 - Sidebar：搜索框；单聊列表项右键「置顶 / 取消置顶」，最多3个 Bot，数据库层同样校验；群聊列表项右键提供经确认的「删除群聊」，永久删除群及关联记录。顶部仅在有置顶时显示横排圆形头像，不显示空槽位或添加入口。会话列表项=头像(群聊显示叠头像+N角标)/名称/最后消息预览/时间/未读蓝点；底部为「关于我」「我的 Bot」「新建群聊」「设置」；顶部「+」菜单新建 Bot(⌘1) / 创建群聊(⌘2)。
-- ChatView：顶部 Bot/群名、完整会话导出和设置入口；群聊齿轮打开回复机制和聊天背景设置。会话可使用 `resources/group-backgrounds` 内置图片作为聊天背景，新建群随机分配一张，旧群首次启动补齐一张；私聊默认无背景，可在 Bot 设定页手动选择、随机或清除。renderer 只能经 `covan-bg://builtin/<file>` 读取清单内文件。消息显示作者、时间、跨日分隔；支持 Markdown（含行内/块级 LaTeX 公式）、多图、代码复制、原文复制、引用回复和错误重试。Bot 本轮真实写入或编辑工作区文件时，回复下方显示结构化交付卡，不从回复文本猜测文件名；卡片支持在右侧可调整宽度的产物预览窗预览 Markdown、HTML、TXT、代码、图片和 PDF，并支持定位和打开文件夹。Composer 支持群聊 @ 提及、独立持久草稿与中文输入法保护；上方以动画小头像显示正在思考/回复的成员。主动回复中可继续发送新消息。
-- BotSettingsPanel（右栏，单聊选中时显示）：头像与身份信息；生活照、设定、记忆、工作区、模型五个标签页（按从左到右排列）。单聊的设定页在人设前显示当前会话的聊天背景选择器，默认以当前背景预览卡和「更换」入口紧凑呈现，展开后显示图库；这只更新当前 dm 会话，不写入 Bot 人设。设定页的人设 System Prompt 默认以 Markdown 预览显示，预览区域至少 220px 高并自动填满设定页剩余空间，底部保留 20px 内边距；点击铅笔进入编辑态，编辑区至少 360px 高，使用等宽透明输入层叠加 Markdown 语法高亮层，支持标题、代码围栏、行内代码、强调、链接和注释高亮，并提供取消/完成操作。点击完成后保存 `system_prompt`，取消恢复进入编辑前内容；编辑中的草稿不会因外部 Bot 更新覆盖。模型页独立管理 provider、model、temperature、reasoning effort 与 max tokens。
-- SettingsModal（通用）：账户占位、外观（主题跟随系统/浅色/深色、语言）、Bot（时区自动检测、自然追问开关、自动审核开关 + 规则文本——审核规则作为自然语言注入各成员的判断与回复）、Provider 管理（列表 + 新增/编辑表单 + 测试连接按钮）。Provider 列表、配置表单、Bot 模型选择和聊天头部使用对应厂商的图形标识，不使用字母或文字缩写；OpenAI-compatible 与 Mock 使用中性图形。
+- ChatView：顶部 Bot/群名、完整会话导出和设置入口；群聊齿轮打开回复机制和聊天背景设置。会话可使用 `resources/group-backgrounds` 内置图片作为聊天背景，新建群随机分配一张，旧群首次启动补齐一张；私聊默认无背景，可在 Bot 设定页手动选择、随机或清除。renderer 只能经 `covan-bg://builtin/<file>` 读取清单内文件。私聊 Bot 在准备回复、流式回复或执行工具时，顶部头像显示一圈旋转的 Siri 风格渐变状态环，并遵守减少动效偏好；Agent 私聊记录中实际回复中的 Bot 头像同样显示该状态。消息显示作者、时间、跨日分隔；支持 Markdown（含行内/块级 LaTeX 公式）、多图、代码复制、原文复制、引用回复和错误重试。Bot 本轮真实写入或编辑工作区文件时，回复下方显示结构化交付卡，不从回复文本猜测文件名；卡片支持在右侧可调整宽度的产物预览窗预览 Markdown、HTML、TXT、代码、图片和 PDF，并支持定位和打开文件夹。Composer 支持群聊 @ 提及、独立持久草稿与中文输入法保护；上方以动画小头像显示正在思考/回复的成员。主动回复中可继续发送新消息。
+- BotSettingsPanel（右栏，单聊选中时显示）：头像与身份信息；生活照、设定、记忆、工作区、定时、模型、扩展七个标签页（按从左到右排列）。单聊的设定页在人设前显示当前会话的聊天背景选择器，默认以当前背景预览卡和「更换」入口紧凑呈现，展开后显示图库；这只更新当前 dm 会话，不写入 Bot 人设。设定页的人设 System Prompt 默认以 Markdown 预览显示，预览区域至少 220px 高并自动填满设定页剩余空间，底部保留 20px 内边距；点击铅笔进入编辑态，编辑区至少 360px 高，使用等宽透明输入层叠加 Markdown 语法高亮层，支持标题、代码围栏、行内代码、强调、链接和注释高亮，并提供取消/完成操作。点击完成后保存 `system_prompt`，取消恢复进入编辑前内容；编辑中的草稿不会因外部 Bot 更新覆盖。模型页独立管理 provider、model、响应决策策略、temperature、reasoning effort 与 max tokens。
+- SettingsModal（通用）：采用左侧分类导航、右侧内容区的设置布局；分类包括通用、Provider、Bot、定时任务、头像生成、MCP、Skills、Debug，MCP、Skills 与 Debug 为同级一级分类。通用包含账户占位、外观（主题跟随系统/浅色/深色、语言）、Bot（时区自动检测、自然追问开关、自动审核开关 + 规则文本、TypeSafe API Key / Jev 模型 / 置信度阈值）、Provider 管理（列表 + 新增/编辑表单 + 测试连接按钮）。Provider 列表、配置表单、Bot 模型选择和聊天头部使用对应厂商的图形标识，不使用字母或文字缩写；OpenAI-compatible 与 Mock 使用中性图形。
 - 新建 Bot 对话框：名称/人设模板下拉（开发分队四人、产品经理、设计师、虚拟女友「小美女」、虚拟男友「小帅哥」、空白自定义）/描述/provider/模型。
 - 中文 UI。
 
@@ -429,7 +470,7 @@ await agent.prompt(userText)   // agent.abort() 用于 stopChat
 
 ## 11. 非功能需求
 
-- 无任何网络遥测；除用户配置的 LLM/生图 Provider 外，仅在 Agent 为完成当前请求显式调用网页工具时访问搜索服务或目标公开 URL。API key 仅存本地 SQLite（README 注明明文风险 + 后续 safeStorage 路线图）。
+- 无任何网络遥测；网络访问限用户配置的 LLM/生图 Provider、用户选择的 TypeSafe Jev 决策、任务需要的搜索/网页、启用的 MCP 服务及用户主动安装的 Git 来源。Provider API key 仍明文存本地 SQLite；TypeSafe API Key 与 MCP env/headers 使用 safeStorage 加密，边界明确区分。
 - 所有外部调用可中断；生成中 UI 可继续浏览其他会话。
 - 错误（key 无效/超时/限流）在气泡内联显示并可重试。
 - 代码质量：`tsc --noEmit` 通过、`electron-vite build` 通过。
@@ -451,4 +492,4 @@ await agent.prompt(userText)   // agent.abort() 用于 stopChat
 - **私聊执行**：一次咨询将问题发送给目标 Bot，接收方使用自己的人设/模型与工作区读取工具；不递归调用私聊或修改应用状态。每个主会话最多并发3个、每个用户轮次最多调用3次；可独立停止，也随主轮次停止。
 - **私聊界面**：自然语言工具触发后，卡片插在来源用户消息后；未加载来源消息时仍有入口。点击浮窗显示双方真实消息、Markdown、作者、时间、流式/失败/停止状态。聊天顶部双人按钮也可手动指定咨询问题，不自动转发整段主会话。
 - **IPC 契约**：getUserProfile / saveUserProfile / pickUserAvatar / listUserPresetAvatars / listUserMemories / saveUserMemory / deleteUserMemory；listAgentThreads / getAgentThread / startAgentConversation / stopAgentConversation；准确类型以 shared/types.ts 为准。
-- **启动与验证**：根目录 start.command 一键启动；npm run typecheck、npm run smoke、npm run test:ui、npm run test:context、npm run test:avatars。UI 与工具测试均使用临时 profile；真实 pi 工具循环由本地 HTTP fixture 驱动，无付费 API 调用。
+- **启动与验证**：根目录 start.command 一键启动；npm run typecheck、npm run smoke、npm run test:ui、npm run test:context、npm run test:avatars、npm run test:extensions。扩展回归覆盖 MCP 三种传输、握手超时/取消、Skill 安装与只读脚本执行、Bot 隔离、定时继承及重启持久化。UI 与工具测试均使用临时 profile；真实 pi 工具循环由本地 HTTP fixture 驱动，无付费 API 调用。

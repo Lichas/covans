@@ -143,7 +143,7 @@ function excerpt(content: string, query: Set<string>): string {
 }
 
 export function recallChatMemories(botId: string, chatId: string, query?: string): Memory[] {
-  const recent = db.listRecentMessages(chatId, 5)
+  const recent = db.listCurrentTopicMessages(chatId, 5)
   const latestUser = [...recent].reverse().find((m) => m.sender_type === 'user')
   return recallMemories(botId, {
     query: query || latestUser?.content || recent.at(-1)?.content || '',

@@ -32,10 +32,12 @@ export const MessageBubble = memo(function MessageBubble({
     if (!message.content) return null
     return (
       <div
-        className="system-message selectable"
+        className={`system-message selectable ${message.system_kind === 'topic_boundary' ? 'topic-boundary' : ''}`}
         title={formatFullTime(message.created_at)}
+        data-message-id={message.id}
+        data-system-kind={message.system_kind || undefined}
       >
-        {message.content}
+        <span>{message.content}</span>
       </div>
     )
   }

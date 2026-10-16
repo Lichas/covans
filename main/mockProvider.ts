@@ -104,6 +104,8 @@ export async function mockComplete(
   await new Promise((r) => setTimeout(r, 30))
   if (systemPrompt.includes(MEMORY_SUMMARY_MARKER)) return mockSceneSummary(userText)
   if (systemPrompt.includes(MEMORY_EXTRACT_MARKER)) return mockMemoryExtraction(bot, userText)
+  if (systemPrompt.includes('<<chat-topic-summary>>'))
+    return '已确认：当前话题正在推进。\n\n待办：在新话题中继续处理尚未完成的事项。'
   if (systemPrompt.includes('<<group-reply-decision>>')) {
     const round = Number(systemPrompt.match(/第 (\d+) 轮/)?.[1] ?? '1')
     // 普通冒烟群聊只走首轮；专门标记的案例用第二轮验证延展能力。
@@ -130,6 +132,11 @@ export async function mockComplete(
         ? 'SKIP'
         : 'REPLY\n你更想先确认目标还是约束？'
     return 'SKIP'
+  }
+  if (systemPrompt.includes('<<natural-followup-jev-draft>>')) {
+    if (userText.includes('Jev 续发冒烟'))
+      return '还需要你确认更看重速度还是稳定性？'
+    return '这里还有一个值得补充的具体信息。'
   }
   return mockPersonaReply(bot, userText)
 }

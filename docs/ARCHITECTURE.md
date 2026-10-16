@@ -25,13 +25,14 @@ Covan 是标准 Electron 双进程 + preload 桥接架构。所有 LLM 调用、
 │  db.ts         better-sqlite3（WAL）+ migration + DAO      │
 │  agentRuntime.ts  pi-mono 封装：provider 解析/流式/Abort   │
 │  orchestrator.ts  群聊编排状态机                           │
+│  decisionStrategy.ts LLM / Jev 响应决策策略与置信度路由     │
 │  memory.ts       记忆注入 + 后台提取                       │
 │  workspace.ts    每 Bot 工作区目录                         │
 │  scheduledTasks.ts 本地 Cron 调度、恢复、无重入执行          │
 │  mockProvider.ts 冒烟测试假回复                            │
 └───────┬───────────────────────────┬────────────────────────┘
         ▼                           ▼
-  SQLite（userData/legacy.db）   LLM Providers
+  SQLite（userData/covan.db）   LLM Providers
   workspaces/<botId>/            （OpenAI/Anthropic/Google/
   avatars/                        OpenRouter/OpenAI 兼容网关）
 ```
@@ -56,13 +57,13 @@ Covan 是标准 Electron 双进程 + preload 桥接架构。所有 LLM 调用、
 2. **无联网下载**：`npm install --ignore-scripts` 下即可完整安装，CI 与离线环境友好；pi-coding-agent 的 postinstall 下载 ripgrep 与该约束冲突。
 3. **ESM 一致性**：两包均 ESM only，与 electron-vite 输出一致，避免 CJS/ESM 互操作坑。
 4. **能力恰好够用**：我们需要的是「ReAct 循环 + 工具执行 + 事件流 + abort」，pi-agent-core 完整提供；Bash 作为独立的最小权限工具接入，不引入 coding-agent 的整套终端/编辑器状态。
-5. **工具小核心 + 独立装配层**：工作区文件、只读网页和应用状态工具分属独立模块，统一实现 pi-agent-core `AgentTool` + TypeBox 契约；`main/tools/toolset.ts` 按每轮会话场景组装最小权限集。未来 shell、MCP 或审批策略可作为新工具 provider 接入，不侵入 Agent 运行时。
+5. **工具小核心 + 独立装配层**：工作区文件、网页、Bash 和应用状态工具分属独立模块，统一实现 pi-agent-core `AgentTool` + TypeBox 契约；`main/tools/toolset.ts` 按会话场景组装基础能力，`extensions/runtime.ts` 追加每个 Bot 启用的 MCP 与 Skill 工具，并管理每轮连接生命周期。
 
 注意包名使用新 scope `@earendil-works/*`；旧 `@mariozechner/*` 已废弃，禁止引用。
 
 ## 3. 数据模型
 
-SQLite 数据库默认位于 `~/.covans/legacy.db`，WAL 模式，启动时按版本号顺序执行 migration。`~/.covans/` 也是头像、聊天图片和 Agent 工作区的统一本机根目录；不存在时创建，若尚未创建且检测到旧 userData 数据库则安全复制旧目录，绝不删除原目录。测试通过 `COVAN_USER_DATA_DIR` 隔离。表结构以 SPEC.md §3 为准，摘要如下：
+SQLite 数据库默认位于 `~/.covans/covan.db`，WAL 模式，启动时按版本号顺序执行 migration。首次启动会将旧版 `legacy.db` 及对应 WAL/SHM 原地迁移为 `covan.db`，目标已存在时绝不覆盖。`~/.covans/` 也是头像、聊天图片和 Agent 工作区的统一本机根目录；不存在时创建，若尚未创建且检测到旧 userData 数据库则安全复制旧目录，绝不删除原目录。测试通过 `COVAN_USER_DATA_DIR` 隔离。表结构以 SPEC.md §3 为准，摘要如下：
 
 ```
 providers 1───n bots（provider_id，可空）
@@ -74,6 +75,7 @@ chats     1───1 bots   dm：chats.bot_id
 chats.reply_mode       group：active|sequential
 chats.context_summary  group：滚动前文总结
 chats.background_image dm/group：内置聊天背景文件名
+chat_topics            会话上下文边界、累计摘要及可见 marker 关联
 scheduled_tasks       每 Bot 的计划、目标会话、模型覆盖与最近运行状态
 settings  键值表（主题/语言/时区/审核规则等）
 ```
@@ -81,6 +83,7 @@ settings  键值表（主题/语言/时区/审核规则等）
 关键设计点：
 
 - **messages.sender_type** 区分 `user|bot|system`；群聊中 bot 消息用 `sender_bot_id` 归属。`system` 只用于真实系统提示与兼容旧数据，群聊调度过程不写入聊天区。`status` 状态机（streaming/done/error/stopped）支撑断点续显与错误内联。
+- **新话题边界**：`chat_topics.boundary_message_id` 指向一条 `messages.system_kind='topic_boundary'` 的 UI 分界。完整历史与模型上下文分离：历史分页不变，运行时 SQL 通过 marker 的 SQLite `rowid` 只取边界后消息，并把累计摘要作为只读 system 资料注入。创建流程先完成模型摘要，再用单事务写 topic + marker 并清空群滚动摘要，因而不会留下空摘要边界。
 - **mentions / attachments 以 JSON 字符串列存储**：结构简单、无查询需求，避免额外表。
 - **聊天背景**：`chats.background_image` 只保存 `resources/group-backgrounds` 清单内的文件名。新建群随机写入；旧 group 首次启动时 additive migration 后补齐；dm 默认空值并可由用户在右侧设定页选择。主进程通过 `covan-bg://builtin/<file>` 自定义协议读取随包资源，协议按共享清单校验文件名，不暴露任意本机路径。
 - **产物预览协议**：聊天交付卡的右侧预览面板对文本类文件继续走 `readWorkspaceFile`，对图片和 PDF 使用 `covan-workspace://file/<botId>/<relPath>`。协议处理器只调用 `resolveWorkspaceFile` 后返回文件流和最小 MIME，不提供目录遍历或通用本机路径读取。
@@ -130,7 +133,7 @@ pi 的 Context 为可 JSON 序列化的 `{ role, content, timestamp }[]`。每�
 
 - `user` → `{ role: 'user' }`；`bot` → `{ role: 'assistant' }`；`system` 跳过（不进上下文，仅 UI 展示）。
 - 群聊中其他 bot 的发言对当前发言 bot 而言是「用户侧」输入：以 `[名字]: 内容` 文本前缀保留归属，折叠进 user/assistant 交替序列（SPEC §8）。
-- 单聊取最近 30 条；群聊回复使用持久化前文总结 + 最新 5 条消息，群内其他 Bot 的发言保留名字归属。超长内容按 max_tokens 预留从最早侧截断。
+- 单聊取当前话题最近 30 条；群聊回复使用新话题前累计摘要 + 当前话题持久化前文总结 + 最新 5 条消息，群内其他 Bot 的发言保留名字归属。定时任务、Jev/LLM 回复判断和自然续发使用同一边界。超长内容按 max_tokens 预留从最早侧截断。
 
 ### 5.4 Agent 会话与流式转发
 
@@ -147,11 +150,17 @@ pi 的 Context 为可 JSON 序列化的 `{ role, content, timestamp }[]`。每�
 
 `observability.ts` 是主进程唯一的诊断日志出口。它每次写入时读取 `local_observability` 开关，因而无需重启即可启停；chat/bot/message/trace/task ID 写入前做 SHA-256 截断匿名化。Agent 运行时记录 payload 角色/长度摘要、请求状态与延迟、每步 Token、工具序号/名称/成败类别/耗时；`completeOnce` 统一记录内部模型调用阶段。编排器记录群聊 REPLY/SKIP、续发决策，调度器记录任务计划、触发来源及终态。用户消息 ID 作为本轮 trace ID，调度运行另生成 trace ID；Agent 与后续子调用共享该 ID。Debug 报告以 Bot 消息 ID 找到 trace，再合并该轮相关事件。调用方只可传结构化元数据，禁止传正文、prompt、工具参数/结果和完整错误文本。日志写入或轮转失败静默，不得影响聊天；日志默认关闭，不补写历史。
 
+### 5.7 响应决策策略
+
+`decisionStrategy.ts` 定义统一 `ResponseDecisionStrategy`：传统策略通过回调复用现有 `completeOnce`，Jev 策略把经过裁剪的 Bot 身份和最近会话状态提交给 TypeSafe System One 的二选一 Choice。编排器只消费 `shouldRespond`、可选 draft、实际策略和置信度，不依赖任一供应商响应结构。群聊与私聊续发复用同一策略选择；Jev 只负责判断，正式回复和续发正文仍由 Bot 当前生成模型完成。
+
+Jev 使用固定官方 HTTPS endpoint 和 Electron `net.fetch`，继承系统代理。TypeSafe Key 经 `safeStorage` 加密保存在 settings，IPC 只返回 `has_api_key`。置信度低于阈值或 Jev 不可用时回退传统策略；Abort 直接向上传播，避免用户停止后又发起 LLM。结构化 state 与问题不写入日志，只记录模型、策略、置信度、阈值、耗时和归一化回退原因。默认使用可滚动别名 `jev-latest`；需要稳定阈值的用户可填明确版本。
+
 ## 6. 群聊编排协议详细设计（orchestrator.ts）
 
 ### 6.1 共同输入与轮次控制
 
-每次群消息落库后，编排器为每位成员构造相同基础上下文：`context_summary`（前文总结）+ 最新 5 条消息 + 当前 Bot 的人设和记忆。被 `@` 的成员在首轮强制回复；其他成员先做一次仅允许输出 `REPLY` 或 `SKIP` 的轻量判断。首轮后最多再延展 4 轮（整次最多 5 轮）；每轮 prompt 要求只有补充、具体回应、异议或推进未决项才可 `REPLY`，全员 `SKIP` 即立刻结束。
+每次群消息落库后，编排器为每位成员构造相同基础上下文：`context_summary`（前文总结）+ 最新 5 条消息 + 当前 Bot 的人设和记忆。被 `@` 的成员在首轮强制回复；其他成员按 Bot 的响应决策策略执行二元判断。默认 `auto` 在 TypeSafe Key 已配置时优先 Jev；传统 LLM 输出 `REPLY` / `SKIP` 且轻量判断关闭推理；Jev 输出 `reply|skip` Choice 并按置信度路由。首轮后最多再延展 4 轮（整次最多 5 轮）；每轮只有补充、具体回应、异议或推进未决项才回复，全员跳过即立刻结束。
 
 每个群维护轮次级 `AbortController`、活动成员集合和判断修订号。用户在主动或顺序回复进行中继续发送消息时，新消息先正常落库，再递增修订号并取消尚未完成的旧判断；主动模式的并发判断与顺序模式当前正在等待的成员，都使用包含新消息的最新上下文重试。正在流式发言的消息不被新消息粗暴截断，用户仍可用停止按钮取消整个群的判断与生成。
 
@@ -181,7 +190,7 @@ pi 的 Context 为可 JSON 序列化的 `{ role, content, timestamp }[]`。每�
 - 聊天区只展示用户与成员的真实消息，不展示“正在顺序发言”“全体成员依次发言”等调度说明。
 - 全轮完成后异步刷新 `context_summary` 并触发记忆提取；总结写入前校验最新消息游标，避免较慢的旧总结覆盖新内容。
 
-单聊的主回复复用成员生成路径，但不执行群聊判断与总结逻辑。`natural_follow_up` 默认开启：主回复提示让较长内容先生成一个完整语义段，一条可答完时不拆分；之后使用低 token completion 同时决定并起草 `SKIP` 或 `REPLY\n<候选短消息>`，避免“判断允许、正式生成却复述”的两阶段漂移，也不把 assistant 结尾历史直接交给 `agent.continue()`。候选通过长度、近期回复重复片段和调度元话术校验后才落库，最多 2 条；错误、停止、无效格式或校验失败均停止续发。
+单聊的主回复复用成员生成路径，但不执行群聊判断与总结逻辑。`natural_follow_up` 默认开启：主回复提示让较长内容先生成一个完整语义段，一条可答完时不拆分。传统 LLM 策略继续使用低 token completion 同时决定并起草 `SKIP` 或 `REPLY\n<候选短消息>`，避免“判断允许、正式生成却复述”的两阶段漂移；Jev 策略先做结构化判断，仅在 `reply` 时用当前 LLM 起草一条正文。两条路径都经过长度、近期回复重复片段和调度元话术校验，最多续发 2 条；错误、停止、无效格式或校验失败均停止续发。
 
 ## 7. 分层记忆（db.ts / memory.ts）
 
@@ -195,6 +204,14 @@ pi 的 Context 为可 JSON 序列化的 `{ role, content, timestamp }[]`。每�
 
 ## 8. 可扩展工具层（workspace.ts + tools/* + agentRuntime.ts）
 
+`extensions/store.ts` 管理 MCP/Skill 目录和两张 Bot 绑定表，所有外键级联删除；`index.ts` 注入系统 safeStorage 编解码器，MCP env/headers 加密后入库，renderer 只见键名。现有 Provider 密钥尚未迁移。
+
+`extensions/mcp.ts` 使用官方 `@modelcontextprotocol/sdk` Client 和三个标准 transport；远程请求使用 Electron net.fetch 继承系统代理。每轮独立连接，服务工具以稳定匿名命名空间转换为 AgentTool；工具结构由 SDK 校验，文本返回限长。连接建立外层还使用 AbortSignal 截止保护，覆盖 SSE transport.start 尚未获得 endpoint 的阶段。Agent finally、取消和应用退出均关闭连接，单服务失败保留基础能力。
+
+`extensions/skills.ts` 使用 YAML 解析器读取 Agent Skills frontmatter；目录/Git 来源先验证、复制到新版本目录，全部成功后事务更新索引，失败清理暂存目录，同名更新保留技能 ID 和 Bot 绑定。运行时只注入启用技能的元数据；`skill_read` 验证绑定、全局状态、realpath 和文本限制后读取正文/引用。用户确认的安装配置属于可信软件来源，MCP 子进程自身不受 Bash 沙箱限制；SDK root 仅提示工作目录，不是安全边界。
+
+全局和 Bot UI 共用 `ExtensionsPanel`，通过 typed IPC 读取安装库/装配，并订阅 `extensions-updated` 刷新。安装管理留在主进程；Agent 只开放安装库摘要和修改自己的装配，不获得安装、删除全局扩展或读取认证配置的工具。受限 Agent 私聊仍使用既有只读工具集。
+
 - 根目录：`~/.covans/workspaces/<botId>/`，createBot 时同步创建；删除 Bot 时目录保留与否由设置项控制（默认保留，防误删数据）。
 - 工作区 AgentTool（TypeBox 参数定义，SPEC §8）：
   - `workspace_read({ path, offset?, limit? })`：分页读文本，单次最多 400 行/80KB，超限或二进制返回可恢复错误。
@@ -202,7 +219,7 @@ pi 的 Context 为可 JSON 序列化的 `{ role, content, timestamp }[]`。每�
   - `workspace_edit({ path, old_text, new_text })`：要求 `old_text` 恰好唯一匹配的精确替换，避免整文件重写和模糊修改。
   - `workspace_list()`：列目录（UI 所需深度 2，Agent 输出最多 500 项）。
 - **路径逃逸防护**：所有入参路径 `path.resolve(workspaceRoot, input)` 后校验结果必须以 `workspaceRoot + sep` 开头；拒绝绝对路径、拒绝任何解析后越出根目录的输入（`..`、符号链接场景下额外用 realpath 复核），违例返回错误字符串给模型而非抛异常中断 agent。
-- Bash AgentTool 位于 `tools/bash.ts`，普通会话可用，Agent 私聊禁用。它用独立进程组执行非交互 `/bin/bash`，对环境、cwd、执行时长和输出体积设限；PATH 排除用户与临时目录中的可执行项，macOS 再通过 `sandbox-exec` 将用户文件正文读取和所有写入限制到 Bot 工作区。网络和系统可执行目录保持可用，以支持依赖安装、构建和测试。成功执行后只广播工作区刷新，不推断具体交付文件。当前不在非 macOS 平台降级为无沙箱执行。
+- Bash AgentTool 位于 `tools/bash.ts`，普通会话可用，Agent 私聊禁用。它用独立进程组执行非交互 `/bin/bash`，对环境、cwd、执行时长和输出体积设限；PATH 排除用户与临时目录中的可执行项，macOS 再通过 `sandbox-exec` 将用户文件正文读取限制到 Bot 工作区及其当前装配的只读 Skill 包，写入只允许工作区。每次调用重新核实 Skill 启用状态。网络和系统可执行目录保持可用，以支持依赖安装、构建和测试。成功执行后只广播工作区刷新，不推断具体交付文件。当前不在非 macOS 平台降级为无沙箱执行。
 - 网页 AgentTool：`web_search` 使用可替换 provider（当前 Bing RSS）返回 URL 与摘要；`web_fetch` 的静态快路径使用 Chromium `net.fetch`，继承 macOS 系统代理并支持 Fake-IP。`tools/browser.ts` 是独立渲染 provider：当自动检测到 JS 应用壳、静态正文过少或静态请求失败时，在隐藏的沙箱 BrowserWindow 中加载页面、执行 JavaScript 并提取 DOM 正文；窗口禁用 Node、隔离 context、禁止弹窗且使用与普通浏览不共享登录态的内存 session。静态传输限制 20 秒、浏览器渲染限制 30 秒，输出与每轮调用数继续受控；SSRF/内网地址拦截暂不在当前边界内。
 - **权限装配**：`tools/toolset.ts` 只按场景组合工具，不实现工具业务。普通会话获得完整工作区 + Bash + 网页 + 应用工具；Agent 私聊只获得工作区只读 + 网页只读工具。工具实现不得 import 编排器，Agent 运行时也不得直接拼装单个工具。
 - **定时任务应用工具**：`agentTools.ts` 的 `list_scheduled_tasks`、`create_scheduled_task`、`update_scheduled_task`、`delete_scheduled_task` 只作用于当前 Bot，创建目标固定为当前 chat；写入后重建本地调度。工具不会暴露跨 Bot 的修改权限，Agent 私聊不装配这些能力。
@@ -221,7 +238,7 @@ pi 的 Context 为可 JSON 序列化的 `{ role, content, timestamp }[]`。每�
 - `main/mockProvider.ts`：providers.kind='mock' 时 agentRuntime 短路进入 mock 路径，按 bot 名字模板生成确定性的流式假回复（分片 setTimeout 推送 text_delta，模拟真实节奏），支持 abort。
 - 价值：
   1. `npm run smoke` 在无网络、无 key 环境完成端到端验证：建 bot → 建群 → 发消息 → 收 mock 回复 → 记忆写入（SPEC §12）。
-  2. 群聊编排、记忆提取、停止/重试等逻辑可用 mock 做确定性集成测试（覆盖主动模式的新消息修订、顺序模式次序、`REPLY|SKIP` 与判断失败分支）。
+  2. 群聊编排、Jev Choice/置信度回退、记忆提取、停止/重试等逻辑可用 mock 做确定性集成测试（覆盖主动模式的新消息修订、顺序模式次序、`REPLY|SKIP` 与判断失败分支）。
   3. UI 开发不消耗真实 token。
 - 测试分层：DAO 单测（内存 SQLite）、orchestrator 状态机单测（注入假 agentRuntime）、冒烟脚本端到端。质量门禁：`tsc --noEmit` 与 `electron-vite build` 必须通过。
 
@@ -242,6 +259,6 @@ pi 的 Context 为可 JSON 序列化的 `{ role, content, timestamp }[]`。每�
 | API key 明文存储于 SQLite | 本机被入侵时密钥泄露 | v1 明确取舍并文档化：README 显著风险提示；后续迁移 Electron safeStorage（key 加密落库，内存解密）；渲染层列表默认掩码展示 |
 | 主动群并发导致成本增长 | 用户账单激增 | 每位成员先做轻量 `REPLY|SKIP` 判断；`@` 才强制回复；stopChat 一键中断。成员/轮次预算上限列入 ROADMAP，在实现前 UI 不宣称已有硬限制 |
 | 成员判断输出不稳定 | 漏回或意外回复 | 严格归一化 `REPLY|SKIP`；`@` 强制；判断失败转正式回复并将真实错误展示给用户；修订号丢弃过期结果 |
-| 长会话上下文超限 | 生成报错 | 群聊使用前文总结 + 最新 5 条消息，单聊历史限最近 30 条，记忆限 30 条；超长时按 token 预算从 oldest 侧截断 |
+| 长会话上下文超限 | 生成报错 | 单聊/群聊均可显式开始新话题，以累计摘要承接并切断旧原文；UI 在 40 条消息或跨日续聊时提醒。群聊另使用当前话题总结 + 最新 5 条消息，单聊限最近 30 条，记忆限 30 条；超长时按 token 预算从 oldest 侧截断 |
 | 记忆提取误记/隐私顾虑 | 用户信任受损 | Memory 面板全量可见、可删；自动提取失败静默且不阻塞主流程；手动记忆不被自动去重误删 |
 | 单写者阻塞（大消息流式落库 + UI 读取） | UI 卡顿 | WAL 模式读写并发；落库合并小事务；渲染端 delta 渲染做 rAF 节流 |

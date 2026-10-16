@@ -13,6 +13,7 @@ export type ProviderKind =
   | 'mock'
 
 export type ReasoningEffort = 'off' | 'low' | 'medium' | 'high' | 'xhigh'
+export type ResponseDecisionStrategy = 'auto' | 'llm' | 'jev'
 
 export interface Provider {
   id: string
@@ -34,6 +35,55 @@ export interface ProviderInput {
 }
 
 export type BotGender = 'female' | 'male'
+
+export type McpTransport = 'stdio' | 'http' | 'sse'
+export interface McpToolInfo { name: string; description: string }
+export interface McpServer {
+  id: string
+  name: string
+  transport: McpTransport
+  command: string
+  args: string[]
+  cwd: string
+  url: string
+  enabled: boolean
+  env_keys: string[]
+  header_keys: string[]
+  tools: McpToolInfo[]
+  last_checked_at: number | null
+  last_error: string
+}
+export interface McpServerInput {
+  id?: string
+  name: string
+  transport: McpTransport
+  command?: string
+  args?: string[]
+  cwd?: string
+  url?: string
+  enabled?: boolean
+  /** Omitted preserves stored values; an empty object clears them. */
+  env?: Record<string, string>
+  headers?: Record<string, string>
+}
+export interface InstalledSkill {
+  id: string
+  name: string
+  description: string
+  compatibility: string
+  source: string
+  enabled: boolean
+  file_count: number
+  updated_at: number
+}
+export interface BotExtensions {
+  mcpServerIds: string[]
+  skillIds: string[]
+}
+export interface ExtensionCatalog {
+  servers: McpServer[]
+  skills: InstalledSkill[]
+}
 
 export interface PresetAvatar {
   id: string
@@ -62,6 +112,7 @@ export interface Bot {
   temperature: number
   max_tokens: number
   reasoning_effort: ReasoningEffort
+  response_decision_strategy: ResponseDecisionStrategy
   workspace_dir: string
   notify: number
   is_coordinator: number
@@ -82,9 +133,30 @@ export interface BotInput {
   temperature?: number
   max_tokens?: number
   reasoning_effort?: ReasoningEffort
+  response_decision_strategy?: ResponseDecisionStrategy
   notify?: boolean
   is_coordinator?: boolean
   pinned?: boolean
+}
+
+export interface JevConfig {
+  has_api_key: boolean
+  model: string
+  confidence_threshold: number
+}
+
+export interface JevConfigInput {
+  /** Omitted preserves the stored key; an empty string clears it. */
+  api_key?: string
+  model?: string
+  confidence_threshold?: number
+}
+
+export interface TestJevResult {
+  ok: boolean
+  model?: string
+  latency_ms?: number
+  error?: string
 }
 
 export type ChatType = 'dm' | 'group'
@@ -145,7 +217,29 @@ export interface Message {
   mentions: string[]
   status: MessageStatus
   error: string
+  system_kind?: '' | 'topic_boundary'
   created_at: number
+}
+
+export interface ChatTopic {
+  id: string
+  chat_id: string
+  boundary_message_id: string
+  summary: string
+  previous_message_count: number
+  created_at: number
+}
+
+export interface ChatTopicState {
+  latest_topic: ChatTopic | null
+  current_message_count: number
+  last_message_at: number | null
+  suggestion_reason: 'long_context' | 'inactive' | null
+}
+
+export interface StartChatTopicResult {
+  topic: ChatTopic
+  marker: Message
 }
 
 export type MemoryKind = 'fact' | 'preference' | 'summary'
@@ -316,6 +410,7 @@ export type CovanEvent =
   | { type: 'bot-updated'; botId: string }
   | { type: 'workspace-updated'; botId: string }
   | { type: 'scheduled-tasks-updated'; taskId?: string }
+  | { type: 'extensions-updated'; botId?: string }
   | { type: 'system-message'; chatId: string; message: Message }
 
 export interface TestProviderResult {
@@ -336,6 +431,17 @@ export interface DiagnosticReport {
 }
 
 export interface CovanApi {
+  listExtensions(): Promise<ExtensionCatalog>
+  saveMcpServer(input: McpServerInput): Promise<McpServer>
+  deleteMcpServer(id: string): Promise<void>
+  testMcpServer(id: string): Promise<{ ok: boolean; tools: McpToolInfo[]; error?: string }>
+  pickSkillDirectory(): Promise<string | null>
+  installSkills(source: string, subdirectory?: string): Promise<InstalledSkill[]>
+  readInstalledSkill(id: string): Promise<{ content: string; files: string[] }>
+  setSkillEnabled(id: string, enabled: boolean): Promise<void>
+  deleteSkill(id: string): Promise<void>
+  getBotExtensions(botId: string): Promise<BotExtensions>
+  setBotExtensions(botId: string, config: BotExtensions): Promise<BotExtensions>
   getDiagnosticReport(reference: string): Promise<DiagnosticReport>
   analyzeDiagnostic(reference: string, botId: string): Promise<string>
   cancelDiagnostic(): Promise<void>
@@ -372,6 +478,9 @@ export interface CovanApi {
   deleteProvider(id: string): Promise<void>
   listProviderModels(id: string): Promise<string[]>
   testProvider(id: string): Promise<TestProviderResult>
+  getJevConfig(): Promise<JevConfig>
+  saveJevConfig(input: JevConfigInput): Promise<JevConfig>
+  testJev(): Promise<TestJevResult>
 
   listPresetAvatars(): Promise<PresetAvatar[]>
   listBots(): Promise<Bot[]>
@@ -414,6 +523,8 @@ export interface CovanApi {
     before?: number,
     limit?: number,
   ): Promise<Message[]>
+  getChatTopicState(chatId: string): Promise<ChatTopicState>
+  startChatTopic(chatId: string): Promise<StartChatTopicResult>
   sendUserMessage(
     chatId: string,
     content: string,

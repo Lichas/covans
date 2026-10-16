@@ -5,6 +5,7 @@ import path from 'node:path'
 import type {
   Attachment,
   BotInput,
+  JevConfigInput,
   MemoryKind,
   ProviderInput,
   ScheduledTaskInput,
@@ -20,7 +21,13 @@ import { CH } from '../shared/ipcChannels'
 import { isGroupBackground } from '../shared/groupBackgrounds'
 import * as db from './db'
 import { listProviderModels, testProviderConnection } from './agentRuntime'
-import { isTurnRunning, sendUserMessage, stopTurn } from './orchestrator'
+import {
+  getChatTopicState,
+  isTurnRunning,
+  sendUserMessage,
+  startChatTopic,
+  stopTurn,
+} from './orchestrator'
 import { refreshMemorySummaries } from './memory'
 import { registerContextIpc } from './contextIpc'
 import {
@@ -40,6 +47,8 @@ import {
 import { observabilityDirectory } from './observability'
 import { getDiagnosticReport, analyzeDiagnostic, cancelDiagnostic } from './diagnostics'
 import { observeScheduledTaskChange, refreshScheduledTasks, runScheduledTaskNow } from './scheduledTasks'
+import { registerExtensionIpc } from './extensions/ipc'
+import { getJevConfig, saveJevConfig, testJev } from './decisionStrategy'
 
 // ---------- 参数校验 ----------
 
@@ -80,6 +89,7 @@ function handle<TArgs extends unknown[], TRet>(
 // ---------- 注册 ----------
 
 export function registerIpc(): void {
+  registerExtensionIpc()
   handle(CH.importChatImage, (name: string, bytes: Uint8Array) => {
     assertStr(name, 'name')
     if (!(bytes instanceof Uint8Array) || bytes.byteLength > MAX_IMAGE_BYTES)
@@ -174,6 +184,9 @@ export function registerIpc(): void {
     if (!provider) throw new Error('Provider 不存在')
     return testProviderConnection(provider)
   })
+  handle(CH.getJevConfig, () => getJevConfig())
+  handle(CH.saveJevConfig, (input: JevConfigInput) => saveJevConfig(input))
+  handle(CH.testJev, () => testJev())
 
   // bots
   handle(CH.listPresetAvatars, () => listPresetAvatars())
@@ -370,6 +383,14 @@ export function registerIpc(): void {
     if (limit !== undefined && (typeof limit !== 'number' || limit <= 0))
       throw new Error('参数 limit 必须是正数')
     return db.listMessages(chatId, before, limit)
+  })
+  handle(CH.getChatTopicState, (chatId: string) => {
+    assertStr(chatId, 'chatId')
+    return getChatTopicState(chatId)
+  })
+  handle(CH.startChatTopic, async (chatId: string) => {
+    assertStr(chatId, 'chatId')
+    return startChatTopic(chatId)
   })
   handle(
     CH.sendUserMessage,

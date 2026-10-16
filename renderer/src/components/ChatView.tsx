@@ -6,7 +6,7 @@ import {
   useRef,
   useState,
 } from 'react'
-import type { Message } from '@shared/types'
+import type { ChatTopicState, Message } from '@shared/types'
 import { useBotMap } from '../stores/botsStore'
 import { useActiveChat } from '../stores/chatsStore'
 import { useMessagesStore } from '../stores/messagesStore'
@@ -21,6 +21,7 @@ import { MessageBubble } from './MessageBubble'
 import { chatDisplayName } from './Sidebar'
 import { Avatar } from './Avatar'
 import { WelcomeView } from './WelcomeView'
+import { Dialog } from './Dialog'
 import {
   AgentConversationCard,
   AgentConversationDialog,
@@ -30,6 +31,7 @@ import {
   ArrowDownIcon,
   DownloadIcon,
   GearIcon,
+  NewTopicIcon,
   ProviderIcon,
   SparkIcon,
   UserPlusIcon,
@@ -73,6 +75,10 @@ export function ChatView() {
   const [exportState, setExportState] = useState('')
   const [exporting, setExporting] = useState(false)
   const [privateId, setPrivateId] = useState<string | null>(null)
+  const [topicState, setTopicState] = useState<ChatTopicState | null>(null)
+  const [topicDialogOpen, setTopicDialogOpen] = useState(false)
+  const [topicStarting, setTopicStarting] = useState(false)
+  const [topicError, setTopicError] = useState('')
   const setInviteChatId = useUiStore((s) => s.setInviteChatId)
   const privateThreads = useAgentThreads(chat?.id)
   const messages = useMemo(() => {
@@ -96,8 +102,28 @@ export function ChatView() {
     setShowJump(false)
     setExportState('')
     setPrivateId(null)
+    setTopicState(null)
+    setTopicDialogOpen(false)
+    setTopicStarting(false)
+    setTopicError('')
     if (chat?.type === 'group') inspectBot(null)
   }, [chat?.id])
+
+  useEffect(() => {
+    if (!chat) return
+    let cancelled = false
+    void api
+      .getChatTopicState(chat.id)
+      .then((state) => {
+        if (!cancelled) setTopicState(state)
+      })
+      .catch(() => {
+        if (!cancelled) setTopicState(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [chat?.id, messages.length])
 
   useLayoutEffect(() => {
     const el = scrollRef.current
@@ -182,7 +208,13 @@ export function ChatView() {
               <UsersIcon width={19} height={19} />
             </span>
           ) : (
-            <Avatar name={title} avatar={bot?.avatar ?? ''} size={34} />
+            <Avatar
+              name={title}
+              avatar={bot?.avatar ?? ''}
+              size={34}
+              activity={generating}
+              className="chat-header-avatar"
+            />
           )}
           <div className="min-w-0">
             <h1 className="truncate text-[14px] font-semibold">{title}</h1>
@@ -211,6 +243,29 @@ export function ChatView() {
             onClick={() => setInviteChatId(chat.id)}
           >
             <UserPlusIcon width={17} height={17} />
+          </button>
+          <button
+            className="icon-button topic-header-action"
+            aria-label="开始新话题"
+            title={
+              topicState?.suggestion_reason
+                ? '当前上下文较长，开始新话题'
+                : '压缩上下文并开始新话题'
+            }
+            disabled={
+              generating ||
+              topicStarting ||
+              (topicState?.current_message_count ?? 0) === 0
+            }
+            onClick={() => {
+              setTopicError('')
+              setTopicDialogOpen(true)
+            }}
+          >
+            <NewTopicIcon width={17} height={17} />
+            {topicState?.suggestion_reason && (
+              <span className="topic-suggestion-dot" />
+            )}
           </button>
           <button
             className="icon-button"
@@ -401,11 +456,96 @@ export function ChatView() {
           </button>
         )}
       </div>
+      {topicState?.suggestion_reason && !generating && (
+        <div className="topic-suggestion" role="status">
+          <span>
+            {topicState.suggestion_reason === 'long_context'
+              ? '这段对话已经比较长了'
+              : '距离上次对话有一段时间了'}
+          </span>
+          <button
+            onClick={() => {
+              setTopicError('')
+              setTopicDialogOpen(true)
+            }}
+          >
+            <NewTopicIcon width={14} height={14} />
+            开始新话题
+          </button>
+        </div>
+      )}
       <Composer key={chat.id} chat={chat} />
       <AgentConversationDialog
         threadId={privateId}
         onClose={() => setPrivateId(null)}
       />
+      <Dialog
+        open={topicDialogOpen}
+        title="开始新话题"
+        width="w-[460px]"
+        onClose={() => {
+          if (!topicStarting) setTopicDialogOpen(false)
+        }}
+      >
+        <div className="topic-dialog-body">
+          <div className="topic-dialog-icon">
+            <NewTopicIcon width={20} height={20} />
+          </div>
+          <div>
+            <h3>压缩当前上下文</h3>
+            <p>
+              会保留全部聊天记录，并把此前
+              {topicState?.current_message_count ?? 0} 条消息压缩成摘要。之后的
+              Bot 回复只读取摘要和新话题消息。
+            </p>
+            <p>长期记忆、产物和定时任务不会被清除。</p>
+          </div>
+          {topicError && (
+            <div className="topic-dialog-error" role="alert">
+              {topicError}
+            </div>
+          )}
+          <div className="topic-dialog-actions">
+            <button
+              className="secondary-button"
+              disabled={topicStarting}
+              onClick={() => setTopicDialogOpen(false)}
+            >
+              取消
+            </button>
+            <button
+              className="primary-button"
+              disabled={topicStarting}
+              onClick={async () => {
+                setTopicStarting(true)
+                setTopicError('')
+                stickToBottom.current = true
+                try {
+                  const result = await api.startChatTopic(chat.id)
+                  await useMessagesStore.getState().loadMessages(chat.id)
+                  setTopicState(await api.getChatTopicState(chat.id))
+                  setTopicDialogOpen(false)
+                  requestAnimationFrame(() =>
+                    requestAnimationFrame(() =>
+                      document
+                        .querySelector(
+                          `[data-message-id="${CSS.escape(result.marker.id)}"]`,
+                        )
+                        ?.scrollIntoView({ behavior: 'smooth', block: 'center' }),
+                    ),
+                  )
+                } catch (error) {
+                  setTopicError(String(error))
+                } finally {
+                  setTopicStarting(false)
+                }
+              }}
+            >
+              {topicStarting ? '正在压缩…' : '压缩并开始'}
+            </button>
+          </div>
+        </div>
+      </Dialog>
     </section>
   )
 }

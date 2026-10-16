@@ -5,6 +5,7 @@ import { spawn } from 'node:child_process'
 import { Type } from '@earendil-works/pi-ai'
 import type { AgentTool } from '@earendil-works/pi-agent-core'
 import { ensureWorkspace, resolveWorkspaceFile } from '../workspace'
+import { getBotExtensions, skillRecord } from '../extensions/store'
 
 const DEFAULT_TIMEOUT_SECONDS = 30
 const MAX_TIMEOUT_SECONDS = 120
@@ -36,10 +37,10 @@ function sandboxString(value: string): string {
   return JSON.stringify(value)
 }
 
-function macSandboxProfile(workspace: string): string {
+function macSandboxProfile(workspace: string, skillDirectories: string[]): string {
   // Bash and dynamically linked executables need broad access to system files.
   // Deny file contents in user-owned roots, with the Bot workspace as the only
-  // exception. Metadata may still be inspected so normal path resolution works.
+  // exception besides explicitly equipped, read-only skill packages.
   const protectedRoots = new Set([
     fs.realpathSync(os.homedir()),
     '/Users',
@@ -50,7 +51,7 @@ function macSandboxProfile(workspace: string): string {
   const privateDataDenials = [...protectedRoots]
     .map(
       (root) =>
-        `(deny file-read-data (require-all (subpath ${sandboxString(root)}) (require-not (subpath ${sandboxString(workspace)}))))`,
+        `(deny file-read-data (require-all (subpath ${sandboxString(root)}) (require-not (subpath ${sandboxString(workspace)})) ${skillDirectories.map((dir) => `(require-not (subpath ${sandboxString(dir)}))`).join(' ')}))`,
     )
     .join('\n    ')
   return `(version 1)
@@ -123,6 +124,7 @@ async function runBash(
   cwd: string,
   workspace: string,
   timeoutSeconds: number,
+  skillDirectories: string[],
   signal?: AbortSignal,
 ): Promise<BashRunResult> {
   if (process.platform !== 'darwin') {
@@ -131,7 +133,7 @@ async function runBash(
   signal?.throwIfAborted()
   const args = [
     '-p',
-    macSandboxProfile(workspace),
+    macSandboxProfile(workspace, skillDirectories),
     '/bin/bash',
     '--noprofile',
     '--norc',
@@ -225,7 +227,7 @@ export function createBashTools(botId: string): AgentTool[] {
       name: 'bash',
       label: '运行 Bash 命令',
       description:
-        '在当前 Bot 的 macOS 工作区沙箱内运行非交互 Bash 命令。适合执行构建、测试和脚本；文件读写仅允许发生在工作区中。命令默认超时30秒，最长120秒，stdout/stderr各最多返回40KB。',
+        '在当前 Bot 的 macOS 工作区沙箱内运行非交互 Bash 命令。文件只能写入工作区，可只读访问当前启用的 Skill 包以执行其脚本。命令默认超时30秒，最长120秒，stdout/stderr各最多返回40KB。',
       parameters: Type.Object({
         command: Type.String({
           minLength: 1,
@@ -255,11 +257,17 @@ export function createBashTools(botId: string): AgentTool[] {
         const cwd = fs.realpathSync(resolveWorkspaceFile(botId, p.cwd || '.'))
         if (!fs.statSync(cwd).isDirectory()) throw new Error('cwd 必须是已有目录')
         const relCwd = path.relative(workspace, cwd).split(path.sep).join('/')
+        const skillDirectories = getBotExtensions(botId).skillIds.flatMap((id) => {
+          const skill = skillRecord(id)
+          if (!skill?.enabled) return []
+          try { return [fs.realpathSync(skill.directory)] } catch { return [] }
+        })
         const output = await runBash(
           p.command,
           cwd,
           workspace,
           p.timeout_seconds || DEFAULT_TIMEOUT_SECONDS,
+          skillDirectories,
           signal,
         )
         return {

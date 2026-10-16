@@ -6,6 +6,7 @@ interface Props {
   open: boolean
   title: string
   width?: string
+  bodyClassName?: string
   onClose: () => void
   children: React.ReactNode
 }
@@ -14,6 +15,7 @@ export function Dialog({
   open,
   title,
   width = 'w-[520px]',
+  bodyClassName,
   onClose,
   children,
 }: Props) {
@@ -101,7 +103,12 @@ export function Dialog({
             <CloseIcon width={18} height={18} />
           </button>
         </div>
-        <div className="scroll-thin max-h-[calc(85vh-52px)] overflow-y-auto">
+        <div
+          className={
+            bodyClassName ??
+            'scroll-thin max-h-[calc(85vh-52px)] overflow-y-auto'
+          }
+        >
           {children}
         </div>
       </div>

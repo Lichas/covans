@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { app, BrowserWindow, net, protocol } from 'electron'
+import { app, BrowserWindow, net, protocol, safeStorage } from 'electron'
 import type { CovanEvent } from '../shared/types'
 import { CH } from '../shared/ipcChannels'
 import { getDb, initDb } from './db'
@@ -22,11 +22,15 @@ import {
 } from './avatars'
 import { isGroupBackground } from '../shared/groupBackgrounds'
 import { startScheduledTasks, stopScheduledTasks } from './scheduledTasks'
+import { initExtensions } from './extensions/store'
+import { closeMcpSessions, configureMcpFetch } from './extensions/mcp'
+import { initResponseDecisionEngine } from './decisionStrategy'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const legacyUserData = app.getPath('userData')
 const configuredUserData = process.env.COVAN_USER_DATA_DIR
 const defaultUserData = path.join(os.homedir(), '.covans')
+const legacyDatabaseFile = 'legacy.db'
 
 // 测试可覆盖为临时目录；正常运行时应用数据和 Agent 工作区统一位于 ~/.covans。
 app.setPath('userData', configuredUserData || defaultUserData)
@@ -40,15 +44,21 @@ function prepareUserDataDir(userData: string): void {
   if (
     !configuredUserData &&
     legacyUserData !== userData &&
-    !fs.existsSync(path.join(userData, 'legacy.db')) &&
-    fs.existsSync(path.join(legacyUserData, 'legacy.db'))
+    !fs.existsSync(path.join(userData, 'covan.db')) &&
+    (fs.existsSync(path.join(legacyUserData, 'covan.db')) ||
+      fs.existsSync(path.join(legacyUserData, legacyDatabaseFile)))
   ) {
     try {
       fs.mkdirSync(userData, { recursive: true })
+      const sourceDatabaseFile = fs.existsSync(
+        path.join(legacyUserData, 'covan.db'),
+      )
+        ? 'covan.db'
+        : legacyDatabaseFile
       for (const name of [
-        'legacy.db',
-        'legacy.db-wal',
-        'legacy.db-shm',
+        sourceDatabaseFile,
+        `${sourceDatabaseFile}-wal`,
+        `${sourceDatabaseFile}-shm`,
         'avatars',
         'chat-images',
         'workspaces',
@@ -300,6 +310,32 @@ void app.whenReady().then(() => {
   initDb(userData)
   startMemorySummaries()
   initObservability(userData)
+  initResponseDecisionEngine({
+    codec: {
+      seal(value) {
+        if (
+          !safeStorage.isEncryptionAvailable() ||
+          (process.platform === 'linux' &&
+            safeStorage.getSelectedStorageBackend() === 'basic_text')
+        )
+          throw new Error('系统凭据加密不可用，无法保存 TypeSafe API Key')
+        return safeStorage.encryptString(value).toString('base64')
+      },
+      unseal: (value) =>
+        safeStorage.decryptString(Buffer.from(value, 'base64')),
+    },
+    fetch: (url, init) =>
+      net.fetch(url, { ...init, bypassCustomProtocolHandlers: true }),
+  })
+  initExtensions(userData, {
+    seal(value) {
+      if (!safeStorage.isEncryptionAvailable() || (process.platform === 'linux' && safeStorage.getSelectedStorageBackend() === 'basic_text'))
+        throw new Error('系统凭据加密不可用，无法保存 MCP 环境变量或请求头')
+      return safeStorage.encryptString(value).toString('base64')
+    },
+    unseal: (value) => safeStorage.decryptString(Buffer.from(value, 'base64')),
+  })
+  configureMcpFetch((input, init) => net.fetch(input instanceof URL ? input.href : input, { ...init, bypassCustomProtocolHandlers: true }))
   // A previous process may have exited during generation.
   // Recovery never resumes a network request automatically.
   getDb()
@@ -346,7 +382,12 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })
 
-app.on('before-quit', () => {
+let extensionsClosed = false
+app.on('before-quit', (event) => {
   stopMemorySummaries()
   stopScheduledTasks()
+  if (!extensionsClosed) {
+    event.preventDefault()
+    void closeMcpSessions().finally(() => { extensionsClosed = true; app.quit() })
+  }
 })

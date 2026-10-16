@@ -5,6 +5,7 @@ import type {
   ChatSummary,
   GroupReplyMode,
   ReasoningEffort,
+  ResponseDecisionStrategy,
 } from '@shared/types'
 import { useBotsStore } from '../stores/botsStore'
 import { useActiveChat, useChatsStore } from '../stores/chatsStore'
@@ -16,12 +17,13 @@ import { AvatarLifestyle } from './AvatarLifestyle'
 import { MemoryPanel } from './MemoryPanel'
 import { WorkspacePanel } from './WorkspacePanel'
 import { ScheduledTasksPanel } from './ScheduledTasksPanel'
+import { ExtensionsPanel } from './ExtensionsPanel'
 import { Field, Toggle, inputCls } from './controls'
 import { PencilIcon, ProviderIcon, UsersIcon } from './icons'
 import { MarkdownContent } from './MarkdownContent'
 import { GROUP_BACKGROUNDS, groupBackgroundUrl } from '../lib/groupBackground'
 
-type Tab = 'settings' | 'lifestyle' | 'memory' | 'workspace' | 'scheduled' | 'model'
+type Tab = 'settings' | 'lifestyle' | 'memory' | 'workspace' | 'scheduled' | 'model' | 'extensions'
 
 /** 失焦保存的文本输入 */
 function BotField({
@@ -421,6 +423,27 @@ function ModelTab({ bot }: { bot: Bot }) {
           }
           onSave={(v) => save({ model: v })}
         />
+        <Field label="响应决策策略">
+          <select
+            aria-label="响应决策策略"
+            className={inputCls}
+            value={bot.response_decision_strategy}
+            onChange={(event) =>
+              save({
+                response_decision_strategy: event.target
+                  .value as ResponseDecisionStrategy,
+              })
+            }
+          >
+            <option value="auto">自动 · Jev 可用时优先</option>
+            <option value="llm">传统 LLM · 当前模型判断</option>
+            <option value="jev">Jev · 结构化快速判断</option>
+          </select>
+          <p className="mt-1.5 text-[11px] leading-relaxed text-stone-400">
+            默认自动优先使用已配置的 Jev；未配置、低置信度或不可用时回退当前
+            LLM。回复正文仍使用上方模型。
+          </p>
+        </Field>
         <Field label="推理强度">
           <select
             aria-label="推理强度"
@@ -647,6 +670,7 @@ export function BotSettingsPanel() {
     { id: 'workspace', label: '工作区' },
     { id: 'scheduled', label: '定时' },
     { id: 'model', label: '模型' },
+    { id: 'extensions', label: '扩展' },
   ]
 
   return (
@@ -703,13 +727,13 @@ export function BotSettingsPanel() {
       />
 
       {/* Tabs */}
-      <div className="grid grid-cols-6 border-b border-stone-200 px-2 dark:border-stone-800">
+      <div className="grid grid-cols-7 border-b border-stone-200 px-2 dark:border-stone-800">
         {tabs.map((t) => (
           <button
             key={t.id}
             onClick={() => setTab(t.id)}
             aria-pressed={tab === t.id}
-            className={`relative min-w-0 whitespace-nowrap px-1.5 py-2.5 text-[12px] transition ${
+            className={`relative min-w-0 whitespace-nowrap px-0.5 py-2.5 text-[12px] transition ${
               tab === t.id
                 ? 'font-medium text-stone-800 dark:text-stone-100'
                 : 'text-stone-400 hover:text-stone-600 dark:hover:text-stone-300'
@@ -732,6 +756,7 @@ export function BotSettingsPanel() {
         {tab === 'workspace' && <WorkspacePanel botId={bot.id} />}
         {tab === 'scheduled' && <ScheduledTasksPanel bot={bot} chat={chat} />}
         {tab === 'model' && <ModelTab bot={bot} />}
+        {tab === 'extensions' && <ExtensionsPanel key={bot.id} botId={bot.id} />}
         {tab === 'lifestyle' && <AvatarLifestyle bot={bot} />}
       </div>
     </aside>

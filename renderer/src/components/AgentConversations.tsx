@@ -67,7 +67,12 @@ export function AgentConversationCard({
           avatar={from?.avatar || ''}
           size={28}
         />
-        <Avatar name={to?.name || '?'} avatar={to?.avatar || ''} size={28} />
+        <Avatar
+          name={to?.name || '?'}
+          avatar={to?.avatar || ''}
+          size={28}
+          activity={thread.status === 'running'}
+        />
       </span>
       <span className="min-w-0 flex-1">
         <strong>
@@ -170,6 +175,7 @@ export function AgentConversationDialog({
                     name={bot?.name || '?'}
                     avatar={bot?.avatar || ''}
                     size={32}
+                    activity={m.status === 'streaming'}
                   />
                   <div className="min-w-0 flex-1">
                     <div className="mb-2 flex items-center gap-2 text-[12px]">

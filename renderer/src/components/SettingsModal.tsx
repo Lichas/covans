@@ -1,12 +1,18 @@
 // components/SettingsModal.tsx — 设置弹窗：通用 / Provider 管理 / Bot
-import { useState } from 'react'
-import type { Provider, ProviderInput, ProviderKind } from '@shared/types'
+import { useEffect, useState } from 'react'
+import type {
+  JevConfig,
+  Provider,
+  ProviderInput,
+  ProviderKind,
+} from '@shared/types'
 import { useSettingsStore, type ThemeMode } from '../stores/settingsStore'
-import { useUiStore } from '../stores/uiStore'
+import { useUiStore, type SettingsSection } from '../stores/uiStore'
 import { Dialog } from './Dialog'
 import { AvatarSettingsSection } from './AvatarSettings'
 import { ScheduledTasksPanel } from './ScheduledTasksPanel'
 import { DebugPanel } from './DebugPanel'
+import { ExtensionsPanel } from './ExtensionsPanel'
 import { Field, Toggle, btnGhostCls, btnPrimaryCls, inputCls } from './controls'
 import {
   CheckIcon,
@@ -17,8 +23,17 @@ import {
   WarnIcon,
 } from './icons'
 import { getProviderPreset, PROVIDER_PRESETS } from '../lib/providers'
-
-type Section = 'general' | 'providers' | 'bot' | 'scheduled' | 'avatars' | 'debug'
+import { api } from '../lib/api'
+import {
+  BookOpen,
+  Bug,
+  Clock3,
+  Cpu,
+  Palette,
+  Plug,
+  Settings2,
+  Users,
+} from 'lucide-react'
 
 const PROVIDER_KINDS = PROVIDER_PRESETS
 
@@ -27,9 +42,7 @@ function GeneralSection() {
   const setTheme = useSettingsStore((s) => s.setTheme)
   const settings = useSettingsStore((s) => s.settings)
   const setSettingValue = useSettingsStore((s) => s.setSettingValue)
-  const openObservabilityLogs = useSettingsStore(
-    (s) => s.openObservabilityLogs,
-  )
+  const openObservabilityLogs = useSettingsStore((s) => s.openObservabilityLogs)
   const localObservability = settings['local_observability'] === '1'
   const options: { value: ThemeMode; label: string }[] = [
     { value: 'system', label: '跟随系统' },
@@ -65,7 +78,8 @@ function GeneralSection() {
               本地观测日志
             </div>
             <div className="mt-0.5 max-w-[380px] text-[11.5px] leading-relaxed text-stone-400">
-              记录模型、角色序列、长度、耗时、续发结果和错误分类；不记录聊天正文、提示词或 API Key。默认关闭。
+              记录模型、角色序列、长度、耗时、续发结果和错误分类；不记录聊天正文、提示词或
+              API Key。默认关闭。
             </div>
           </div>
           <Toggle
@@ -311,7 +325,8 @@ function ProviderForm({
       {form.kind === 'lm-studio' && (
         <div className="rounded-lg border border-violet-200 bg-violet-50/70 px-3 py-2.5 text-[11.5px] leading-relaxed text-violet-700 dark:border-violet-900 dark:bg-violet-950/30 dark:text-violet-300">
           <strong className="block">本地模型 · 无需 API Key</strong>
-          启动 LM Studio Local Server 后拉取模型。推理强度、温度和输出上限在每个 Bot 的模型配置中设置。
+          启动 LM Studio Local Server 后拉取模型。推理强度、温度和输出上限在每个
+          Bot 的模型配置中设置。
         </div>
       )}
       <Field label="默认模型">
@@ -542,55 +557,328 @@ function BotSection() {
           }
         />
       </div>
+      <JevConfigSection />
     </div>
+  )
+}
+
+function JevConfigSection() {
+  const [config, setConfig] = useState<JevConfig | null>(null)
+  const [apiKey, setApiKey] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [result, setResult] = useState<{ ok: boolean; text: string } | null>(
+    null,
+  )
+
+  useEffect(() => {
+    void api
+      .getJevConfig()
+      .then(setConfig)
+      .catch((error) => setResult({ ok: false, text: String(error) }))
+  }, [])
+
+  const save = async () => {
+    if (!config) return null
+    const saved = await api.saveJevConfig({
+      ...(apiKey.trim() ? { api_key: apiKey.trim() } : {}),
+      model: config.model,
+      confidence_threshold: config.confidence_threshold,
+    })
+    setApiKey('')
+    setConfig(saved)
+    return saved
+  }
+
+  const onSave = async () => {
+    setBusy(true)
+    setResult(null)
+    try {
+      await save()
+      setResult({ ok: true, text: 'Jev 配置已保存' })
+    } catch (error) {
+      setResult({ ok: false, text: String(error) })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const onTest = async () => {
+    setBusy(true)
+    setResult(null)
+    try {
+      await save()
+      const tested = await api.testJev()
+      setResult({
+        ok: tested.ok,
+        text: tested.ok
+          ? `连接成功 · ${tested.model ?? 'Jev'} · ${tested.latency_ms ?? 0}ms`
+          : tested.error ?? '连接失败',
+      })
+    } catch (error) {
+      setResult({ ok: false, text: String(error) })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <section className="space-y-3 border-t border-stone-200 pt-5 dark:border-stone-700">
+      <div>
+        <h4 className="text-[13px] font-medium text-stone-700 dark:text-stone-200">
+          Jev 决策引擎
+        </h4>
+        <p className="mt-1 max-w-[520px] text-[11.5px] leading-relaxed text-stone-400">
+          用于选择 Jev 策略的 Bot 判断是否发言和是否续发。Jev
+          只做结构化判断，正文仍由 Bot 当前模型生成；低置信度或服务不可用时回退传统
+          LLM。
+        </p>
+      </div>
+      {!config ? (
+        <div className="text-[12px] text-stone-400">正在读取配置…</div>
+      ) : (
+        <div className="space-y-3">
+          <Field label="TypeSafe API Key">
+            <div className="flex gap-2">
+              <input
+                aria-label="TypeSafe API Key"
+                className={`${inputCls} min-w-0 flex-1`}
+                type="password"
+                value={apiKey}
+                onChange={(event) => setApiKey(event.target.value)}
+                placeholder={
+                  config.has_api_key
+                    ? '已安全保存；留空保持不变'
+                    : '输入 TypeSafe API Key'
+                }
+              />
+              {config.has_api_key && (
+                <button
+                  type="button"
+                  className={btnGhostCls}
+                  disabled={busy}
+                  onClick={() => {
+                    setBusy(true)
+                    setResult(null)
+                    void api
+                      .saveJevConfig({ api_key: '' })
+                      .then((saved) => {
+                        setConfig(saved)
+                        setApiKey('')
+                        setResult({ ok: true, text: 'API Key 已清除' })
+                      })
+                      .catch((error) =>
+                        setResult({ ok: false, text: String(error) }),
+                      )
+                      .finally(() => setBusy(false))
+                  }}
+                >
+                  清除
+                </button>
+              )}
+            </div>
+          </Field>
+          <Field label="Jev 模型">
+            <input
+              aria-label="Jev 模型"
+              className={inputCls}
+              value={config.model}
+              onChange={(event) =>
+                setConfig({ ...config, model: event.target.value })
+              }
+              placeholder="jev-latest"
+            />
+          </Field>
+          <Field label={`低置信度回退阈值 · ${config.confidence_threshold.toFixed(2)}`}>
+            <input
+              aria-label="Jev 置信度阈值"
+              className="w-full accent-emerald-600"
+              type="range"
+              min={0.5}
+              max={0.95}
+              step={0.05}
+              value={config.confidence_threshold}
+              onChange={(event) =>
+                setConfig({
+                  ...config,
+                  confidence_threshold: Number(event.target.value),
+                })
+              }
+            />
+          </Field>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              className={btnPrimaryCls}
+              disabled={busy}
+              onClick={() => void onSave()}
+            >
+              {busy ? '处理中…' : '保存'}
+            </button>
+            <button
+              type="button"
+              className={btnGhostCls}
+              disabled={busy}
+              onClick={() => void onTest()}
+            >
+              测试连接
+            </button>
+          </div>
+          {result && (
+            <p
+              role={result.ok ? 'status' : 'alert'}
+              className={`text-[12px] ${result.ok ? 'text-emerald-600' : 'text-red-500'}`}
+            >
+              {result.text}
+            </p>
+          )}
+          <p className="text-[11px] leading-relaxed text-stone-400">
+            API Key 使用系统凭据加密，仅保存在本机；测试连接会发送一次小型请求并消耗服务额度。中文对话可用，但应按实际群聊校准阈值。
+          </p>
+        </div>
+      )}
+    </section>
   )
 }
 
 export function SettingsModal() {
   const open = useUiStore((s) => s.settingsOpen)
   const setOpen = useUiStore((s) => s.setSettingsOpen)
-  const [section, setSection] = useState<Section>('general')
+  const section = useUiStore((s) => s.settingsSection)
+  const setSection = useUiStore((s) => s.setSettingsSection)
 
-  const sections: { id: Section; label: string }[] = [
-    { id: 'general', label: '通用' },
-    { id: 'providers', label: 'Provider' },
-    { id: 'bot', label: 'Bot' },
-    { id: 'scheduled', label: '定时任务' },
-    { id: 'avatars', label: '头像生成' },
-    { id: 'debug', label: 'Debug' },
+  const groups: {
+    label: string
+    items: {
+      id: SettingsSection
+      label: string
+      description: string
+      icon: typeof Settings2
+    }[]
+  }[] = [
+    {
+      label: '个人与应用',
+      items: [
+        {
+          id: 'general',
+          label: '通用',
+          description: '外观、日志和应用偏好',
+          icon: Settings2,
+        },
+        {
+          id: 'providers',
+          label: 'Provider',
+          description: '模型服务与连接配置',
+          icon: Cpu,
+        },
+        {
+          id: 'bot',
+          label: 'Bot',
+          description: 'Bot 默认行为与对话策略',
+          icon: Users,
+        },
+        {
+          id: 'scheduled',
+          label: '定时任务',
+          description: '查看所有 Bot 的自动任务',
+          icon: Clock3,
+        },
+        {
+          id: 'avatars',
+          label: '头像生成',
+          description: '头像生成服务与偏好',
+          icon: Palette,
+        },
+      ],
+    },
+    {
+      label: '能力',
+      items: [
+        {
+          id: 'mcp',
+          label: 'MCP',
+          description: '安装和管理 MCP 工具服务',
+          icon: Plug,
+        },
+        {
+          id: 'skills',
+          label: 'Skills',
+          description: '安装和管理 Agent Skills',
+          icon: BookOpen,
+        },
+        {
+          id: 'debug',
+          label: 'Debug',
+          description: '查看本地观测与诊断报告',
+          icon: Bug,
+        },
+      ],
+    },
   ]
+  const current =
+    groups
+      .flatMap((group) => group.items)
+      .find((item) => item.id === section) ?? groups[0].items[0]
 
   return (
     <Dialog
       open={open}
       title="设置"
-      width="w-[560px]"
+      width="w-[900px]"
+      bodyClassName="overflow-hidden"
       onClose={() => setOpen(false)}
     >
-      <div className="flex shrink-0 overflow-x-auto border-b border-stone-200 px-4 dark:border-stone-700">
-        {sections.map((s) => (
-          <button
-            key={s.id}
-            onClick={() => setSection(s.id)}
-            className={`relative shrink-0 px-3 py-2.5 text-[13px] transition ${
-              section === s.id
-                ? 'font-medium text-stone-800 dark:text-stone-100'
-                : 'text-stone-400 hover:text-stone-600 dark:hover:text-stone-300'
-            }`}
-          >
-            {s.label}
-            {section === s.id && (
-              <span className="absolute inset-x-3 bottom-0 h-0.5 rounded-full bg-stone-700 dark:bg-stone-300" />
-            )}
-          </button>
-        ))}
+      <div className="flex h-[min(72vh,640px)] min-h-0">
+        <aside className="scroll-thin w-[190px] shrink-0 overflow-y-auto border-r border-stone-200 bg-stone-50/70 p-3 dark:border-stone-700 dark:bg-stone-900/30">
+          <nav aria-label="设置分类" className="space-y-5">
+            {groups.map((group) => (
+              <div key={group.label}>
+                <div className="mb-1 px-2 text-[10px] font-medium tracking-wide text-stone-400">
+                  {group.label}
+                </div>
+                <div className="space-y-0.5">
+                  {group.items.map((item) => {
+                    const Icon = item.icon
+                    const selected = section === item.id
+                    return (
+                      <button
+                        key={item.id}
+                        type="button"
+                        aria-current={selected ? 'page' : undefined}
+                        title={item.description}
+                        onClick={() => setSection(item.id)}
+                        className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] transition ${
+                          selected
+                            ? 'bg-white font-medium text-stone-800 shadow-sm dark:bg-stone-700 dark:text-stone-100'
+                            : 'text-stone-500 hover:bg-white/70 hover:text-stone-700 dark:text-stone-400 dark:hover:bg-stone-800 dark:hover:text-stone-200'
+                        }`}
+                      >
+                        <Icon size={15} strokeWidth={selected ? 2 : 1.8} />
+                        <span className="min-w-0 truncate">{item.label}</span>
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+            ))}
+          </nav>
+        </aside>
+        <main className="scroll-thin min-w-0 flex-1 overflow-y-auto">
+          <div className="border-b border-stone-200 px-7 py-5 dark:border-stone-700">
+            <h3 className="text-xl font-semibold tracking-tight text-stone-800 dark:text-stone-100">
+              {current.label}
+            </h3>
+            <p className="mt-1 text-xs text-stone-400">{current.description}</p>
+          </div>
+          {section === 'general' && <GeneralSection />}
+          {section === 'providers' && <ProvidersSection />}
+          {section === 'bot' && <BotSection />}
+          {section === 'scheduled' && <ScheduledTasksPanel global />}
+          {section === 'avatars' && <AvatarSettingsSection />}
+          {section === 'mcp' && <ExtensionsPanel section="mcp" />}
+          {section === 'skills' && <ExtensionsPanel section="skills" />}
+          {section === 'debug' && <DebugPanel />}
+        </main>
       </div>
-      {section === 'general' && <GeneralSection />}
-      {section === 'providers' && <ProvidersSection />}
-      {section === 'bot' && <BotSection />}
-      {section === 'scheduled' && <ScheduledTasksPanel global />}
-      {section === 'avatars' && <AvatarSettingsSection />}
-      {section === 'debug' && <DebugPanel />}
     </Dialog>
   )
 }

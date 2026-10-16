@@ -67,6 +67,18 @@ const server = http.createServer(async (req, res) => {
       if (diagnosisMode === 'partial') finishReason = 'length'
       if (diagnosisMode === 'network') finishReason = 'network_error'
     }
+    else if (
+      body.tools?.length &&
+      body.messages?.some(
+        (message) =>
+          message.role === 'user' &&
+          JSON.stringify(message.content).includes('COVAN_REASONING_ONLY_LIMIT'),
+      )
+    ) {
+      content = ''
+      reasoningOnly = true
+      finishReason = 'length'
+    }
     else if (system.includes('当前为 Agent 私聊'))
       content =
         '## 设计建议\n采用清晰层级与柔和留白。\n\n- 顶部只显示已置顶 Bot\n- 私聊放在轻量浮窗中'
@@ -828,6 +840,40 @@ try {
   assert.ok(persistedMemories.some((m) => m.content === '长期面板实时刷新测试' && m.layer === 'long'))
   assert.ok(!persistedMemories.some((m) => m.scene_id === memoryThread && m.content === '橙色的天空来自意大利'))
   console.log('✓ 双向私聊记忆、隔离、接收方跨会话模型输入、分层 UI、实时刷新和删除持久化')
+  const outputLimitMessageId = await page.evaluate(async (chatId) => {
+    await window.covan.sendUserMessage(chatId, 'COVAN_REASONING_ONLY_LIMIT', [])
+    return (await window.covan.listMessages(chatId)).findLast(
+      (message) => message.sender_type === 'bot',
+    )?.id
+  }, fixture.chats[2].id)
+  await expect.poll(() => page.evaluate(async ({ chatId, messageId }) =>
+    (await window.covan.listMessages(chatId)).find(
+      (message) => message.id === messageId,
+    )?.status,
+  { chatId: fixture.chats[2].id, messageId: outputLimitMessageId })).toBe('error')
+  const outputLimitMessage = await page.evaluate(
+    async ({ chatId, messageId }) =>
+      (await window.covan.listMessages(chatId)).find(
+        (message) => message.id === messageId,
+      ),
+    { chatId: fixture.chats[2].id, messageId: outputLimitMessageId },
+  )
+  assert.equal(outputLimitMessage.status, 'error')
+  assert.equal(outputLimitMessage.content, '')
+  assert.match(outputLimitMessage.error, /输出 Token 已达上限/)
+  const outputLimitReport = await page.evaluate(
+    (id) => window.covan.getDiagnosticReport(`covan-debug:v1:${id}`),
+    outputLimitMessage.id,
+  )
+  const outputLimitEvent = outputLimitReport.events.find(
+    (event) =>
+      event.event === 'agent.run.failed' &&
+      event.fields.error_code === 'output_limit',
+  )
+  assert.equal(outputLimitEvent.fields.stop_reason, 'length')
+  assert.equal(outputLimitEvent.fields.visible_output_chars, 0)
+  assert.ok(outputLimitEvent.fields.context_window_tokens > 0)
+  console.log('✓ Reasoning-only output exhaustion becomes a visible error instead of a blank completed message')
   assert.deepEqual(errors, [])
   const observationLog = fs.readFileSync(
     path.join(profile, 'logs', 'observability.jsonl'),

@@ -4,6 +4,7 @@ import { createAppTools } from '../agentTools'
 import { createWorkspaceTools } from '../workspace'
 import { createBashTools } from './bash'
 import { createWebTools } from './web'
+import { createExtensionManagementTools } from '../extensions/runtime'
 
 export interface AgentToolsetContext {
   botId: string
@@ -30,6 +31,7 @@ export function createAgentToolset(context: AgentToolsetContext): AgentTool[] {
     ...workspace,
     ...createBashTools(context.botId),
     ...createWebTools(),
+    ...createExtensionManagementTools(context.botId),
     ...createAppTools(
       context.botId,
       context.chatId,

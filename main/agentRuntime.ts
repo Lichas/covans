@@ -31,6 +31,7 @@ import type {
 import * as db from './db'
 import { mockComplete, mockStream } from './mockProvider'
 import { appendToolGuidance, createAgentToolset } from './tools/toolset'
+import { prepareBotExtensions } from './extensions/runtime'
 import { describeWorkspaceArtifact } from './workspace'
 import {
   classifyObservationError,
@@ -506,6 +507,42 @@ function payloadObservation(payload: unknown): ObservationFields {
   }
 }
 
+function ratio(value: number, total: number): number | null {
+  if (!Number.isFinite(value) || !Number.isFinite(total) || total <= 0)
+    return null
+  return Math.round((value / total) * 10_000) / 10_000
+}
+
+function tokenUsageObservation(
+  inputTokens: number,
+  outputTokens: number,
+  reasoningTokens: number | null,
+  contextWindowTokens: number,
+  maxTokens: number,
+  visibleOutputChars: number,
+): ObservationFields {
+  return {
+    input_tokens: inputTokens,
+    output_tokens: outputTokens,
+    reasoning_tokens: reasoningTokens,
+    context_window_tokens: contextWindowTokens,
+    max_tokens: maxTokens,
+    input_context_ratio: ratio(inputTokens, contextWindowTokens),
+    output_budget_ratio: ratio(outputTokens, maxTokens),
+    reasoning_output_ratio:
+      reasoningTokens === null ? null : ratio(reasoningTokens, outputTokens),
+    visible_output_chars: visibleOutputChars,
+  }
+}
+
+function emptyModelResponseError(stopReason: string | undefined): Error {
+  if (stopReason === 'length')
+    return new Error(
+      '输出 Token 已达上限，且未生成可显示正文；请提高最大输出 Token 或降低推理强度',
+    )
+  return new Error('模型未返回可显示正文，请重试或切换模型')
+}
+
 async function runMockAgent(
   bot: Bot,
   historyMessages: PiMessage[],
@@ -552,213 +589,264 @@ async function runPiAgent(
       '当前模型不支持图片输入，请在 Bot 设置中切换到支持视觉的模型',
     )
   const effort = reasoningLevel(bot.reasoning_effort)
-  const tools = createAgentToolset({
-    botId: bot.id,
-    chatId,
-    signal,
-    privateConversation: opts.privateConversation,
-    onImages: callbacks.onImages,
+  const extensions = opts.privateConversation ? null : await prepareBotExtensions(bot.id, signal, {
+    chat_id: chatId, bot_id: bot.id, message_id: opts.messageId ?? '',
+    ...(opts.traceId ? { trace_id: opts.traceId } : {}),
+    ...(opts.taskId ? { scheduled_task_id: opts.taskId } : {}),
   })
-  const systemPrompt = appendToolGuidance(
-    applyLmStudioReasoningHint(
-      provider,
-      opts.systemPrompt ?? bot.system_prompt,
-      bot.reasoning_effort,
-    ),
-    tools,
-  )
-  const promptMessage = historyMessages.at(-1)
-  if (!promptMessage || promptMessage.role === 'assistant')
-    throw new Error('生成历史最后一条必须是 user 或 toolResult 消息')
-  observeRun('agent.run.started', {
-    chat_id: chatId,
-    bot_id: bot.id,
-    provider_kind: provider.kind,
-    model: model.id,
-    ...historyObservation(historyMessages),
-  })
-  const agent = new Agent({
-    initialState: {
-      systemPrompt,
-      model,
-      tools,
-      thinkingLevel: effort,
-      // 把最后一条用户输入作为本轮显式 prompt，而不是依赖 provider
-      // 从预填历史中推断 query；部分 LM Studio Jinja 模板不支持后者。
-      messages: historyMessages.slice(0, -1),
-    },
-    streamFn: (m, context, options) =>
-      models.streamSimple(m, context, {
-        ...options,
-        // Kimi k3 rejects any explicit temperature other than 1.
-        temperature:
-          provider.kind === 'kimi' && m.id === 'k3' ? 1 : bot.temperature,
-        maxTokens: bot.max_tokens,
-      }),
-    sessionId: `${chatId}:${bot.id}`,
-    getApiKey: async () => apiKey || undefined,
-    onPayload: (payload) => {
-      requestStartedAt = Date.now()
-      observeRun('provider.payload.ready', {
-        request_index: ++requestIndex,
-        chat_id: chatId,
-        bot_id: bot.id,
-        provider_kind: provider.kind,
-        model: model.id,
-        ...payloadObservation(payload),
-      })
-      return undefined
-    },
-    onResponse: (response) => {
-      observeRun('provider.response.received', {
-        request_index: requestIndex,
-        chat_id: chatId,
-        bot_id: bot.id,
-        provider_kind: provider.kind,
-        model: model.id,
-        status: response.status,
-        duration_ms: Date.now() - requestStartedAt,
-      })
-    },
-  })
-
-  let acc = ''
-  const assistants: AssistantMessage[] = []
-  let sawError: string | null = null
-  const toolCalls = new Map<string, { startedAt: number; index: number }>()
-  let toolIndex = 0
-  let firstDelta = false
-  let firstThinking = false
-  const unsub = agent.subscribe((event) => {
-    if (event.type === 'message_update' && event.assistantMessageEvent.type === 'thinking_delta' && !firstThinking) {
-      firstThinking = true
-      observeRun('agent.first_thinking', { duration_ms: Date.now() - startedAt })
-    }
-    if (event.type === 'tool_execution_start') {
-      const call = { startedAt: Date.now(), index: ++toolIndex }
-      toolCalls.set(event.toolCallId, call)
-      let inputChars = 0
-      try { inputChars = JSON.stringify(event.args ?? '').length } catch { /* Measure metadata only. */ }
-      observeRun('tool.started', { tool_name: event.toolName, tool_index: call.index, input_chars: inputChars })
-    }
-    if (event.type === 'tool_execution_end') {
-      const call = toolCalls.get(event.toolCallId)
-      const errorText = event.isError && Array.isArray(event.result?.content)
-        ? event.result.content.filter((part: { type?: string; text?: string }) => part?.type === 'text').map((part: { text?: string }) => part.text ?? '').join(' ')
-        : ''
-      const resultChars = Array.isArray(event.result?.content)
-        ? event.result.content.reduce((total: number, part: { type?: string; text?: string }) => total + (part?.type === 'text' ? part.text?.length ?? 0 : 0), 0)
-        : 0
-      observeRun('tool.completed', {
-        tool_name: event.toolName,
-        tool_index: call?.index ?? null,
-        is_error: event.isError,
-        ...(event.isError ? { error_code: classifyObservationError(errorText || 'tool_error') } : {}),
-        duration_ms: Date.now() - (call?.startedAt ?? Date.now()),
-        result_chars: resultChars,
-        ...(event.isError ? { error_status: observationErrorStatus(errorText) } : {}),
-      })
-      toolCalls.delete(event.toolCallId)
-    }
-    if (
-      event.type === 'message_update' &&
-      event.assistantMessageEvent.type === 'text_delta'
-    ) {
-      acc += event.assistantMessageEvent.delta
-      if (!firstDelta) {
-        firstDelta = true
-        observeRun('agent.first_text', { duration_ms: Date.now() - startedAt })
-      }
-      callbacks.onDelta(event.assistantMessageEvent.delta)
-    } else if (event.type === 'message_end') {
-      const m = event.message
-      if (m.role === 'assistant') {
-        assistants.push(m)
-        observeRun('agent.step.completed', { stop_reason: m.stopReason, input_tokens: m.usage.input, output_tokens: m.usage.output, reasoning_tokens: m.usage.reasoning ?? null, total_tokens: m.usage.totalTokens })
-      }
-    } else if (
-      event.type === 'tool_execution_end' &&
-      !event.isError &&
-      (event.toolName === 'workspace_write' ||
-        event.toolName === 'workspace_edit')
-    ) {
-      const relPath = event.result?.details?.path
-      if (typeof relPath === 'string') {
-        try {
-          callbacks.onArtifact?.(
-            describeWorkspaceArtifact(
-              bot.id,
-              relPath,
-              event.toolName === 'workspace_edit' ? 'edit' : 'write',
-            ),
-          )
-        } catch {
-          // 工具结果已经成功返回；卡片元数据读取失败不应中断 Agent 回复。
-        }
-      }
-    } else if (
-      event.type === 'tool_execution_end' &&
-      !event.isError &&
-      event.toolName === 'bash'
-    ) {
-      callbacks.onWorkspaceChanged?.()
-    }
-  })
-  const onAbort = () => agent.abort()
-  signal.addEventListener('abort', onAbort, { once: true })
-
   try {
-    if (signal.aborted) return
-    await agent.prompt(promptMessage)
-  } catch (e) {
-    sawError = e instanceof Error ? e.message : String(e)
-  } finally {
-    unsub()
-    signal.removeEventListener('abort', onAbort)
-  }
+    const tools = createAgentToolset({
+      botId: bot.id,
+      chatId,
+      signal,
+      privateConversation: opts.privateConversation,
+      onImages: callbacks.onImages,
+    })
+    tools.push(...(extensions?.tools ?? []))
+    const systemPrompt = appendToolGuidance(
+      applyLmStudioReasoningHint(
+        provider,
+        [opts.systemPrompt ?? bot.system_prompt, extensions?.guidance].filter(Boolean).join('\n\n'),
+        bot.reasoning_effort,
+      ),
+      tools,
+    )
+    const promptMessage = historyMessages.at(-1)
+    if (!promptMessage || promptMessage.role === 'assistant')
+      throw new Error('生成历史最后一条必须是 user 或 toolResult 消息')
+    observeRun('agent.run.started', {
+      chat_id: chatId,
+      bot_id: bot.id,
+      provider_kind: provider.kind,
+      model: model.id,
+      context_window_tokens: model.contextWindow,
+      max_tokens: bot.max_tokens,
+      reasoning: bot.reasoning_effort,
+      ...historyObservation(historyMessages),
+    })
+    const agent = new Agent({
+      initialState: {
+        systemPrompt,
+        model,
+        tools,
+        thinkingLevel: effort,
+        // 把最后一条用户输入作为本轮显式 prompt，而不是依赖 provider
+        // 从预填历史中推断 query；部分 LM Studio Jinja 模板不支持后者。
+        messages: historyMessages.slice(0, -1),
+      },
+      streamFn: (m, context, options) =>
+        models.streamSimple(m, context, {
+          ...options,
+          // Kimi k3 rejects any explicit temperature other than 1.
+          temperature:
+            provider.kind === 'kimi' && m.id === 'k3' ? 1 : bot.temperature,
+          maxTokens: bot.max_tokens,
+        }),
+      sessionId: `${chatId}:${bot.id}`,
+      getApiKey: async () => apiKey || undefined,
+      onPayload: (payload) => {
+        requestStartedAt = Date.now()
+        observeRun('provider.payload.ready', {
+          request_index: ++requestIndex,
+          chat_id: chatId,
+          bot_id: bot.id,
+          provider_kind: provider.kind,
+          model: model.id,
+          ...payloadObservation(payload),
+        })
+        return undefined
+      },
+      onResponse: (response) => {
+        observeRun('provider.response.received', {
+          request_index: requestIndex,
+          chat_id: chatId,
+          bot_id: bot.id,
+          provider_kind: provider.kind,
+          model: model.id,
+          status: response.status,
+          duration_ms: Date.now() - requestStartedAt,
+        })
+      },
+    })
 
-  const lastAssistant: AssistantMessage | undefined = assistants.at(-1)
-  if (signal.aborted || lastAssistant?.stopReason === 'aborted') {
-    observeRun('agent.run.aborted', { duration_ms: Date.now() - startedAt, partial_chars: acc.length })
-    return
-  }
-  if (sawError) {
-    observeRun('agent.run.failed', {
+    let acc = ''
+    const assistants: AssistantMessage[] = []
+    let sawError: string | null = null
+    const toolCalls = new Map<string, { startedAt: number; index: number }>()
+    let toolIndex = 0
+    let firstDelta = false
+    let firstThinking = false
+    const unsub = agent.subscribe((event) => {
+      if (event.type === 'message_update' && event.assistantMessageEvent.type === 'thinking_delta' && !firstThinking) {
+        firstThinking = true
+        observeRun('agent.first_thinking', { duration_ms: Date.now() - startedAt })
+      }
+      if (event.type === 'tool_execution_start') {
+        const call = { startedAt: Date.now(), index: ++toolIndex }
+        toolCalls.set(event.toolCallId, call)
+        let inputChars = 0
+        try { inputChars = JSON.stringify(event.args ?? '').length } catch { /* Measure metadata only. */ }
+        observeRun('tool.started', { tool_name: event.toolName, tool_index: call.index, input_chars: inputChars })
+      }
+      if (event.type === 'tool_execution_end') {
+        const call = toolCalls.get(event.toolCallId)
+        const errorText = event.isError && Array.isArray(event.result?.content)
+          ? event.result.content.filter((part: { type?: string; text?: string }) => part?.type === 'text').map((part: { text?: string }) => part.text ?? '').join(' ')
+          : ''
+        const resultChars = Array.isArray(event.result?.content)
+          ? event.result.content.reduce((total: number, part: { type?: string; text?: string }) => total + (part?.type === 'text' ? part.text?.length ?? 0 : 0), 0)
+          : 0
+        observeRun('tool.completed', {
+          tool_name: event.toolName,
+          tool_index: call?.index ?? null,
+          is_error: event.isError,
+          ...(event.isError ? { error_code: classifyObservationError(errorText || 'tool_error') } : {}),
+          duration_ms: Date.now() - (call?.startedAt ?? Date.now()),
+          result_chars: resultChars,
+          ...(event.isError ? { error_status: observationErrorStatus(errorText) } : {}),
+        })
+        toolCalls.delete(event.toolCallId)
+      }
+      if (
+        event.type === 'message_update' &&
+        event.assistantMessageEvent.type === 'text_delta'
+      ) {
+        acc += event.assistantMessageEvent.delta
+        if (!firstDelta) {
+          firstDelta = true
+          observeRun('agent.first_text', { duration_ms: Date.now() - startedAt })
+        }
+        callbacks.onDelta(event.assistantMessageEvent.delta)
+      } else if (event.type === 'message_end') {
+        const m = event.message
+        if (m.role === 'assistant') {
+          assistants.push(m)
+          observeRun('agent.step.completed', {
+            stop_reason: m.stopReason,
+            total_tokens: m.usage.totalTokens,
+            ...tokenUsageObservation(
+              m.usage.input,
+              m.usage.output,
+              m.usage.reasoning ?? null,
+              model.contextWindow,
+              bot.max_tokens,
+              contentText(m.content).length,
+            ),
+          })
+        }
+      } else if (
+        event.type === 'tool_execution_end' &&
+        !event.isError &&
+        (event.toolName === 'workspace_write' ||
+          event.toolName === 'workspace_edit')
+      ) {
+        const relPath = event.result?.details?.path
+        if (typeof relPath === 'string') {
+          try {
+            callbacks.onArtifact?.(
+              describeWorkspaceArtifact(
+                bot.id,
+                relPath,
+                event.toolName === 'workspace_edit' ? 'edit' : 'write',
+              ),
+            )
+          } catch {
+            // 工具结果已经成功返回；卡片元数据读取失败不应中断 Agent 回复。
+          }
+        }
+      } else if (
+        event.type === 'tool_execution_end' &&
+        !event.isError &&
+        event.toolName === 'bash'
+      ) {
+        callbacks.onWorkspaceChanged?.()
+      }
+    })
+    const onAbort = () => agent.abort()
+    signal.addEventListener('abort', onAbort, { once: true })
+
+    try {
+      if (signal.aborted) return
+      await agent.prompt(promptMessage)
+    } catch (e) {
+      sawError = e instanceof Error ? e.message : String(e)
+    } finally {
+      unsub()
+      signal.removeEventListener('abort', onAbort)
+    }
+
+    const lastAssistant: AssistantMessage | undefined = assistants.at(-1)
+    if (signal.aborted || lastAssistant?.stopReason === 'aborted') {
+      observeRun('agent.run.aborted', { duration_ms: Date.now() - startedAt, partial_chars: acc.length })
+      return
+    }
+    if (sawError) {
+      observeRun('agent.run.failed', {
+        chat_id: chatId,
+        bot_id: bot.id,
+        provider_kind: provider.kind,
+        model: model.id,
+        duration_ms: Date.now() - startedAt,
+        error_code: classifyObservationError(sawError),
+        error_status: observationErrorStatus(sawError),
+      })
+      callbacks.onError(sawError)
+      return
+    }
+    if (lastAssistant && lastAssistant.stopReason === 'error') {
+      observeRun('agent.run.failed', {
+        chat_id: chatId,
+        bot_id: bot.id,
+        provider_kind: provider.kind,
+        model: model.id,
+        duration_ms: Date.now() - startedAt,
+        error_code: classifyObservationError(lastAssistant.errorMessage),
+        error_status: observationErrorStatus(lastAssistant.errorMessage),
+      })
+      callbacks.onError(lastAssistant.errorMessage || '生成失败')
+      return
+    }
+    const full = acc || (lastAssistant ? contentText(lastAssistant.content) : '')
+    const terminalUsage = lastAssistant
+      ? tokenUsageObservation(
+          lastAssistant.usage.input,
+          lastAssistant.usage.output,
+          lastAssistant.usage.reasoning ?? null,
+          model.contextWindow,
+          bot.max_tokens,
+          full.length,
+        )
+      : {}
+    if (!full.trim()) {
+      const error = emptyModelResponseError(lastAssistant?.stopReason)
+      observeRun('agent.run.failed', {
+        chat_id: chatId,
+        bot_id: bot.id,
+        provider_kind: provider.kind,
+        model: model.id,
+        duration_ms: Date.now() - startedAt,
+        output_chars: 0,
+        stop_reason: lastAssistant?.stopReason ?? 'unknown',
+        error_code: classifyObservationError(error),
+        ...terminalUsage,
+      })
+      callbacks.onError(error.message)
+      return
+    }
+    observeRun('agent.run.completed', {
       chat_id: chatId,
       bot_id: bot.id,
       provider_kind: provider.kind,
       model: model.id,
       duration_ms: Date.now() - startedAt,
-      error_code: classifyObservationError(sawError),
-      error_status: observationErrorStatus(sawError),
+      output_chars: full.length,
+      stop_reason: lastAssistant?.stopReason ?? 'unknown',
+      ...terminalUsage,
     })
-    callbacks.onError(sawError)
-    return
+    callbacks.onDone(full)
+  } finally {
+    await extensions?.close()
   }
-  if (lastAssistant && lastAssistant.stopReason === 'error') {
-    observeRun('agent.run.failed', {
-      chat_id: chatId,
-      bot_id: bot.id,
-      provider_kind: provider.kind,
-      model: model.id,
-      duration_ms: Date.now() - startedAt,
-      error_code: classifyObservationError(lastAssistant.errorMessage),
-      error_status: observationErrorStatus(lastAssistant.errorMessage),
-    })
-    callbacks.onError(lastAssistant.errorMessage || '生成失败')
-    return
-  }
-  const full = acc || (lastAssistant ? contentText(lastAssistant.content) : '')
-  observeRun('agent.run.completed', {
-    chat_id: chatId,
-    bot_id: bot.id,
-    provider_kind: provider.kind,
-    model: model.id,
-    duration_ms: Date.now() - startedAt,
-    output_chars: full.length,
-    stop_reason: lastAssistant?.stopReason ?? 'unknown',
-  })
-  callbacks.onDone(full)
 }
 
 // ---------- 非流式 completion（成员回复判断 / 记忆提取 / testProvider） ----------
@@ -856,9 +944,18 @@ export async function completeOnce(
       stop_reason: metadata.stopReason, input_tokens: metadata.inputTokens,
       output_tokens: metadata.outputTokens, reasoning_tokens: metadata.reasoningTokens,
       output_chars: metadata.outputChars,
+      ...tokenUsageObservation(
+        metadata.inputTokens,
+        metadata.outputTokens,
+        metadata.reasoningTokens,
+        model.contextWindow,
+        options.maxTokens ?? bot.max_tokens,
+        metadata.outputChars,
+      ),
     })
     if (msg.stopReason === 'error') throw new Error(msg.errorMessage || '调用失败')
     if (msg.stopReason === 'aborted') observe('completion.aborted', { ...callScope, duration_ms: Date.now() - startedAt })
+    if (!result.trim()) throw emptyModelResponseError(msg.stopReason)
     return result
   } catch (error) {
     if (options.signal?.aborted) {
@@ -900,6 +997,7 @@ export async function testProviderConnection(
       temperature: 0.7,
       max_tokens: 8192,
       reasoning_effort: 'medium',
+      response_decision_strategy: 'llm',
       workspace_dir: '',
       notify: 0,
       is_coordinator: 0,

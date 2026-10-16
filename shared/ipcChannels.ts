@@ -1,5 +1,16 @@
 // shared/ipcChannels.ts — IPC 通道名常量（主/preload 共用）
 export const CH = {
+  listExtensions: 'extensions:list',
+  saveMcpServer: 'extensions:mcp:save',
+  deleteMcpServer: 'extensions:mcp:delete',
+  testMcpServer: 'extensions:mcp:test',
+  pickSkillDirectory: 'extensions:skills:pick',
+  installSkills: 'extensions:skills:install',
+  readInstalledSkill: 'extensions:skills:read',
+  setSkillEnabled: 'extensions:skills:enabled',
+  deleteSkill: 'extensions:skills:delete',
+  getBotExtensions: 'extensions:bot:get',
+  setBotExtensions: 'extensions:bot:set',
   getDiagnosticReport: 'debug:report',
   analyzeDiagnostic: 'debug:analyze',
   cancelDiagnostic: 'debug:cancel',
@@ -25,6 +36,9 @@ export const CH = {
   deleteProvider: 'providers:delete',
   listProviderModels: 'providers:listModels',
   testProvider: 'providers:test',
+  getJevConfig: 'decision:jev:get',
+  saveJevConfig: 'decision:jev:save',
+  testJev: 'decision:jev:test',
 
   listPresetAvatars: 'bots:listPresetAvatars',
   listBots: 'bots:list',
@@ -47,6 +61,8 @@ export const CH = {
   writeClipboard: 'clipboard:write',
 
   listMessages: 'messages:list',
+  getChatTopicState: 'messages:topicState',
+  startChatTopic: 'messages:startTopic',
   sendUserMessage: 'messages:sendUser',
   stopChat: 'messages:stop',
 

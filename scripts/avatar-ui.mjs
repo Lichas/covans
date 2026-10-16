@@ -405,7 +405,7 @@ try {
       .getBuiltinModule('module')
       .createRequire(app.getAppPath() + '/package.json')
     const Database = req('better-sqlite3')
-    const db = new Database(app.getPath('userData') + '/legacy.db')
+    const db = new Database(app.getPath('userData') + '/covan.db')
     db.exec('ALTER TABLE bots DROP COLUMN gender')
     db.close()
   })

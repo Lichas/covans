@@ -124,7 +124,7 @@ try {
       const req = createRequire(root + '/package.json')
       const Database = req('better-sqlite3')
       const database = new Database(
-        homedir() + '/.covans/legacy.db',
+        homedir() + '/.covans/covan.db',
         { readonly: true },
       )
       try {
@@ -308,7 +308,7 @@ try {
           id,
           '',
           [],
-          [{ path: '../legacy.db', name: 'bad.png', mime: 'image/png' }],
+          [{ path: '../covan.db', name: 'bad.png', mime: 'image/png' }],
         )
         return false
       } catch {

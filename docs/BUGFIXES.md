@@ -2,6 +2,13 @@
 
 这里只记录值得长期保留的缺陷知识：症状、根因、修复和防回归方式。面向用户的变化写入根目录 `CHANGELOG.md`，不在这里重复发布说明。
 
+## 2026-09-20 · 推理耗尽输出预算后生成空白消息
+
+- **症状**：群聊连续出现多个空白 Bot 气泡，消息被标记为完成；部分成员长时间停留在“正在回复”。用户怀疑输入上下文溢出。
+- **根因**：真实观测日志中 227 次 Agent 完成有 24 次空正文，全部为 `stop_reason=length`；最近请求输入约 7.8k–12.5k Token，远低于 128k 上下文，但 DeepSeek 实验模型将 4096/9096 输出 Token 全部用于 reasoning，未生成可见正文。运行时只检查 Provider error，没有拒绝 `length + 空正文`，因此错误调用了完成回调。32 Token 的群聊判断也会被推理耗尽。
+- **修复**：主 Agent 遇到空正文时按停止原因标记 `output_limit` 或 `empty_response`，消息进入失败状态并可靠结束回复指示；已有部分正文时继续保留。群聊和续发的轻量 LLM 判断关闭推理。Bot 默认策略改为自动，在 TypeSafe Jev 已配置时优先 Jev，失败仍回退 LLM。观测事件增加上下文窗口/占比、输出预算占比、推理占比和可见字符数。
+- **回归**：`test:context` 用 loopback Provider 模拟 reasoning-only + length，断言不再生成 `done` 空消息、错误可见且 Debug 报告包含 `output_limit` 和预算字段；`smoke` 验证自动策略优先 Jev且低置信度回退；`typecheck`、`test:ui` 覆盖共享契约和策略选择 UI。
+
 ## 2026-09-15 · Debug 分析失败只显示 provider_error
 
 - **症状**：原回复已经正常结束，但 Debug 分析失败，界面只显示层叠的 IPC 错误和 `provider_error`，无法区分是哪次调用、哪个模型以及失败阶段。

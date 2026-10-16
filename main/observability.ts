@@ -35,7 +35,7 @@ function safeFields(fields: ObservationFields): ObservationFields {
   return Object.fromEntries(
     Object.entries(fields).map(([key, value]) => [
       key,
-      typeof value === 'string' && /(?:^|_)(?:chat|bot|message|trace|task|scheduled_task)_?id$/i.test(key)
+      typeof value === 'string' && /(?:^|_)(?:chat|bot|message|trace|task|scheduled_task|server|skill)_?id$/i.test(key)
         ? anonymizeId(value)
         : value,
     ]),
@@ -91,6 +91,8 @@ export function classifyObservationError(error: unknown): string {
   if (/connection error|fetch failed|network_error|ECONN|ENOTFOUND|EAI_AGAIN|socket|network connection/i.test(message)) return 'network_error'
   if (/未配置|找不到模型|未设置.*模型/i.test(message)) return 'model_configuration'
   if (/\b404\b|model.*(?:not found|does not exist)/i.test(message)) return 'model_not_found'
+  if (/output.*(?:token|limit|budget)|(?:输出|推理).*(?:token|上限|预算)|未生成可显示正文/i.test(message)) return 'output_limit'
+  if (/empty.response|未返回可显示正文/i.test(message)) return 'empty_response'
   if (/context.*(?:length|limit)|too many tokens/i.test(message)) return 'context_limit'
   if (/\b400\b|\b422\b|unsupported.*(?:parameter|value)|invalid.*(?:parameter|request)/i.test(message)) return 'invalid_request'
   if (/\b50[0234]\b|overloaded|service unavailable/i.test(message)) return 'service_unavailable'

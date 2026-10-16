@@ -110,7 +110,7 @@ try {
       const { createRequire } = process.getBuiltinModule('module')
       const req = createRequire(app.getAppPath() + '/package.json')
       const Database = req('better-sqlite3')
-      const db = new Database(app.getPath('userData') + '/legacy.db')
+      const db = new Database(app.getPath('userData') + '/covan.db')
       const insert = db.prepare(
         'INSERT INTO messages(id, chat_id, sender_type, sender_bot_id, content, created_at) VALUES(?, ?, ?, ?, ?, ?)',
       )
@@ -221,6 +221,27 @@ try {
   await page.getByRole('button', { name: '回到最新消息' }).click()
   console.log('✓ Pagination keeps messages sharing the same timestamp')
 
+  await expect(page.locator('.topic-suggestion')).toContainText(
+    '这段对话已经比较长了',
+  )
+  await page.locator('.topic-header-action').click()
+  const topicDialog = page.getByRole('dialog', { name: '开始新话题' })
+  await expect(topicDialog).toContainText('会保留全部聊天记录')
+  await expect(topicDialog).toContainText('66 条消息')
+  await topicDialog.getByRole('button', { name: '压缩并开始' }).click()
+  await expect(page.locator('[data-system-kind="topic_boundary"]')).toContainText(
+    '新话题',
+  )
+  await expect(topicDialog).toHaveCount(0)
+  await expect(page.locator('[data-system-kind="topic_boundary"]')).toBeInViewport()
+  const topicState = await page.evaluate((id) =>
+    window.covan.getChatTopicState(id), fixture.dm.id)
+  assert.equal(topicState.current_message_count, 0)
+  assert.ok(topicState.latest_topic.summary.length > 0)
+  assert.equal(await page.locator('article').count(), 66)
+  await page.screenshot({ path: path.join(artifacts, 'new-topic.png') })
+  console.log('✓ New topic compresses context while preserving visible DM history')
+
   const composer = page.getByRole('textbox', { name: '输入消息' })
   await composer.fill('独立草稿 A')
   await page
@@ -295,6 +316,13 @@ try {
   )
   await page.screenshot({ path: path.join(artifacts, 'provider-icons.png') })
   console.log('✓ Provider vendor marks render without text glyphs')
+  await page.getByRole('button', { name: 'Bot', exact: true }).click()
+  await expect(page.getByText('Jev 决策引擎', { exact: true })).toBeVisible()
+  await expect(page.getByLabel('TypeSafe API Key')).toBeVisible()
+  await expect(page.getByLabel('Jev 模型')).toHaveValue('jev-latest')
+  await expect(page.getByLabel('Jev 置信度阈值')).toHaveValue('0.6')
+  await page.screenshot({ path: path.join(artifacts, 'jev-settings.png') })
+  console.log('✓ Global Jev credentials, model, and confidence threshold are configurable')
   await page.getByRole('button', { name: '定时任务', exact: true }).click()
   await expect(page.getByText('每日灵感整理', { exact: true })).toBeVisible()
   await page.screenshot({ path: path.join(artifacts, 'scheduled-tasks-global.png') })
@@ -321,6 +349,22 @@ try {
     ),
   )
   await page.screenshot({ path: path.join(artifacts, 'chat-dark.png') })
+  await page.getByRole('button', { name: '模型', exact: true }).click()
+  await expect(page.getByLabel('响应决策策略').locator('option[value="auto"]')).toHaveText(
+    '自动 · Jev 可用时优先',
+  )
+  await page.getByLabel('响应决策策略').selectOption('jev')
+  await expect.poll(async () =>
+    page.evaluate(
+      async (botId) =>
+        (await window.covan.listBots()).find((bot) => bot.id === botId)
+          ?.response_decision_strategy,
+      fixture.a.id,
+    ),
+  ).toBe('jev')
+  await page.screenshot({ path: path.join(artifacts, 'bot-decision-strategy.png') })
+  await page.getByRole('button', { name: '设定', exact: true }).click()
+  console.log('✓ Each Bot can select automatic, traditional LLM, or Jev response decisions')
   await page.getByRole('button', { name: '设置', exact: true }).click()
   await page.keyboard.press('Shift+Tab')
   assert.equal(
@@ -501,6 +545,10 @@ try {
   await page.screenshot({ path: path.join(artifacts, 'composer-quote-compact.png') })
   await page.getByRole('button', { name: '发送', exact: true }).click()
   await expect(page.getByLabel('引用内容')).toHaveCount(0)
+  await expect(
+    page.locator('.chat-header-avatar[data-avatar-activity="active"]'),
+  ).toHaveCount(1)
+  await page.screenshot({ path: path.join(artifacts, 'private-avatar-active.png') })
   await expect(page.locator('article.message-user').last().locator('blockquote')).toBeVisible()
   const quoteMessages = await page.evaluate((id) => window.covan.listMessages(id), fixture.dm.id)
   const quoteSent = quoteMessages.filter((m) => m.sender_type === 'user').at(-1)
@@ -508,7 +556,7 @@ try {
   assert.ok(quoteSent.content.endsWith('\n\n针对引用内容补充一句'))
   await expect(page.getByRole('button', { name: '停止生成', exact: true })).toHaveCount(0, { timeout: 20000 })
   assert.deepEqual(errors, [])
-  console.log('✓ Compact window layout, no renderer exceptions')
+  console.log('✓ Compact window layout and private-chat avatar activity ring, no renderer exceptions')
   console.log('Electron UX regression passed. Screenshots: ' + artifacts)
 } catch (e) {
   if (page)

@@ -7,6 +7,16 @@ export interface ArtifactPreviewTarget {
   artifact: WorkspaceArtifact
 }
 
+export type SettingsSection =
+  | 'general'
+  | 'providers'
+  | 'bot'
+  | 'scheduled'
+  | 'avatars'
+  | 'mcp'
+  | 'skills'
+  | 'debug'
+
 interface UiState {
   rightPanelOpen: boolean
   artifactPreview: ArtifactPreviewTarget | null
@@ -14,6 +24,8 @@ interface UiState {
   /** 群聊中当前查看的成员 botId（单聊时为空，直接用会话 bot） */
   inspectedBotId: string | null
   settingsOpen: boolean
+  settingsSection: SettingsSection
+  setSettingsSection: (section: SettingsSection) => void
   profileOpen: boolean
   setProfileOpen: (v: boolean) => void
   newBotOpen: boolean
@@ -36,6 +48,8 @@ export const useUiStore = create<UiState>((set, get) => ({
   artifactPreviewWidth: 520,
   inspectedBotId: null,
   settingsOpen: false,
+  settingsSection: 'general',
+  setSettingsSection: (settingsSection) => set({ settingsSection }),
   profileOpen: false,
   setProfileOpen: (v) => set({ profileOpen: v }),
   newBotOpen: false,
@@ -43,12 +57,21 @@ export const useUiStore = create<UiState>((set, get) => ({
   inviteChatId: null,
   toggleRightPanel: () => {
     const open = !get().rightPanelOpen
-    set({ rightPanelOpen: open, artifactPreview: open ? null : get().artifactPreview })
+    set({
+      rightPanelOpen: open,
+      artifactPreview: open ? null : get().artifactPreview,
+    })
   },
   setRightPanelOpen: (v) =>
-    set({ rightPanelOpen: v, artifactPreview: v ? null : get().artifactPreview }),
+    set({
+      rightPanelOpen: v,
+      artifactPreview: v ? null : get().artifactPreview,
+    }),
   setArtifactPreview: (target) =>
-    set({ artifactPreview: target, rightPanelOpen: target ? false : get().rightPanelOpen }),
+    set({
+      artifactPreview: target,
+      rightPanelOpen: target ? false : get().rightPanelOpen,
+    }),
   setArtifactPreviewWidth: (width) => set({ artifactPreviewWidth: width }),
   inspectBot: (botId) => {
     set({ inspectedBotId: botId, artifactPreview: null })
