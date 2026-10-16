@@ -157,6 +157,9 @@ try {
           '请直接按用户要求观察图片，用中文简短回复。不要修改任何设置，不要调用不相关工具。',
       })
       const chat = await api.createDm(bot.id)
+      // 自然追问会在主回复后追加一次轻量 completion，使断言取到的“最后一个请求”
+      // 不再是主回复。本用例只考察多模态链路，因此与其他回归一致地关闭它。
+      await api.setSetting('natural_follow_up', '0')
       if (!real)
         for (const [k, v] of [
           ['avatar_provider', p.id],
