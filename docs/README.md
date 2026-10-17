@@ -13,6 +13,7 @@
 | [ROADMAP](ROADMAP.md) | 下一步候选项、优先级与未完成工作 | 计划，不代表已实现 |
 | [BUGFIXES](BUGFIXES.md) | 关键故障的症状、根因、修复与回归测试 | 维护记录 |
 | [Cindy 近期能力借鉴报告](CINDY_REFERENCE_2026-09-20.md) | Cindy 近期合入能力与 Covan 的差距、取舍和建议顺序 | 调研结论，不定义实现契约 |
+| [OpenMausBot 借鉴报告](OPENMAUSBOT_REFERENCE_2026-10-17.md) | 同类产品在审批、密钥、工具可见性与模型选择上的做法与迁移建议 | 调研结论，不定义实现契约 |
 | [CHANGELOG](../CHANGELOG.md) | 用户在每个版本能感知到的变化 | 发布记录 |
 
 `archive/` 仅保存历史交付快照，不作为开发依据。
