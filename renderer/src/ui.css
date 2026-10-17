@@ -1,24 +1,16 @@
-/* ui.css — 形状与首页留白覆盖层
+/* ui.css — 形状覆盖层
  *
- * 放在 index.css / glass.css 之后加载，只做两类低风险覆盖：
- * 1. 按钮统一为胶囊形（卡片、网格、分段控件除外，避免大圆角把卡片压成橄榄形）。
- * 2. 首页移除 hero 文案后的留白收紧，以及顶部品牌图标尺寸。
+ * 放在 index.css / glass.css 之后加载：
+ * 1. 按钮默认胶囊形；需要块状圆角的「面」状按钮加 `.shape-rect`，各自沿用组件
+ *    自己的圆角值（主题卡、头像候选、背景选择、首页 Bot 卡片等）。
+ * 2. 顶部品牌图标与首页留白。
+ *
+ * Tailwind 的 rounded-* 是单类选择器，普通元素选择器压不过它，所以胶囊规则用
+ * !important；`.shape-rect` 通过排除而不是覆盖来生效，不需要再写值。
  */
 
-button,
-[role='button'] {
-  border-radius: 999px;
-}
-
-/* 卡片、头像网格、分段控件这类「面」状按钮保持块状圆角。 */
-.welcome-bot-card,
-.preset-avatar-grid > button,
-.avatar-source-tabs button,
-.theme-option,
-.group-background-grid > button,
-.user-memory-row,
-.bot-card-grid > button {
-  border-radius: 14px;
+button:not(.shape-rect) {
+  border-radius: 999px !important;
 }
 
 /* 顶部品牌改用应用图标。 */

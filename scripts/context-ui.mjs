@@ -224,10 +224,27 @@ try {
   const item = (name) => sidebar.getByRole('button', { name, exact: true })
   await expect(page.locator('.pinned-bots')).toHaveCount(0)
   for (const name of ['开发伙伴', '设计伙伴', '产品伙伴']) {
-    await item(name).click({ button: 'right' })
-    await page.getByRole('menuitem', { name: '置顶', exact: false }).click()
+    if (name === '开发伙伴') {
+      await item(name).hover()
+      await sidebar.getByRole('button', { name: '置顶 开发伙伴', exact: true }).click()
+    } else {
+      await item(name).click({ button: 'right' })
+      await page.getByRole('menuitem', { name: '置顶', exact: false }).click()
+    }
   }
+  await expect(sidebar.getByRole('button', { name: '取消置顶 开发伙伴', exact: true })).toHaveAttribute('aria-pressed', 'true')
   await expect(page.locator('.pinned-bots > button')).toHaveCount(3)
+  await expect(page.locator('.pinned-bots')).toBeVisible()
+  await expect(page.getByRole('menu')).toHaveCount(0)
+  await expect(page.locator('.pinned-bots > button').first()).toContainText('开发伙伴')
+  await page.screenshot({ path: path.join(artifacts, 'sidebar-pinned.png') })
+  await page.locator('.pinned-bots').getByRole('button', { name: '置顶 开发伙伴', exact: true }).click()
+  await expect(page.locator('.chat-header h1')).toHaveText('开发伙伴')
+  await page.reload()
+  await expect(page.locator('.pinned-bots > button')).toHaveCount(3)
+  await item('第四位伙伴').hover()
+  await sidebar.getByRole('button', { name: '置顶 第四位伙伴', exact: true }).click()
+  await expect(sidebar.getByRole('alert')).toContainText('最多置顶 3 个')
   await item('第四位伙伴').click({ button: 'right' })
   await expect(page.getByRole('menuitem', { name: /置顶/ })).toHaveAttribute(
     'aria-disabled',
@@ -244,7 +261,7 @@ try {
     }
   }, fixture.bots[3].id)
   assert.match(pinFailure, /最多置顶 3/)
-  await item('产品伙伴').click({ button: 'right' })
+  await page.locator('.pinned-bots').getByRole('button', { name: '置顶 产品伙伴', exact: true }).click({ button: 'right' })
   await page.getByRole('menuitem', { name: /取消置顶/ }).click()
   await expect(page.locator('.pinned-bots > button')).toHaveCount(2)
   await item('第四位伙伴').click({ button: 'right' })
@@ -269,7 +286,7 @@ try {
     false,
   )
   console.log(
-    '✓ Right-click DM pin/unpin, 3-Bot cap, and permanent group deletion',
+    '✓ Hover pin button, pinned avatars/names, reload, pinned context menu, 3-Bot cap and group deletion',
   )
 
   await page.getByRole('button', { name: '关于我', exact: false }).click()

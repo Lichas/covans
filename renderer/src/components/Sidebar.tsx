@@ -1,5 +1,5 @@
 // components/Sidebar.tsx — 左栏：+菜单 / 搜索 / 置顶头像 / 会话列表 / 底部导航
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import type { ChatSummary, UserProfile } from '@shared/types'
 import { useBotsStore } from '../stores/botsStore'
 import { useChatsStore } from '../stores/chatsStore'
@@ -17,6 +17,8 @@ import {
   CloseIcon,
   GearIcon,
   PlusIcon,
+  PinIcon,
+  PinOffIcon,
   SearchIcon,
   SparkIcon,
   UsersIcon,
@@ -55,7 +57,7 @@ function GroupAvatar({ chat }: { chat: ChatSummary }) {
   )
 }
 
-function ChatListItem({ chat }: { chat: ChatSummary }) {
+function ChatListItem({ chat, onSelect }: { chat: ChatSummary; onSelect: () => void }) {
   const activeChatId = useChatsStore((s) => s.activeChatId)
   const selectChat = useChatsStore((s) => s.selectChat)
   const inspectBot = useUiStore((s) => s.inspectBot)
@@ -63,9 +65,15 @@ function ChatListItem({ chat }: { chat: ChatSummary }) {
   const generating = useMessagesStore((s) => !!s.generating[chat.id])
   const name = chatDisplayName(chat)
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
+  const bot = useBotsStore((s) => s.bots.find((b) => b.id === chat.bot_id))
+  const pinnedCount = useBotsStore((s) => s.bots.filter((b) => b.pinned).length)
+  const updateBot = useBotsStore((s) => s.updateBot)
+  const [pinBusy, setPinBusy] = useState(false)
+  const [pinError, setPinError] = useState('')
+  useEffect(() => setPinError(''), [pinnedCount, bot?.pinned])
 
   return (
-    <>
+    <div className="chat-list-entry">
       <button
         aria-current={active ? 'page' : undefined}
         aria-label={name}
@@ -88,6 +96,7 @@ function ChatListItem({ chat }: { chat: ChatSummary }) {
         onClick={() => {
           void selectChat(chat.id)
           if (chat.type === 'dm' && chat.bot_id) inspectBot(null)
+          onSelect()
         }}
         className={`chat-list-item ${active ? 'is-active' : ''}`}
       >
@@ -105,7 +114,7 @@ function ChatListItem({ chat }: { chat: ChatSummary }) {
             <span className="truncate text-[14px] font-medium text-stone-800 dark:text-stone-100">
               {name}
             </span>
-            <span className="shrink-0 text-[11px] text-stone-400">
+            <span className="chat-list-time shrink-0 text-[11px] text-stone-400">
               {formatChatTime(chat.last_message_at)}
             </span>
           </span>
@@ -126,6 +135,34 @@ function ChatListItem({ chat }: { chat: ChatSummary }) {
           </span>
         </span>
       </button>
+      {bot && (
+        <button
+          className="icon-button chat-pin-button"
+          aria-label={`${bot.pinned ? '取消置顶' : '置顶'} ${name}`}
+          aria-pressed={!!bot.pinned}
+          title={bot.pinned ? '取消置顶' : '置顶到顶部'}
+          disabled={pinBusy}
+          onClick={async () => {
+            if (pinBusy) return
+            setPinError('')
+            if (!bot.pinned && pinnedCount >= 3) {
+              setPinError('最多置顶 3 个 Bot，请先取消一个置顶')
+              return
+            }
+            setPinBusy(true)
+            try {
+              await updateBot(bot.id, { pinned: !bot.pinned })
+            } catch {
+              setPinError('置顶未能保存，请重试')
+            } finally {
+              setPinBusy(false)
+            }
+          }}
+        >
+          {bot.pinned ? <PinOffIcon size={14} /> : <PinIcon size={14} />}
+        </button>
+      )}
+      {pinError && <p role="alert" className="px-3 pb-2 text-[11px] text-red-500">{pinError}</p>}
       {menu && (chat.type === 'group' || chat.bot_id) && (
         <ChatContextMenu
           chat={chat}
@@ -134,31 +171,50 @@ function ChatListItem({ chat }: { chat: ChatSummary }) {
           onClose={() => setMenu(null)}
         />
       )}
-    </>
+    </div>
   )
 }
 
-function PlusMenu({ onClose }: { onClose: () => void }) {
+function PlusMenu({ onClose, trigger }: { onClose: () => void; trigger: RefObject<HTMLButtonElement> }) {
   const setNewBotOpen = useUiStore((s) => s.setNewBotOpen)
   const setNewGroupOpen = useUiStore((s) => s.setNewGroupOpen)
   const ref = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     const onDown = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) onClose()
+      if (ref.current && !ref.current.contains(e.target as Node) && !trigger.current?.contains(e.target as Node)) onClose()
     }
     window.addEventListener('mousedown', onDown)
     return () => window.removeEventListener('mousedown', onDown)
-  }, [onClose])
+  }, [onClose, trigger])
+
+  useEffect(() => {
+    ref.current?.querySelector<HTMLButtonElement>('button')?.focus()
+  }, [])
 
   const item =
     'flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-[13.5px] text-stone-700 transition hover:bg-stone-100 dark:text-stone-200 dark:hover:bg-stone-700'
   return (
     <div
       ref={ref}
-      className="absolute left-3 top-12 z-40 w-48 animate-fadeIn rounded-xl border border-stone-200 bg-white p-1.5 shadow-lg dark:border-stone-700 dark:bg-stone-800"
+      role="menu"
+      aria-label="创建菜单"
+      onKeyDown={(event) => {
+        const items = Array.from(ref.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? [])
+        const current = items.indexOf(document.activeElement as HTMLButtonElement)
+        if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+          event.preventDefault()
+          items[(current + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length]?.focus()
+        } else if (event.key === 'Escape') {
+          event.preventDefault()
+          onClose()
+          trigger.current?.focus()
+        } else if (event.key === 'Tab') onClose()
+      }}
+      className="sidebar-create-menu absolute right-3 top-full z-40 w-48 animate-fadeIn rounded-xl border border-stone-200 bg-white p-1.5 shadow-lg dark:border-stone-700 dark:bg-stone-800"
     >
       <button
+        role="menuitem"
         className={item}
         onClick={() => {
           onClose()
@@ -170,6 +226,7 @@ function PlusMenu({ onClose }: { onClose: () => void }) {
         <span className="ml-auto text-[11px] text-stone-400">⌘1</span>
       </button>
       <button
+        role="menuitem"
         className={item}
         onClick={() => {
           onClose()
@@ -186,13 +243,14 @@ function PlusMenu({ onClose }: { onClose: () => void }) {
 
 export function Sidebar() {
   const chats = useChatsStore((s) => s.chats)
-  const activeChatId = useChatsStore((s) => s.activeChatId)
   const botCount = useBotsStore((s) => s.bots.length)
   const selectChat = useChatsStore((s) => s.selectChat)
   const setSettingsOpen = useUiStore((s) => s.setSettingsOpen)
-  const setNewGroupOpen = useUiStore((s) => s.setNewGroupOpen)
   const setProfileOpen = useUiStore((s) => s.setProfileOpen)
   const searchRef = useRef<HTMLInputElement>(null)
+  const searchButtonRef = useRef<HTMLButtonElement>(null)
+  const createButtonRef = useRef<HTMLButtonElement>(null)
+  const [searchOpen, setSearchOpen] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
   const [query, setQuery] = useState('')
   const [profile, setProfile] = useState<UserProfile>({
@@ -233,6 +291,8 @@ export function Sidebar() {
         !document.querySelector('[role="dialog"]')
       ) {
         e.preventDefault()
+        setMenuOpen(false)
+        setSearchOpen(true)
         searchRef.current?.focus()
         searchRef.current?.select()
       }
@@ -241,6 +301,18 @@ export function Sidebar() {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [])
+
+  useEffect(() => {
+    if (searchOpen) {
+      searchRef.current?.focus()
+      searchRef.current?.select()
+    }
+  }, [searchOpen])
+
+  const closeSearch = () => {
+    setQuery('')
+    setSearchOpen(false)
+  }
 
   const filteredChats = useMemo(() => {
     const q = query.trim().toLowerCase()
@@ -270,20 +342,39 @@ export function Sidebar() {
           <img className="brand-icon" src={appIcon} alt="" />
           Covan
         </button>
-        <button
-          onClick={() => setMenuOpen((v) => !v)}
-          style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
-          className="rounded-lg p-1.5 text-stone-500 transition hover:bg-stone-200 hover:text-stone-700 dark:hover:bg-stone-700 dark:hover:text-stone-200"
-          aria-label="新建"
-          title="新建 Bot 或群聊"
-        >
-          <PlusIcon />
-        </button>
-        {menuOpen && <PlusMenu onClose={() => setMenuOpen(false)} />}
+        <div className="sidebar-toolbar-actions">
+          <button
+            ref={searchButtonRef}
+            className="icon-button sidebar-toolbar-button"
+            aria-label="搜索"
+            title="搜索会话 · ⌘K"
+            aria-expanded={searchOpen}
+            aria-controls="sidebar-search-panel"
+            onClick={() => {
+              setMenuOpen(false)
+              if (searchOpen) closeSearch()
+              else setSearchOpen(true)
+            }}
+          >
+            <SearchIcon width={18} height={18} />
+          </button>
+          <button
+            ref={createButtonRef}
+            onClick={() => setMenuOpen((v) => !v)}
+            className="icon-button sidebar-toolbar-button"
+            aria-label="新建"
+            title="新建 Bot 或群聊"
+            aria-haspopup="menu"
+            aria-expanded={menuOpen}
+          >
+            <PlusIcon width={20} height={20} />
+          </button>
+        </div>
+        {menuOpen && <PlusMenu onClose={() => setMenuOpen(false)} trigger={createButtonRef} />}
       </div>
 
-      {/* 搜索框 */}
-      <div className="px-3 pb-2">
+      {/* 搜索只在按钮或快捷键触发时展开。 */}
+      {searchOpen && <div id="sidebar-search-panel" className="px-3 pb-2">
         <div className="sidebar-search">
           <SearchIcon
             width={15}
@@ -296,14 +387,18 @@ export function Sidebar() {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => {
+              if (e.nativeEvent.isComposing || e.keyCode === 229) return
               if (e.key === 'Escape') {
-                setQuery('')
-                e.currentTarget.blur()
+                e.stopPropagation()
+                closeSearch()
+                searchButtonRef.current?.focus()
               }
               if (e.key === 'Enter' && filteredChats[0]) {
+                e.preventDefault()
                 void selectChat(filteredChats[0].id)
-                setQuery('')
-                e.currentTarget.blur()
+                e.stopPropagation()
+                closeSearch()
+                searchButtonRef.current?.focus()
               }
             }}
             placeholder="搜索会话"
@@ -324,24 +419,22 @@ export function Sidebar() {
             <span className="shrink-0 text-[10px] text-stone-400">⌘ K</span>
           )}
         </div>
-      </div>
-
-      <nav className="sidebar-actions" aria-label="快捷入口">
-        <button aria-current={activeChatId ? undefined : 'page'} onClick={() => void selectChat(null)}><SparkIcon width={18} height={18} />我的 Bot<span>{botCount}</span></button>
-        <button onClick={() => setNewGroupOpen(true)}><UsersIcon width={18} height={18} />新建群聊<PlusIcon width={14} height={14} /></button>
-      </nav>
+      </div>}
 
       {/* 置顶区：横排圆形头像 */}
       <PinnedBots />
 
       {/* 会话列表 */}
-      <div className="flex items-center justify-between px-5 pb-2 pt-4 text-[10px] tracking-wider text-stone-400">
-        <span>{query ? '搜索结果' : '最近对话'}</span>
-        <span>{filteredChats.length}</span>
+      <div className="sidebar-section-heading">
+        <span>{query ? '搜索结果' : '最近对话'} <span className="sidebar-chat-count">{filteredChats.length}</span></span>
+        <button className="sidebar-library-button" aria-label={`我的 Bot ${botCount}`} onClick={() => {
+          closeSearch()
+          void selectChat(null)
+        }}><SparkIcon width={14} height={14} />我的 Bot</button>
       </div>
       <div className="sidebar-chats scroll-thin flex-1 space-y-1 overflow-y-auto px-3 py-1">
         {filteredChats.map((c) => (
-          <ChatListItem key={c.id} chat={c} />
+          <ChatListItem key={c.id} chat={c} onSelect={closeSearch} />
         ))}
         {filteredChats.length === 0 && (
           <div className="px-4 py-10 text-center text-[12.5px] text-stone-400">

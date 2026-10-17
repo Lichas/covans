@@ -220,6 +220,7 @@ export function UserProfileDialog() {
                       disabled={busy || !loaded}
                       aria-label={`选择${preset.label}`}
                       aria-pressed={profile.avatar === preset.avatar}
+                      className="shape-rect"
                       onClick={() =>
                         void action(async () => {
                           const next = await api.saveUserProfile({

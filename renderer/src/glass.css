@@ -20,9 +20,18 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 46px 19px 24px;
+  padding: 46px 14px 16px;
 }
-.sidebar-brand { display: flex; align-items: center; gap: 9px; font-size: 23px; font-weight: 650; letter-spacing: -0.8px; }
+.sidebar-brand { display: flex; align-items: center; gap: 7px; font-size: 19px; font-weight: 600; letter-spacing: -0.5px; min-width: 0; }
+.sidebar-brand .brand-icon { width: 28px; height: 28px; }
+.sidebar-toolbar-actions { display: flex; align-items: center; gap: 7px; -webkit-app-region: no-drag; }
+.sidebar-toolbar-actions .sidebar-toolbar-button { width: 34px; height: 34px; border: 1px solid var(--pane-divider); background: var(--glass); color: var(--text); }
+.sidebar-toolbar-button[aria-expanded='true'] { border-color: var(--accent); background: var(--soft); }
+.sidebar-create-menu { transform-origin: top right; }
+.sidebar-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 15px 9px; font-size: 11px; color: var(--muted); }
+.sidebar-chat-count { margin-left: 5px; opacity: 0.7; }
+.sidebar-library-button { display: inline-flex; align-items: center; gap: 5px; padding: 6px 9px; color: var(--text); background: var(--glass); }
+.sidebar-library-button:hover { background: var(--soft); }
 .brand-symbol, .welcome-mark {
   display: grid;
   place-items: center;
@@ -39,16 +48,11 @@
   gap: 8px;
   padding: 10px 11px;
   border: 1px solid var(--line);
-  border-radius: 12px;
+  border-radius: 999px;
   background: color-mix(in srgb, var(--glass) 58%, transparent);
   box-shadow: inset 0 1px 0 var(--glass-edge);
 }
 .sidebar-search:focus-within { border-color: var(--accent); }
-.sidebar-actions { display: grid; gap: 4px; padding: 11px 13px 6px; }
-.sidebar-actions button { display: flex; align-items: center; gap: 11px; padding: 11px 12px; border-radius: 12px; font-size: 13px; color: var(--text); }
-.sidebar-actions button > :last-child { margin-left: auto; color: var(--muted); font-size: 11px; }
-.sidebar-actions button:hover { background: var(--glass); }
-.sidebar-actions button[aria-current="page"] { background: var(--glass); box-shadow: inset 0 1px 0 var(--glass-edge); color: var(--accent); }
 .sidebar-chats { min-height: 0; }
 .chat-list-item {
   display: flex;
@@ -72,8 +76,17 @@
   border-radius: 50%;
   box-shadow: 0 0 0 3px var(--glass), 0 4px 12px rgb(17 41 84 / 0.1);
 }
-.pinned-bots { gap: 8px; padding: 10px 15px 2px; }
+.pinned-bots { display: flex; justify-content: center; gap: 8px; padding: 8px 12px 18px; }
+.pinned-bots > button { flex: 0 1 70px; width: 70px; gap: 9px; padding: 9px 4px; }
+.pinned-bots > button > span:last-child { font-size: 12px; color: var(--text); }
+.pinned-portrait { position: relative; display: block; width: 58px; height: 58px; }
+.pinned-badge { position: absolute; right: -2px; bottom: 0; display: grid; place-items: center; width: 17px; height: 17px; border-radius: 50%; border: 2px solid var(--surface); color: white; background: #df9a37; }
 .pinned-bots > button:hover, .pinned-bots > button.active { background: var(--glass); }
+.chat-list-entry { position: relative; }
+.chat-list-entry:has(.chat-pin-button) .chat-list-time { min-width: 28px; text-align: right; }
+.chat-pin-button { position: absolute; top: 8px; right: 8px; width: 25px; height: 25px; opacity: 0; pointer-events: none; background: var(--glass); }
+.chat-list-entry:hover .chat-pin-button, .chat-list-entry:focus-within .chat-pin-button, .chat-pin-button[aria-pressed='true'] { opacity: 1; pointer-events: auto; }
+.chat-list-entry:hover .chat-list-time, .chat-list-entry:focus-within .chat-list-time, .chat-list-entry:has(.chat-pin-button[aria-pressed='true']) .chat-list-time { opacity: 0; }
 .sidebar-footer { flex-shrink: 0; padding: 10px 14px 14px; }
 .profile-row { display: flex; align-items: center; padding: 8px 0 14px; gap: 4px; }
 .profile-entry { flex: 1; min-width: 0; padding: 5px; margin: 0; gap: 12px; }
@@ -85,7 +98,7 @@
 .profile-settings { flex-shrink: 0; }
 .sidebar-footnote { display: flex; align-items: center; gap: 7px; padding: 13px 6px 0; font-size: 10px; letter-spacing: 0.6px; color: var(--muted); }
 .sidebar-footnote > span { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); }
-.theme-dock { display: flex; align-items: center; gap: 4px; padding: 4px; border: 1px solid var(--line); border-radius: 13px; background: var(--glass); box-shadow: inset 0 1px 0 var(--glass-edge); }
+.theme-dock { display: flex; align-items: center; gap: 4px; padding: 4px; border: 1px solid var(--line); border-radius: 999px; background: var(--glass); box-shadow: inset 0 1px 0 var(--glass-edge); }
 .theme-dock-label { flex: 1; padding-left: 10px; font-size: 11px; color: var(--muted); }
 .theme-dock button { display: grid; place-items: center; width: 38px; height: 31px; border-radius: 9px; color: var(--muted); }
 .theme-dock button:hover { color: var(--text); background: var(--soft); }
@@ -181,10 +194,9 @@
 .dark .chat-view.group-background .message-scroll { background: transparent; }
 .chat-view.group-background .message-bot .message-surface,
 .dark .chat-view.group-background .message-bot .message-surface { background: var(--glass-strong); border-color: var(--glass-edge); }
-.chat-view.group-background .message-user .message-surface,
-.dark .chat-view.group-background .message-user .message-surface { background: color-mix(in srgb, var(--soft) 90%, transparent); }
 .chat-view.group-background .date-divider span,
 .dark .chat-view.group-background .date-divider span { background: var(--glass-strong); border-color: var(--glass-edge); }
+/* 胶囊按钮规则统一放在 ui.css（最后加载），避免两处 !important 互相覆盖。 */
 @media (max-width: 1100px) {
   .welcome-content { padding-inline: 35px; }
   .welcome-topline > :last-child { display: none; }
@@ -194,8 +206,6 @@
 }
 @media (max-height: 740px) {
   .sidebar-brand-row { padding-top: 38px; padding-bottom: 14px; }
-  .sidebar-actions { padding-block: 4px; }
-  .sidebar-actions button { padding-block: 8px; }
   .sidebar-footer { padding-bottom: 10px; }
   .sidebar-footnote { display: none; }
   .welcome-content { padding-top: 88px; }

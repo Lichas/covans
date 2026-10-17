@@ -5,6 +5,9 @@ export {
   Quote as QuoteIcon,
   Bug as BugIcon,
   MessageSquarePlus as NewTopicIcon,
+  Pin as PinIcon,
+  PinOff as PinOffIcon,
+  Star as StarIcon,
 } from 'lucide-react'
 import anthropicIcon from '../assets/provider-icons/anthropic.svg'
 import deepseekIcon from '../assets/provider-icons/deepseek.svg'

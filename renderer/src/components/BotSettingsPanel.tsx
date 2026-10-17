@@ -271,7 +271,7 @@ function ChatBackgroundPicker({
       {compact && (
         <button
           type="button"
-          className="chat-background-current"
+          className="chat-background-current shape-rect"
           onClick={() => setExpanded((value) => !value)}
           aria-label="更换聊天背景"
         >
@@ -294,7 +294,7 @@ function ChatBackgroundPicker({
             <button
               key={background.file}
               type="button"
-              className="group-background-option"
+              className="group-background-option shape-rect"
               aria-pressed={selected}
               title={background.label}
               disabled={!!savingBackground}

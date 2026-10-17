@@ -51,7 +51,7 @@ export const inputCls =
   'selectable w-full rounded-lg border border-stone-200 bg-white px-2.5 py-1.5 text-[13px] text-stone-800 outline-none transition focus:border-stone-400 dark:border-stone-600 dark:bg-stone-800 dark:text-stone-100 dark:focus:border-stone-500'
 
 export const btnPrimaryCls =
-  'rounded-lg bg-ink px-3.5 py-1.5 text-[13px] text-white transition hover:bg-stone-700 disabled:opacity-40 dark:bg-stone-100 dark:text-stone-900 dark:hover:bg-stone-300'
+  'rounded-full bg-ink px-3.5 py-1.5 text-[13px] text-white transition hover:bg-stone-700 disabled:opacity-40 dark:bg-stone-100 dark:text-stone-900 dark:hover:bg-stone-300'
 
 export const btnGhostCls =
-  'rounded-lg border border-stone-300 px-3.5 py-1.5 text-[13px] text-stone-600 transition hover:bg-stone-100 disabled:opacity-40 dark:border-stone-600 dark:text-stone-300 dark:hover:bg-stone-700'
+  'rounded-full border border-stone-300 px-3.5 py-1.5 text-[13px] text-stone-600 transition hover:bg-stone-100 disabled:opacity-40 dark:border-stone-600 dark:text-stone-300 dark:hover:bg-stone-700'

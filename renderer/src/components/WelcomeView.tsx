@@ -43,7 +43,7 @@ export function WelcomeView() {
               {bots.map((bot) => (
                 <button
                   key={bot.id}
-                  className="welcome-bot-card"
+                  className="welcome-bot-card shape-rect"
                   onClick={() => void createDm(bot.id)}
                 >
                   <Avatar name={bot.name} avatar={bot.avatar} size={46} />

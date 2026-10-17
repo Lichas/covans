@@ -43,6 +43,65 @@ const expectFadingHeader = async () => {
   assert.ok(Math.abs(layer.headerTop - layer.scrollTop) < 1)
   assert.ok(layer.inset > layer.headerHeight)
 }
+// Exercise the actual background picker: its image cards are an intentional
+// exception to capsule buttons, and a photo must not change the user's palette.
+const expectReadablePhotoBackgrounds = async (scope) => {
+  const options = page.locator('.group-background-option')
+  await expect(options).toHaveCount(13)
+  const selectedOption = page.locator('.group-background-option[aria-pressed="true"]')
+  const selected = await selectedOption.count() ? await selectedOption.getAttribute('title') : null
+  const wasDark = await page.locator('html').evaluate((el) => el.classList.contains('dark'))
+  const scrollTop = await page.locator('.message-scroll').evaluate((el) => el.scrollTop)
+  const cards = await page.locator('.chat-background-current, .group-background-option').evaluateAll((elements) =>
+    elements.map((el) => {
+      const rect = el.getBoundingClientRect()
+      return { radius: parseFloat(getComputedStyle(el).borderTopLeftRadius), width: rect.width, height: rect.height }
+    }),
+  )
+  assert.ok(cards.length >= 13 && cards.every(({ radius, width, height }) => radius > 0 && radius < Math.min(width, height) / 2))
+  const bubble = page.locator('.message-user .message-surface').last()
+  const palette = () => bubble.evaluate((el) => {
+    const style = getComputedStyle(el)
+    return { background: style.backgroundColor, color: style.color, shadow: style.boxShadow, backdrop: style.backdropFilter }
+  })
+  for (const theme of ['light', 'dark']) {
+    await page.locator('.theme-dock').getByRole('button', { name: theme === 'light' ? '切换到浅色主题' : '切换到深色主题' }).click()
+    if (theme === 'dark') await expect(page.locator('html')).toHaveClass(/dark/)
+    else await expect(page.locator('html')).not.toHaveClass(/dark/)
+    if (await page.getByRole('button', { name: '清除', exact: true }).count()) {
+      await page.getByRole('button', { name: '清除', exact: true }).click()
+    }
+    await expect(page.locator('.chat-view')).not.toHaveClass(/group-background/)
+    const baseline = await palette()
+    if (scope === 'dm') {
+      // An opaque fill and WCAG AA text contrast keep bright photos from
+      // washing out the default dark bubble and its light text.
+      const luminance = (color) => color.match(/[\d.]+/g).slice(0, 3)
+        .map((v) => Number(v) / 255)
+        .map((v) => v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4)
+        .reduce((sum, v, i) => sum + v * [0.2126, 0.7152, 0.0722][i], 0)
+      assert.match(baseline.background, /^rgb\(/)
+      const [low, high] = [luminance(baseline.background), luminance(baseline.color)].sort((a, b) => a - b)
+      assert.ok((high + 0.05) / (low + 0.05) >= 4.5)
+    }
+    for (const title of ['海崖花径', '星夜']) {
+      const option = page.locator(`.group-background-option[title="${title}"]`)
+      await option.click()
+      await expect(option).toHaveAttribute('aria-pressed', 'true')
+      await expect(page.locator('.chat-view')).toHaveClass(/group-background/)
+      assert.deepEqual(await palette(), baseline, `${scope}/${theme}/${title}: preserve default user bubble`)
+      if (title === '海崖花径') {
+        await bubble.scrollIntoViewIfNeeded()
+        await page.screenshot({ path: path.join(artifacts, `${scope}-background-${theme}.png`) })
+      }
+    }
+  }
+  if (selected) await page.locator(`.group-background-option[title="${selected}"]`).click()
+  else await page.getByRole('button', { name: '清除', exact: true }).click()
+  await page.locator('.theme-dock').getByRole('button', { name: wasDark ? '切换到深色主题' : '切换到浅色主题' }).click()
+  await page.locator('.message-scroll').evaluate((el, top) => { el.scrollTop = top }, scrollTop)
+  console.log(`✓ ${scope}: rectangular background cards and unchanged readable user bubbles on bright/dark photos in both themes`)
+}
 const markdown = [
   '## 把想法变成可以开始的计划',
   '一个好的开始，是把问题拆小。先确认 **用户价值**，再决定实现顺序。',
@@ -78,6 +137,52 @@ try {
   await expect(page.getByRole('dialog')).toHaveCount(0)
   console.log('✓ Welcome actions and dialog dismissal')
 
+  const sidebarToolbar = page.locator('.sidebar-toolbar-actions')
+  const searchButton = sidebarToolbar.getByRole('button', { name: '搜索', exact: true })
+  const createButton = sidebarToolbar.getByRole('button', { name: '新建', exact: true })
+  await expect(page.getByRole('textbox', { name: '搜索会话' })).toHaveCount(0)
+  const [searchBounds, createBounds, brandBounds] = await Promise.all([
+    searchButton.boundingBox(), createButton.boundingBox(), page.locator('.sidebar-brand').boundingBox(),
+  ])
+  assert.ok(searchBounds.x > brandBounds.x + brandBounds.width)
+  assert.ok(createBounds.x > searchBounds.x && Math.abs(createBounds.y - searchBounds.y) < 1)
+  await searchButton.click()
+  await expect(searchButton).toHaveAttribute('aria-expanded', 'true')
+  await expect(page.getByRole('textbox', { name: '搜索会话' })).toBeFocused()
+  await page.getByRole('textbox', { name: '搜索会话' }).fill('无匹配内容')
+  await page.getByRole('button', { name: '清除搜索' }).click()
+  await expect(page.getByRole('textbox', { name: '搜索会话' })).toHaveValue('')
+  await page.keyboard.press('Escape')
+  await expect(page.getByRole('textbox', { name: '搜索会话' })).toHaveCount(0)
+  await expect(searchButton).toBeFocused()
+  await createButton.click()
+  const createMenu = page.getByRole('menu', { name: '创建菜单' })
+  await expect(createMenu).toBeVisible()
+  await expect(createMenu.getByRole('menuitem').first()).toBeFocused()
+  await page.keyboard.press('ArrowDown')
+  await expect(createMenu.getByRole('menuitem', { name: /创建群聊/ })).toBeFocused()
+  await page.keyboard.press('Escape')
+  await expect(createMenu).toHaveCount(0)
+  await expect(createButton).toBeFocused()
+  await createButton.click()
+  await createButton.click()
+  await expect(createMenu).toHaveCount(0)
+  await createButton.click()
+  await createMenu.getByRole('menuitem', { name: /创建群聊/ }).click()
+  await expect(page.getByRole('dialog', { name: '创建群聊' })).toBeVisible()
+  await page.keyboard.press('Escape')
+  const typography = await page.evaluate(() => ({
+    font: getComputedStyle(document.body).fontFamily,
+    capsules: [...document.querySelectorAll('button:not(.shape-rect)')].filter((button) => button.getClientRects().length).every((button) => {
+      const rect = button.getBoundingClientRect()
+      return parseFloat(getComputedStyle(button).borderTopLeftRadius) >= Math.min(rect.width, rect.height) / 2
+    }),
+  }))
+  assert.ok(typography.font.startsWith('-apple-system'))
+  assert.ok(typography.capsules)
+  console.log('✓ Sidebar search/create buttons, collapsed search, menu focus/toggle, system font and capsule buttons')
+
+
   // Theme controls share one persisted setting across the dock and settings.
   const themeDock = page.locator('.theme-dock')
   await page.emulateMedia({ colorScheme: 'light', reducedMotion: 'reduce' })
@@ -99,13 +204,40 @@ try {
   await settleAppearance()
   await page.screenshot({ path: path.join(artifacts, 'glass-welcome-dark.png') })
   await page.getByRole('button', { name: '设置', exact: true }).click()
+  const settingsDialog = page.getByRole('dialog', { name: '设置', exact: true })
+  const settingsNav = settingsDialog.getByRole('navigation', { name: '设置分类' })
+  for (const name of ['通用', 'Provider', 'Bot', '定时任务', '头像生成', 'MCP', 'Skills', 'Debug']) {
+    await settingsNav.getByRole('button', { name, exact: true }).click()
+    await expect(settingsNav.getByRole('button', { name, exact: true })).toHaveAttribute('aria-current', 'page')
+    const content = settingsDialog.getByRole('main', { name, exact: true })
+    await expect(content).toBeVisible()
+    // Each page mounts only its actual controls, without an extra title band.
+    await expect(content.locator(':scope > *')).toHaveCount(1)
+  }
+  await settingsNav.getByRole('button', { name: '通用', exact: true }).click()
+  const contentTop = (await settingsDialog.getByRole('main').boundingBox()).y
+  const firstControlTop = (await settingsDialog.getByText('外观主题', { exact: true }).boundingBox()).y
+  assert.ok(firstControlTop - contentTop < 32, 'Settings content starts directly below the dialog title')
+  const expectThemeCards = async () => {
+    const cards = await settingsDialog.locator('.theme-picker button').evaluateAll((elements) => elements.map((el) => {
+      const rect = el.getBoundingClientRect()
+      return { radius: parseFloat(getComputedStyle(el).borderTopLeftRadius), width: rect.width, height: rect.height }
+    }))
+    assert.equal(cards.length, 3)
+    assert.ok(cards.every(({ radius, width, height }) => radius === 14 && Math.min(width, height) > radius * 2))
+  }
+  await expectThemeCards()
   await expect(page.getByRole('button', { name: '深色', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  await settleAppearance()
+  await page.screenshot({ path: path.join(artifacts, 'settings-dark.png') })
   await page.getByRole('button', { name: '浅色', exact: true }).click()
+  await expectThemeCards()
   await expect(themeDock.getByRole('button', { name: '切换到浅色主题' })).toHaveAttribute('aria-pressed', 'true')
   await expect(page.locator('.theme-picker .theme-option-label').first()).toHaveCSS('color', 'rgb(33, 53, 82)')
   await settleAppearance()
   await page.screenshot({ path: path.join(artifacts, 'glass-theme-settings.png') })
   await page.keyboard.press('Escape')
+  console.log('✓ All settings categories omit the title band; theme cards remain rounded rectangles in both themes')
   await themeDock.getByRole('button', { name: '切换到跟随系统主题' }).click()
   await expect.poll(() => page.evaluate(() => window.covan.getSetting('theme'))).toBe('system')
   await page.emulateMedia({ colorScheme: 'dark' })
@@ -219,7 +351,7 @@ try {
   await page.reload()
   await page
     .locator('aside')
-    .getByRole('button', { name: /设计搭档/ })
+    .getByRole('button', { name: '设计搭档', exact: true })
     .click()
   if (
     await page
@@ -280,6 +412,9 @@ try {
   await expect(page.getByText('已暂停', { exact: true })).toBeVisible()
   await page.screenshot({ path: path.join(artifacts, 'scheduled-tasks.png') })
   await page.getByRole('button', { name: '设定', exact: true }).click()
+  await page.getByRole('button', { name: '更换', exact: true }).click()
+  await expectReadablePhotoBackgrounds('dm')
+  await page.getByRole('button', { name: '收起', exact: true }).click()
   await expect(page.locator('.markdown-content table')).toBeVisible()
   await expect(page.locator('.markdown-content .katex').first()).toBeVisible()
   await expect(page.locator('.markdown-content .katex-display')).toBeVisible()
@@ -361,13 +496,13 @@ try {
   await composer.fill('独立草稿 A')
   await page
     .locator('aside')
-    .getByRole('button', { name: /产品搭档/ })
+    .getByRole('button', { name: '产品搭档', exact: true })
     .click()
   await expect(composer).toHaveValue('')
   await composer.fill('独立草稿 B')
   await page
     .locator('aside')
-    .getByRole('button', { name: /设计搭档/ })
+    .getByRole('button', { name: '设计搭档', exact: true })
     .click()
   await expect(composer).toHaveValue('独立草稿 A')
   await page.reload()
@@ -405,8 +540,13 @@ try {
   await page.keyboard.press('Meta+k')
   await expect(page.getByRole('textbox', { name: '搜索会话' })).toBeFocused()
   await page.getByRole('textbox', { name: '搜索会话' }).fill('产品搭档')
+  await page.getByRole('textbox', { name: '搜索会话' }).dispatchEvent('keydown', {
+    key: 'Enter', code: 'Enter', isComposing: true, keyCode: 229,
+  })
+  await expect(page.getByRole('textbox', { name: '搜索会话' })).toHaveValue('产品搭档')
   await page.keyboard.press('Enter')
   await expect(page.locator('.chat-header h1')).toHaveText('产品搭档')
+  await expect(page.getByRole('textbox', { name: '搜索会话' })).toHaveCount(0)
   await page.getByRole('button', { name: '设置', exact: true }).click()
   await page.getByRole('button', { name: 'Provider', exact: true }).click()
   for (const kind of ['kimi', 'deepseek', 'lm-studio']) {
@@ -446,7 +586,7 @@ try {
   await page.getByRole('button', { name: '关闭', exact: true }).click()
   await page
     .locator('aside')
-    .getByRole('button', { name: /设计搭档/ })
+    .getByRole('button', { name: '设计搭档', exact: true })
     .click()
   await expect(page.locator('html')).toHaveClass(/dark/)
   if (
@@ -497,7 +637,7 @@ try {
 
   await page
     .locator('aside')
-    .getByRole('button', { name: /灵感工作室/ })
+    .getByRole('button', { name: '灵感工作室', exact: true })
     .click()
   if (
     await page
@@ -562,6 +702,9 @@ try {
   console.log(
     '✓ Streaming author, immediate stop, partial response, cancelled group queue',
   )
+  await page.getByRole('button', { name: '展开设置', exact: true }).click()
+  await expectReadablePhotoBackgrounds('group')
+  await page.getByRole('button', { name: '收起设置', exact: true }).click()
 
   await composer.fill('继续讨论')
   await page.getByRole('button', { name: '发送', exact: true }).click()
@@ -624,7 +767,7 @@ try {
 
   await page
     .locator('aside')
-    .getByRole('button', { name: /未配置助手/ })
+    .getByRole('button', { name: '未配置助手', exact: true })
     .click()
   await composer.fill('你好')
   await page.getByRole('button', { name: '发送', exact: true }).click()
@@ -648,7 +791,7 @@ try {
 
   await page
     .locator('aside')
-    .getByRole('button', { name: /设计搭档/ })
+    .getByRole('button', { name: '设计搭档', exact: true })
     .click()
   await app.evaluate(({ BrowserWindow }) =>
     BrowserWindow.getAllWindows()[0].setSize(960, 640),

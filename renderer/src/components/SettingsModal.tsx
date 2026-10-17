@@ -842,13 +842,7 @@ export function SettingsModal() {
             ))}
           </nav>
         </aside>
-        <main className="scroll-thin min-w-0 flex-1 overflow-y-auto">
-          <div className="border-b border-stone-200 px-7 py-5 dark:border-stone-700">
-            <h3 className="text-xl font-semibold tracking-tight text-stone-800 dark:text-stone-100">
-              {current.label}
-            </h3>
-            <p className="mt-1 text-xs text-stone-400">{current.description}</p>
-          </div>
+        <main aria-label={current.label} className="scroll-thin min-w-0 flex-1 overflow-y-auto">
           {section === 'general' && <GeneralSection />}
           {section === 'providers' && <ProvidersSection />}
           {section === 'bot' && <BotSection />}

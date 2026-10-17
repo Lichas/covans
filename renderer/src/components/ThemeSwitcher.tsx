@@ -33,6 +33,7 @@ export function ThemeSwitcher({ compact = false }: { compact?: boolean }) {
           <button
             key={value}
             type="button"
+            className="shape-rect"
             aria-label={compact ? `切换到${label}主题` : label}
             title={label}
             aria-pressed={theme === value}

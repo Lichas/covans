@@ -86,6 +86,7 @@ export function PresetAvatarPicker({
             disabled={disabled}
             aria-label={`选择${preset.label}头像`}
             aria-pressed={value === preset.avatar}
+            className="shape-rect"
             onClick={() => onChange(preset)}
           >
             <span className="preset-portrait">

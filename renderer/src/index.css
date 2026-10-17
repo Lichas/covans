@@ -61,8 +61,7 @@ input[type='range'] {
 
 :root {
   color-scheme: light;
-  --font-ui: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC',
-    'Heiti SC', 'Helvetica Neue', 'Microsoft YaHei', sans-serif;
+  --font-ui: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
     monospace;
   --canvas: #edf3fc;
@@ -373,11 +372,6 @@ button:disabled {
   box-shadow: 0 8px 24px rgb(38 34 28 / 0.08);
   backdrop-filter: blur(14px) saturate(1.08);
 }
-.chat-view.group-background .message-user .message-surface {
-  background: rgb(239 245 241 / 0.84);
-  box-shadow: 0 6px 20px rgb(38 34 28 / 0.07);
-  backdrop-filter: blur(12px) saturate(1.06);
-}
 .chat-view.group-background .date-divider span {
   border: 1px solid rgb(255 255 255 / 0.42);
   border-radius: 999px;
@@ -637,7 +631,7 @@ button:disabled {
   align-items: flex-end;
   overflow: hidden;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: 14px;
   background: var(--surface);
   color: white;
 }
@@ -2369,7 +2363,7 @@ kbd {
   min-width: 0;
   overflow: hidden;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: 14px;
   aspect-ratio: 1.45;
   background: var(--soft);
   color: white;
@@ -2435,10 +2429,6 @@ kbd {
   border-color: rgb(255 255 255 / 0.08);
   background: rgb(36 36 35 / 0.78);
   box-shadow: 0 8px 24px rgb(0 0 0 / 0.18);
-}
-.dark .chat-view.group-background .message-user .message-surface {
-  background: rgb(48 63 53 / 0.84);
-  box-shadow: 0 8px 22px rgb(0 0 0 / 0.14);
 }
 .dark .chat-view.group-background .date-divider span {
   border-color: rgb(255 255 255 / 0.08);
