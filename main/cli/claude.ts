@@ -35,6 +35,7 @@ export const claudeAdapter: CliAdapter = {
 
   buildArgs(invocation: CliInvocation): string[] {
     const args = ['-p', invocation.prompt, '--output-format', 'stream-json', '--verbose']
+    if (invocation.model.trim()) args.push('--model', invocation.model.trim())
     if (invocation.sessionId) args.push('--resume', invocation.sessionId)
     args.push('--permission-mode', PERMISSION_MODE[invocation.cliAccess])
     return args

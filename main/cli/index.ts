@@ -42,9 +42,15 @@ function cliKindOf(bot: Bot): LocalCliKind {
   return bot.backend as LocalCliKind
 }
 
-/** 运行方式、可执行文件、权限或工作区任一变化都需要重建 CLI 会话。 */
+/** 运行方式、可执行文件、模型、权限或工作区任一变化都需要重建 CLI 会话。 */
 export function cliFingerprint(bot: Bot): string {
-  return [bot.backend, bot.cli_path.trim(), bot.cli_access, bot.workspace_dir].join('|')
+  return [
+    bot.backend,
+    bot.cli_path.trim(),
+    bot.model.trim(),
+    bot.cli_access,
+    bot.workspace_dir,
+  ].join('|')
 }
 
 /**
@@ -378,6 +384,7 @@ export async function runCliAgent(
     cliAccess: bot.cli_access,
     workspace,
     imagePaths: adapter.acceptsImageArgs ? images.files : [],
+    model: bot.model.trim(),
   }
 
   observe('cli.dispatch.started', {

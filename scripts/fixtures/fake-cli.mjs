@@ -38,12 +38,14 @@ const prompt =
     : (args[args.length - 1] ?? '')
 const sandboxIndex = args.indexOf('--sandbox')
 const modeIndex = args.indexOf('--permission-mode')
+const modelIndex = dialect === 'claude' ? args.indexOf('--model') : args.indexOf('-m')
 logCall({
   dialect,
   isResume,
   prompt,
   sandbox: sandboxIndex >= 0 ? args[sandboxIndex + 1] : '',
   permissionMode: modeIndex >= 0 ? args[modeIndex + 1] : '',
+  model: modelIndex >= 0 ? args[modelIndex + 1] : '',
   imageCount: args.filter((arg) => arg === '-i').length,
 })
 

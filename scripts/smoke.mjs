@@ -445,6 +445,7 @@ console.log('\n[1e] 本地 CLI 运行后端')
     backend: 'codex-cli',
     cli_path: fakeCli,
     cli_access: 'read-only',
+    model: 'gpt-5.6-sol',
   })
   const cliChat = db.createDm(cliBot.id)
 
@@ -486,6 +487,10 @@ console.log('\n[1e] 本地 CLI 运行后端')
     second.text.includes('续接'),
     '续接轮次的正文同样写回聊天',
   )
+  assert(
+    firstCall.model === 'gpt-5.6-sol' && secondCall.model === 'gpt-5.6-sol',
+    '新建与续接都带上 Bot 指定模型（resume 不带 -m 会回退 CLI 默认模型）',
+  )
 
   // 图片：Codex 走 -i 附图参数
   await runTurn(cliBot, cliChat, [userTurn('看图', true)], '')
@@ -506,6 +511,14 @@ console.log('\n[1e] 本地 CLI 运行后端')
   )
   await runTurn(cliBot, cliChat, [userTurn('清空之后')], '')
   assert(calls().at(-1).isResume === false, '清空后重新建立 CLI 会话')
+
+  // 换模型也要重建会话：续接时模型与建会话不一致会被 CLI 警告甚至直接失败。
+  db.updateBot(cliBot.id, { model: 'gpt-5.4' })
+  await runTurn(db.getBot(cliBot.id), cliChat, [userTurn('换模型')], '')
+  assert(
+    calls().at(-1).isResume === false && calls().at(-1).model === 'gpt-5.4',
+    '修改模型后重建 CLI 会话并带上新模型',
+  )
 
   // Claude 方言：改用 -p/stream-json，且只读映射为 plan 权限模式
   process.env.COVAN_FAKE_CLI_DIALECT = 'claude'

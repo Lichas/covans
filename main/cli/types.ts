@@ -8,6 +8,8 @@ export interface CliInvocation {
   cliAccess: CliAccess
   workspace: string
   imagePaths: string[]
+  /** Bot 指定的模型；为空时使用 CLI 自己的默认模型。 */
+  model: string
 }
 
 /** 解析过程中向运行时转发的增量信息。 */

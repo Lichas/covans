@@ -34,6 +34,11 @@ export const codexAdapter: CliAdapter = {
 
   buildArgs(invocation: CliInvocation): string[] {
     const imageArgs = invocation.imagePaths.flatMap((file) => ['-i', file])
+    // 模型必须同时出现在新建与续接调用上：resume 不带 -m 会回退 CLI 默认模型，
+    // 当账号的默认模型不可用或与建会话时不同，整轮会直接失败。
+    const modelArgs = invocation.model.trim()
+      ? ['-m', invocation.model.trim()]
+      : []
     // resume 不支持 --sandbox / -C：沙箱与工作目录在首次会话建立时确定，
     // 之后由 codex 会话自身继承，因此这里只在新建会话时下发。
     if (invocation.sessionId)
@@ -43,6 +48,7 @@ export const codexAdapter: CliAdapter = {
         invocation.sessionId,
         '--json',
         '--skip-git-repo-check',
+        ...modelArgs,
         ...imageArgs,
         invocation.prompt,
       ]
@@ -54,6 +60,7 @@ export const codexAdapter: CliAdapter = {
       '-C',
       invocation.workspace,
       '--skip-git-repo-check',
+      ...modelArgs,
       ...imageArgs,
       invocation.prompt,
     ]

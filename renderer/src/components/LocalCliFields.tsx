@@ -132,7 +132,8 @@ export function LocalCliFields({
           </Field>
           <p className="text-[12px] leading-relaxed text-stone-500 dark:text-stone-400">
             正文由该 CLI 用它自己的登录与额度生成，Covan 仍会注入人设、记忆和最近对话。首次发言会建立一个
-            CLI 会话，之后在同一聊天中续接；清空聊天记录或开始新话题会重新建立会话。
+            CLI 会话，之后在同一聊天中续接；清空聊天记录、开始新话题或修改这里的配置都会重新建立会话。
+            下方「模型」会作为参数传给 CLI：留空则用 CLI 自己的默认模型，若 CLI 提示模型不受支持或不可用，请在此填写一个可用模型。
           </p>
         </div>
       )}
