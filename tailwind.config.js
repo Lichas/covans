@@ -8,16 +8,17 @@ export default {
         bubble: '18px',
       },
       colors: {
-        // Shared cool neutrals keep form controls and secondary panels aligned.
+        // Neutral gray scale shared with the CSS tokens in index.css. 400 follows the
+        // themed muted token so light and dark stay in sync.
         stone: {
-          50: '#f5f8ff', 100: '#eaf0fa', 200: '#d5e0f0',
-          300: '#b7c8e0', 400: 'rgb(var(--neutral-muted) / <alpha-value>)', 500: '#617695',
-          600: '#496080', 700: '#30496d', 800: '#1d3152',
-          900: '#122342', 950: '#0b1730',
+          50: '#fafafa', 100: '#f4f4f5', 200: '#e4e4e7',
+          300: '#d4d4d8', 400: 'rgb(var(--neutral-muted) / <alpha-value>)',
+          500: '#71717a', 600: '#52525b', 700: '#3f3f46', 800: '#27272a',
+          900: '#18181b', 950: '#09090b',
         },
-        ink: '#244e99',
-        paper: '#f5f5f4',
-        bubbleBot: '#f0f0ee',
+        ink: '#18181b',
+        paper: '#fafafa',
+        bubbleBot: '#f4f4f5',
       },
       keyframes: {
         blink: {

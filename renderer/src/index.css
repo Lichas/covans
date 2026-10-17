@@ -410,7 +410,7 @@ button:disabled {
   border: 1px solid var(--bubble-bot-edge);
   border-radius: 999px;
   background: var(--meta-pill-bg);
-  box-shadow: 0 6px 18px rgb(45 79 140 / 0.06);
+  box-shadow: 0 6px 18px rgb(0 0 0 / 0.05);
   backdrop-filter: blur(12px) saturate(1.05);
 }
 .chat-view.chat-dm .message-meta .message-author {
@@ -454,7 +454,7 @@ button:disabled {
   border-radius: 20px;
   background: var(--bubble-user-bg);
   color: var(--bubble-user-fg);
-  box-shadow: 0 10px 26px rgb(16 28 52 / 0.18);
+  box-shadow: 0 10px 26px rgb(0 0 0 / 0.18);
 }
 /* 错误回复在有气泡的布局里改为整块淡红底，而不是只留一条左竖线。 */
 .chat-view.chat-dm .message-bot .message-surface.message-error {
@@ -1992,7 +1992,7 @@ kbd {
   outline: none;
   -webkit-text-fill-color: transparent;
 }
-.markdown-editor-input::selection { background: rgb(214 228 255 / 0.7); }
+.markdown-editor-input::selection { background: rgb(37 99 235 / 0.18); }
 .md-token-heading { color: #7c3aed; font-weight: 700; }
 .md-token-fence { color: #0369a1; }
 .md-token-code { color: #b45309; }
