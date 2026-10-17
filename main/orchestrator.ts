@@ -11,6 +11,7 @@ import type {
   CovanEvent,
   ChatTopicState,
   Message,
+  Provider,
   ScheduledTask,
   StartChatTopicResult,
 } from '../shared/types'
@@ -21,7 +22,7 @@ import { buildSystemPrompt, noteNewMessages, recallChatMemories, type GroupConte
 import { emitEvent as emit, setEventEmitter } from './events'
 import { classifyObservationError, observationErrorStatus, observe } from './observability'
 import { decideResponse, getJevConfig } from './decisionStrategy'
-import { isCliBot } from './cli'
+import { isCliBot, runCliDecision } from './cli'
 
 export type EmitFn = (ev: CovanEvent) => void
 
@@ -640,16 +641,46 @@ function decisionState(
 }
 
 /**
- * 判断该 Bot 是否有可用的“是否发言 / 是否续发”判断引擎。
- * 本地 CLI Bot 不依赖 Provider 也能回复正文，但判断需要 Provider 或已配置的 Jev。
- * `auto` 与 `jev` 都会走 Jev，所以已配置 Jev 时两者都算有引擎；只有 `llm`
- * 明确要求用当前模型判断，才必须配置判断用 Provider。
+ * CLI Bot 的判断用 Provider：显式配置优先；否则回退到第一个配了 API Key 的
+ * 非 mock Provider（用户真实配置的云端来源）；都没有就交给 CLI 自身判断。
+ * 只认带 Key 的 Provider，避免把本地未启动的 LM Studio 之类当成默认判断引擎。
  */
-function hasResponseDecisionEngine(bot: Bot): boolean {
-  if (!isCliBot(bot)) return true
-  if (bot.provider_id) return true
-  if (bot.response_decision_strategy === 'llm') return false
-  return getJevConfig().has_api_key
+export function judgeProviderFor(bot: Bot): Provider | null {
+  const explicit = bot.provider_id ? db.getProvider(bot.provider_id) : null
+  if (explicit) return explicit
+  if (!isCliBot(bot)) return null
+  return (
+    db
+      .listProviders()
+      .find((provider) => provider.kind !== 'mock' && provider.api_key.trim()) ??
+    null
+  )
+}
+
+/**
+ * 内部判断/起草用的 Bot 视图：CLI Bot 的 `model` 是 CLI 的模型名，不能拿去请求
+ * Provider，所以借用判断用 Provider 时留空，使用该 Provider 的默认模型。
+ */
+export function completionBot(bot: Bot, provider: Provider | null): Bot {
+  if (!isCliBot(bot) || !provider) return bot
+  return { ...bot, provider_id: provider.id, model: '' }
+}
+
+/** CLI Bot 选了 Jev 但没配置 Key 时按 auto 处理，避免判断直接抛错。 */
+function judgeStrategyBot(bot: Bot): Bot {
+  if (!isCliBot(bot)) return bot
+  if (bot.response_decision_strategy === 'jev' && !getJevConfig().has_api_key)
+    return { ...bot, response_decision_strategy: 'auto' }
+  return bot
+}
+
+/** 实际判断引擎：已配置的 Jev、判断用/默认 Provider，或本机 CLI 自身。 */
+function judgeEngineOf(bot: Bot): 'jev' | 'provider' | 'cli' {
+  // API Bot 一直用自己的 Provider 判断；没有 Provider 时让判断报错、由消息气泡提示。
+  if (!isCliBot(bot)) return 'provider'
+  if (bot.response_decision_strategy !== 'llm' && getJevConfig().has_api_key)
+    return 'jev'
+  return judgeProviderFor(bot) ? 'provider' : 'cli'
 }
 
 async function shouldReply(
@@ -674,24 +705,24 @@ async function shouldReply(
       })
       return true
     }
-    // 本地 CLI Bot 没有 Provider 又没有 Jev 时不存在可用的判断引擎。
-    // 此时若沿用“判断失败即回复”的兜底，每条群消息都会启动一次 CLI（昂贵且有副作用），
-    // 因此改为只响应 @提及。
-    if (!hasResponseDecisionEngine(bot)) {
+    const judgeProvider = judgeProviderFor(bot)
+    const engine = judgeEngineOf(bot)
+    // CLI 自身判断要启动一次 CLI：只用于首轮，延展轮不再为判断启动进程。
+    if (engine === 'cli' && round > 1) {
       observe('group.reply_decision', {
         chat_id: chatId,
         bot_id: bot.id,
         trace_id: traceId,
         round,
         requested_strategy: bot.response_decision_strategy,
-        used_strategy: 'mention_only',
-        outcome: 'skip_no_decision_engine',
+        used_strategy: 'cli',
+        outcome: 'skip_extension_round',
       })
       return false
     }
     try {
       const result = await decideResponse({
-        bot,
+        bot: judgeStrategyBot(bot),
         kind: 'group_reply',
         state: decisionState(chatId, bot, 'group_reply', {
           round,
@@ -703,28 +734,39 @@ async function shouldReply(
         traceId,
         round,
         llmDecision: async () => {
-          const raw = await completeOnce(
-            bot,
-            [
-              buildSystemPrompt(
-                bot,
-                recallChatMemories(bot.id, chatId),
-                groupContext(chatId, db.listMemberBots(chatId)),
-              ),
-              topicCarryPrompt(chatId),
-              groupReviewRules(),
-              '<<group-reply-decision>>',
-              '你正在群聊中判断是否应该发言。根据前文总结和最新 5 条消息独立判断。',
-              `当前是本次话题的第 ${round} 轮（最多 ${MAX_GROUP_DISCUSSION_ROUNDS} 轮）。`,
-              round > 1
-                ? '这是一轮延展讨论。只有能补充新信息、回应其他成员的具体观点、提出有价值的异议或推进未解决问题时才回复；复述、附和或换句话重复时必须 SKIP。'
-                : '首轮请优先直接回应用户的话题。',
-              '需要回应时只输出 REPLY；没有新价值、与自己无关或别人已充分回答时只输出 SKIP。',
-              '被用户直接点名时必须回复。不要在判断阶段输出正式回答。',
-            ].join('\n\n'),
-            decisionTranscript(chatId),
-            { signal, reasoning: 'off', maxTokens: 32, temperature: 0, observation: { operation: 'group_reply_decision', chatId, traceId } },
-          )
+          const system = [
+            buildSystemPrompt(
+              bot,
+              recallChatMemories(bot.id, chatId),
+              groupContext(chatId, db.listMemberBots(chatId)),
+            ),
+            topicCarryPrompt(chatId),
+            groupReviewRules(),
+            '<<group-reply-decision>>',
+            '你正在群聊中判断是否应该发言。根据前文总结和最新 5 条消息独立判断。',
+            `当前是本次话题的第 ${round} 轮（最多 ${MAX_GROUP_DISCUSSION_ROUNDS} 轮）。`,
+            round > 1
+              ? '这是一轮延展讨论。只有能补充新信息、回应其他成员的具体观点、提出有价值的异议或推进未解决问题时才回复；复述、附和或换句话重复时必须 SKIP。'
+              : '首轮请优先直接回应用户的话题。',
+            '需要回应时只输出 REPLY；没有新价值、与自己无关或别人已充分回答时只输出 SKIP。',
+            '被用户直接点名时必须回复。不要在判断阶段输出正式回答。',
+          ].join('\n\n')
+          // 有判断用 Provider 就用它（便宜、快）；否则让 CLI 自己判断一次。
+          const raw = judgeProvider
+            ? await completeOnce(
+                completionBot(bot, judgeProvider),
+                system,
+                decisionTranscript(chatId),
+                { signal, reasoning: 'off', maxTokens: 32, temperature: 0, observation: { operation: 'group_reply_decision', chatId, traceId } },
+              )
+            : isCliBot(bot)
+              ? await runCliDecision(bot, `${system}\n\n${decisionTranscript(chatId)}`, { signal })
+              : await completeOnce(
+                  bot,
+                  system,
+                  decisionTranscript(chatId),
+                  { signal, reasoning: 'off', maxTokens: 32, temperature: 0, observation: { operation: 'group_reply_decision', chatId, traceId } },
+                )
           return { shouldRespond: !/^\s*SKIP\b/i.test(raw) }
         },
       })
@@ -736,6 +778,7 @@ async function shouldReply(
         round,
         requested_strategy: bot.response_decision_strategy,
         used_strategy: result.strategy,
+        ...(engine === 'jev' ? {} : { judge_engine: engine }),
         ...(result.confidence === undefined
           ? {}
           : { confidence: result.confidence }),
@@ -984,12 +1027,10 @@ async function draftNaturalFollowUp(
   index: number,
   traceId: string,
 ): Promise<string | null> {
-  // 没有判断引擎时不做自然追问：追问判断本身需要一次模型调用，
-  // 否则只能无条件追问，与“确有补充价值才发”的契约冲突。
-  if (!hasResponseDecisionEngine(bot)) return null
-  // CLI Bot 的对话正文由 CLI 生成，这里不额外启动一次 CLI；只有配置了判断用
-  // Provider 才能起草追问，否则（例如只有 Jev）直接跳过，省掉一次注定失败的 completion。
-  if (isCliBot(bot) && !bot.provider_id) return null
+  // 追问需要「判断 + 起草」两次模型调用；CLI Bot 只有配置了判断用 Provider
+  // （显式或默认带 Key 的）才启用，绝不为追问额外启动一次 CLI。
+  const judgeProvider = judgeProviderFor(bot)
+  if (isCliBot(bot) && !judgeProvider) return null
   try {
     const recentReplies = db
       .listCurrentTopicMessages(chatId, 5)
@@ -1012,7 +1053,7 @@ async function draftNaturalFollowUp(
       iteration: index + 1,
       llmDecision: async () => {
         const raw = await completeOnce(
-          bot,
+          completionBot(bot, judgeProvider),
           [
             buildSystemPrompt(bot, recallChatMemories(bot.id, chatId)),
             topicCarryPrompt(chatId),
@@ -1041,7 +1082,7 @@ async function draftNaturalFollowUp(
       parsed = llmParsed ?? { content: result.draft, outcome: 'accepted' }
     } else {
       const raw = await completeOnce(
-        bot,
+        completionBot(bot, judgeProvider),
         [
           buildSystemPrompt(bot, recallChatMemories(bot.id, chatId)),
           topicCarryPrompt(chatId),

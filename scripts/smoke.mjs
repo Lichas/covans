@@ -1173,7 +1173,7 @@ assert(
   '即使每轮都决定回复，群聊也在第 5 轮硬停止',
 )
 
-console.log('\n[4e] 本地 CLI Bot 的群聊判断：Jev 可用则参与，否则只响应 @提及')
+console.log('\n[4e] 本地 CLI Bot 的群聊判断：Jev / 默认 Provider / CLI 自身')
 {
   const fakeCli = path.join(root, 'scripts/fixtures', 'fake-cli.mjs')
   // [1e] 结束时会清掉环境变量，这里重新指定一个独立的调用日志。
@@ -1188,45 +1188,81 @@ console.log('\n[4e] 本地 CLI Bot 的群聊判断：Jev 可用则参与，否�
       .listMessages(chatId, undefined, 20)
       .filter((message) => message.sender_type === 'bot' && message.status === 'done')
 
-  // 明确的传统 LLM 策略 + 没有判断用 Provider：群里没有判断引擎，只响应 @提及。
-  const silent = db.createBot({
-    name: 'CLI 静默',
+  // 已配置 Jev：auto 策略用 Jev 判断，不需要判断用 Provider，也不为判断启动 CLI。
+  const jevJudge = db.createBot({
+    name: 'CLI 用 Jev 判断',
     backend: 'codex-cli',
     cli_path: fakeCli,
     model: 'gpt-5.6-sol',
-    response_decision_strategy: 'llm',
   })
-  const silentGroup = db.createGroup('CLI 静默群', [silent.id])
-  const beforeQuiet = cliCallCount()
-  await orchestrator.sendUserMessage(silentGroup.id, '这条没有点名', [])
-  assert(cliReplies(silentGroup.id).length === 0, '没有判断引擎的 CLI Bot 在群里保持安静')
+  assert(jevJudge.response_decision_strategy === 'auto', 'CLI Bot 默认使用自动判断策略')
   assert(
-    cliCallCount() === beforeQuiet,
-    '没有判断引擎时不会为每条群消息启动一次 CLI',
+    orchestrator.judgeProviderFor(jevJudge) === null,
+    '没有带 Key 的 Provider 时不会强行挑一个默认判断 Provider',
   )
-  await orchestrator.sendUserMessage(silentGroup.id, '@CLI 静默 你来回答', [silent.id])
+  const jevGroup = db.createGroup('CLI Jev 判断群', [jevJudge.id])
+  const beforeJev = cliCallCount()
+  await orchestrator.sendUserMessage(jevGroup.id, '这条没有点名也要判断', [])
+  assert(cliReplies(jevGroup.id).length === 1, 'auto 策略在 Jev 已配置时让 CLI Bot 正常参与群聊')
   assert(
-    cliCallCount() > beforeQuiet && cliReplies(silentGroup.id).length === 1,
-    '@提及仍会强制没有判断引擎的 CLI Bot 发言',
+    cliCallCount() === beforeJev + 1,
+    'Jev 判断不为判断额外启动 CLI，只发起一次正文调用',
   )
-  db.deleteBot(silent.id)
+  db.deleteBot(jevJudge.id)
 
-  // 默认 auto + 已配置 Jev：判断交给 Jev，不需要判断用 Provider。
-  const autoBot = db.createBot({
-    name: 'CLI 自动',
+  // 没有 Jev、没有带 Key 的 Provider：用 CLI 自身判断首轮（一次判断 + 一次正文）。
+  const sealed = db.getSetting('jev_api_key_sealed')
+  db.setSetting('jev_api_key_sealed', '')
+  try {
+    const cliJudge = db.createBot({
+      name: 'CLI 自身判断',
+      backend: 'codex-cli',
+      cli_path: fakeCli,
+      model: 'gpt-5.6-sol',
+      response_decision_strategy: 'llm',
+    })
+    const cliGroup = db.createGroup('CLI 自身判断群', [cliJudge.id])
+    const beforeCli = cliCallCount()
+    await orchestrator.sendUserMessage(cliGroup.id, '没有 Provider 也要判断', [])
+    assert(cliReplies(cliGroup.id).length === 1, '没有判断用 Provider 时用 CLI 自身判断并发言')
+    assert(
+      cliCallCount() === beforeCli + 2,
+      'CLI 自身判断：一次判断调用加一次正文调用',
+    )
+    assert(
+      db.listMessages(cliGroup.id, undefined, 20).filter((m) => m.sender_type === 'bot').length === 1,
+      'CLI 自身判断只用于首轮，延展轮不再启动 CLI',
+    )
+    await orchestrator.sendUserMessage(cliGroup.id, '@CLI 自身判断 你来', [cliJudge.id])
+    assert(cliCallCount() > beforeCli + 2, '@提及仍然强制发言')
+    db.deleteBot(cliJudge.id)
+  } finally {
+    db.setSetting('jev_api_key_sealed', sealed ?? '')
+  }
+
+  // 判断用 Provider 回退：显式为空时挑第一个带 Key 的非 mock Provider。
+  const keyed = db.saveProvider({
+    name: '判断用 DeepSeek',
+    kind: 'deepseek',
+    api_key: 'sk-smoke-judge',
+    default_model: 'deepseek-v4-flash',
+  })
+  const withDefault = db.createBot({
+    name: 'CLI 默认判断',
     backend: 'codex-cli',
     cli_path: fakeCli,
     model: 'gpt-5.6-sol',
   })
-  assert(autoBot.response_decision_strategy === 'auto', 'CLI Bot 默认使用自动判断策略')
-  const autoGroup = db.createGroup('CLI 自动群', [autoBot.id])
-  const beforeAuto = cliCallCount()
-  await orchestrator.sendUserMessage(autoGroup.id, '这条没有点名也要判断', [])
   assert(
-    cliReplies(autoGroup.id).length === 1 && cliCallCount() > beforeAuto,
-    'auto 策略在 Jev 已配置时让 CLI Bot 正常参与群聊',
+    orchestrator.judgeProviderFor(withDefault)?.id === keyed.id,
+    '没有显式判断用 Provider 时回退到带 Key 的默认 Provider',
   )
-  db.deleteBot(autoBot.id)
+  assert(
+    orchestrator.completionBot(withDefault, keyed).model === '',
+    '借用判断用 Provider 时使用它的默认模型，不透传 CLI 的模型名',
+  )
+  db.deleteProvider(keyed.id)
+  db.deleteBot(withDefault.id)
   delete process.env.COVAN_FAKE_CLI_LOG
 }
 

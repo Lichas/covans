@@ -43,6 +43,10 @@ export function NewBotDialog() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [acceptMatureContent, setAcceptMatureContent] = useState(false)
+  // 判断用 Provider 留空时跟随第一个带 Key 的非 mock Provider。
+  const defaultJudge =
+    providers.find((entry) => entry.kind !== 'mock' && entry.api_key.trim()) ??
+    null
   const [preferenceLoaded, setPreferenceLoaded] = useState(false)
 
   useEffect(() => {
@@ -265,10 +269,13 @@ export function NewBotDialog() {
                 )}
                 <select
                   className={`${inputCls} min-w-0 flex-1`}
+                  aria-label="Provider（判断用，可选）"
                   value={providerId}
                   onChange={(e) => setProviderId(e.target.value)}
                 >
-                  <option value="">稍后配置</option>
+                  <option value="">
+                    {defaultJudge ? `跟随默认（${defaultJudge.name}）` : '稍后配置'}
+                  </option>
                   {providers.map((p) => (
                     <option key={p.id} value={p.id}>
                       {p.name}

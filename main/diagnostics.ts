@@ -21,7 +21,7 @@ const SAFE_FIELDS = new Set([
   'input_chars', 'result_chars',
   'has_model_override',
   'server_id', 'skill_id', 'transport', 'server_count', 'skill_count', 'tool_count', 'file_count',
-  'strategy', 'requested_strategy', 'used_strategy', 'confidence', 'threshold',
+  'strategy', 'requested_strategy', 'used_strategy', 'judge_engine', 'confidence', 'threshold',
   'decision_kind', 'fallback_reason',
   'context_window_tokens', 'input_context_ratio', 'output_budget_ratio',
   'reasoning_output_ratio', 'visible_output_chars',

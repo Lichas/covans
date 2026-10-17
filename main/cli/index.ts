@@ -354,6 +354,47 @@ function friendlyCliError(outcome: { errorMessage: string }, stderr: string, exi
   return `CLI 运行失败（退出码 ${exitCode ?? '未知'}）`
 }
 
+/**
+ * 用本地 CLI 做一次一次性判断（是否发言）。
+ *
+ * 不建立也不续接聊天会话、不写消息、不落会话映射：这是「判断」的旁路调用，
+ * 只在 Bot 没有可用判断用 Provider 时使用。只读执行，避免副作用。
+ */
+export async function runCliDecision(
+  bot: Bot,
+  prompt: string,
+  opts: { signal?: AbortSignal } = {},
+): Promise<string> {
+  if (!isCliBot(bot)) throw new Error('该 Bot 不是本地 CLI 运行方式')
+  const adapter = ADAPTERS[bot.backend as LocalCliKind]
+  const env = cliEnvironment()
+  const executable = resolveExecutable(adapter.defaultCommand, bot.cli_path, env)
+  const workspace = ensureWorkspace(bot.id)
+  const invocation: CliInvocation = {
+    prompt,
+    sessionId: '',
+    cliAccess: 'read-only',
+    workspace,
+    imagePaths: [],
+    model: bot.model.trim(),
+  }
+  const result = await spawnCli(
+    executable,
+    adapter.buildArgs(invocation),
+    workspace,
+    env,
+    { onDelta: () => {}, onSessionId: () => {}, onArtifact: () => {}, onActivity: () => {} },
+    adapter,
+    opts.signal ?? new AbortController().signal,
+  )
+  if (result.aborted) throw new Error('CLI 判断已取消')
+  if (result.outcome.failed)
+    throw new Error(friendlyCliError(result.outcome, result.stderr, result.exitCode))
+  const text = result.outcome.text.trim()
+  if (!text) throw new Error('CLI 判断没有返回内容')
+  return text
+}
+
 /** 按 Bot 的本地 CLI 运行方式执行一轮，并把结果转发给聊天回调。 */
 export async function runCliAgent(
   chatId: string,

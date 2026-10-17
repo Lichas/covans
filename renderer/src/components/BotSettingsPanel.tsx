@@ -256,7 +256,6 @@ function ProfileRow({
   editing,
   editLabel = '编辑',
   editAriaLabel,
-  mentionOnly,
   onEdit,
   children,
 }: {
@@ -269,17 +268,11 @@ function ProfileRow({
   editing?: boolean
   editLabel?: string
   editAriaLabel?: string
-  /** 标记「群里只会被 @ 唤醒」的说明行，供回归测试断言。 */
-  mentionOnly?: boolean
   onEdit?: () => void
   children?: React.ReactNode
 }) {
   return (
-    <div
-      className="profile-row"
-      data-profile-row={id}
-      data-mention-only={mentionOnly ? 'true' : undefined}
-    >
+    <div className="profile-row" data-profile-row={id}>
       <div className="profile-row-body">
         <div className="profile-row-label">
           {leading}
@@ -391,9 +384,29 @@ function ProfileTab({
     }
   }, [cli])
 
-  const canJudge =
-    !!bot.provider_id ||
-    (jevReady && bot.response_decision_strategy !== 'llm')
+  // 判断引擎与主进程同规则：已配置 Jev → Jev；否则显式判断用 Provider，
+  // 再否则第一个带 Key 的非 mock Provider；都没有就用 CLI 自身判断。
+  const defaultJudge =
+    providers.find((entry) => entry.kind !== 'mock' && entry.api_key.trim()) ??
+    null
+  const judgeProvider =
+    (bot.provider_id
+      ? providers.find((entry) => entry.id === bot.provider_id)
+      : null) ?? defaultJudge
+  const judgeEngine: 'jev' | 'provider' | 'cli' =
+    jevReady && bot.response_decision_strategy !== 'llm'
+      ? 'jev'
+      : judgeProvider
+        ? 'provider'
+        : 'cli'
+  const judgeHint =
+    judgeEngine === 'jev'
+      ? '由 Jev 判断是否发言；判断用 Provider 作为 Jev 不可用时的回退'
+      : judgeEngine === 'cli'
+        ? '没有可用的 Provider：每条群消息会用 CLI 自身判断，较慢且消耗 CLI 额度'
+        : bot.provider_id
+          ? `由 ${judgeProvider?.name ?? 'Provider'} 判断是否发言，不影响正文生成`
+          : `未单独选择：默认用 ${judgeProvider?.name ?? 'Provider'} 判断是否发言`
 
   const commitTemp = (value: number) => {
     setTemp(value)
@@ -500,20 +513,18 @@ function ProfileTab({
         <ProfileRow
           id="judge"
           label="判断用 Provider"
-          mentionOnly={!canJudge}
-          hint={
-            canJudge
-              ? '只用于判断是否发言、是否续发，不影响正文生成'
-              : '未选择且 Jev 未就绪：群聊里只会被 @ 唤醒，不会主动开口'
-          }
+          hint={judgeHint}
           action={
             <select
               aria-label="Provider（判断用，可选）"
+              data-judge-engine={judgeEngine}
               className="max-w-[132px] shrink-0 rounded-lg border border-stone-200 bg-white px-2 py-1 text-[12px] text-stone-700 dark:border-stone-600 dark:bg-stone-800 dark:text-stone-200"
               value={bot.provider_id ?? ''}
               onChange={(event) => save({ provider_id: event.target.value || null })}
             >
-              <option value="">未选择</option>
+              <option value="">
+                {defaultJudge ? `跟随默认（${defaultJudge.name}）` : '未选择'}
+              </option>
               {providers.map((entry) => (
                 <option key={entry.id} value={entry.id}>
                   {entry.name}
@@ -597,8 +608,8 @@ function ProfileTab({
         id="decision"
         label="响应决策"
         hint={
-          cli && !canJudge
-            ? '本地 CLI 的发言判断需要判断用 Provider 或已配置的 Jev；当前缺一个。'
+          cli && judgeEngine === 'cli'
+            ? '本地 CLI 没有判断用 Provider：发言判断由 CLI 自身完成，只用于首轮。'
             : decision?.hint
         }
         action={

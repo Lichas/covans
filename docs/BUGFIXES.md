@@ -14,6 +14,13 @@
 - **修复**：移除照片背景对用户气泡的覆盖，单聊和群聊分别保留无背景时的默认样式；背景预览与选图按钮从通用胶囊规则中豁免，统一使用 14px 圆角矩形。
 - **回归**：真实 Electron UI 测试通过界面切换浅色/深色主题及海崖/星夜背景，比较有无背景时的用户气泡配色、阴影和模糊；单聊检查文字对比度至少 4.5:1，并检查两类图片卡片不是胶囊。
 
+## 2026-10-17 · CLI Bot 的判断调用把 CLI 模型名发给 Provider
+
+- **症状**：给本地 CLI Bot 配置判断用 Provider 后，群聊判断仍失败（回退成每条都回复）；Provider 收到的是 CLI 的模型名（如 `gpt-5.6-luna`）。
+- **根因**：判断与续发都复用 `completeOnce(bot, …)`，而 `resolveModel()` 优先使用 `bot.model`；对 CLI Bot 来说该字段是 CLI 目录里的模型名，和 Provider 的模型命名空间无关。
+- **修复**：新增 `completionBot()`：CLI Bot 借用判断用 Provider 时把 `provider_id` 指向该 Provider 并把 `model` 置空，使用 Provider 默认模型；正文仍由 CLI 生成。
+- **回归**：`smoke` 断言 `completionBot(cliBot, provider).model === ''`，并覆盖 CLI Bot 经默认 Provider / Jev / CLI 自身三条判断路径。
+
 ## 2026-10-17 · CLI Bot 在群里不主动说话（`auto` + Jev 被误判为无判断引擎）
 
 - **症状**：本地 CLI Bot 在群聊里只回 @提及，即使已经配置了 TypeSafe Jev；设定页也不说明原因。
