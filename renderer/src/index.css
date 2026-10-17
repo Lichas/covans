@@ -78,6 +78,14 @@ input[type='range'] {
   --glass-strong: rgb(247 250 255 / 0.9);
   --glass-edge: rgb(255 255 255 / 0.88);
   --glass-shadow: 0 12px 36px rgb(45 79 140 / 0.08), inset 0 1px 0 var(--glass-edge);
+  --bubble-bot-bg: rgb(255 255 255 / 0.7);
+  --bubble-bot-edge: rgb(255 255 255 / 0.82);
+  --bubble-bot-shadow: 0 10px 30px rgb(45 79 140 / 0.08);
+  --bubble-user-bg: #22314b;
+  --bubble-user-fg: #f4f8ff;
+  --bubble-error-bg: #fdf0ee;
+  --bubble-error-edge: rgb(217 139 128 / 0.55);
+  --meta-pill-bg: rgb(255 255 255 / 0.74);
   --ambient: radial-gradient(ellipse at 95% 4%, #abc9ff70, transparent 58%), radial-gradient(ellipse at 20% 100%, #c4d5ff55, transparent 55%), linear-gradient(135deg, #f4f7fd, #e8effc);
 }
 .dark {
@@ -95,6 +103,14 @@ input[type='range'] {
   --glass-strong: rgb(22 40 73 / 0.94);
   --glass-edge: rgb(174 205 255 / 0.22);
   --glass-shadow: 0 16px 40px rgb(2 10 35 / 0.18), inset 0 1px 0 var(--glass-edge);
+  --bubble-bot-bg: rgb(30 54 99 / 0.62);
+  --bubble-bot-edge: rgb(140 175 235 / 0.2);
+  --bubble-bot-shadow: 0 12px 32px rgb(2 10 35 / 0.28);
+  --bubble-user-bg: #3f6099;
+  --bubble-user-fg: #f4f8ff;
+  --bubble-error-bg: #3a2430;
+  --bubble-error-edge: rgb(217 139 128 / 0.42);
+  --meta-pill-bg: rgb(30 54 99 / 0.78);
   --ambient: radial-gradient(ellipse at 95% 0%, #2e63c784, transparent 65%), radial-gradient(ellipse at 35% 95%, #2a3c8250, transparent 55%), linear-gradient(135deg, #182f60, #0c1838);
 }
 body {
@@ -372,6 +388,121 @@ button:disabled {
   background: rgb(255 255 255 / 0.58);
   backdrop-filter: blur(12px);
 }
+
+/* ---------- 单人聊天：气泡式布局（参考 Grok Bot 的留白与气泡节奏） ----------
+   用户消息为深色胶囊靠右，Bot 消息为浅色玻璃块靠左，名称与头像收进一枚
+   悬浮胶囊，日期分隔保持居中。群聊沿用原有宽阅读区。 */
+.chat-view.chat-dm .message-row {
+  margin: 26px 0;
+}
+.chat-view.chat-dm .message-row:first-of-type {
+  margin-top: 8px;
+}
+.chat-view.chat-dm .message-body {
+  max-width: 100%;
+}
+/* Bot 气泡贴合内容，短回复不再撑满整行。 */
+.chat-view.chat-dm .message-bot .message-body {
+  flex: 0 1 auto;
+  width: fit-content;
+  max-width: min(700px, 88%);
+}
+.chat-view.chat-dm .message-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 0;
+  margin-bottom: 8px;
+  padding: 3px 12px 3px 4px;
+  border: 1px solid var(--bubble-bot-edge);
+  border-radius: 999px;
+  background: var(--meta-pill-bg);
+  box-shadow: 0 6px 18px rgb(45 79 140 / 0.06);
+  backdrop-filter: blur(12px) saturate(1.05);
+}
+.chat-view.chat-dm .message-meta .message-author {
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+.chat-view.chat-dm .message-meta time {
+  font-size: 10.5px;
+  color: var(--muted);
+}
+.chat-view.chat-dm .message-avatar-inline {
+  flex-shrink: 0;
+  overflow: hidden;
+  border-radius: 50%;
+}
+.chat-view.chat-dm .message-bot .message-surface {
+  max-width: 100%;
+  padding: 14px 18px;
+  border: 1px solid var(--bubble-bot-edge);
+  border-radius: 18px;
+  background: var(--bubble-bot-bg);
+  box-shadow: var(--bubble-bot-shadow);
+  backdrop-filter: blur(12px) saturate(1.06);
+}
+.chat-view.chat-dm .message-user {
+  margin-top: 32px;
+}
+.chat-view.chat-dm .message-user .message-body {
+  max-width: min(560px, 84%);
+}
+.chat-view.chat-dm .message-user .message-meta {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+  padding-right: 2px;
+}
+.chat-view.chat-dm .message-user .message-surface {
+  padding: 11px 17px;
+  border-radius: 20px;
+  background: var(--bubble-user-bg);
+  color: var(--bubble-user-fg);
+  box-shadow: 0 10px 26px rgb(16 28 52 / 0.18);
+}
+/* 错误回复在有气泡的布局里改为整块淡红底，而不是只留一条左竖线。 */
+.chat-view.chat-dm .message-bot .message-surface.message-error {
+  border-color: var(--bubble-error-edge);
+  padding-left: 18px;
+  background: var(--bubble-error-bg);
+}
+/* 深色胶囊内的 Markdown 元素需要单独配平，避免沿用浅色底的字色。 */
+.chat-view.chat-dm .message-user .message-surface :where(a) {
+  color: #cfe0ff;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.chat-view.chat-dm .message-user .message-surface :not(pre) > code {
+  background: rgb(255 255 255 / 0.16);
+  color: #eaf2ff;
+}
+.chat-view.chat-dm .message-user .message-surface blockquote {
+  border-left-color: rgb(255 255 255 / 0.42);
+  background: rgb(255 255 255 / 0.1);
+  border-radius: 0 8px 8px 0;
+  padding: 6px 0 6px 12px;
+  color: #e2ecff;
+}
+.chat-view.chat-dm .message-user .message-surface .code-block {
+  border-color: rgb(255 255 255 / 0.16);
+  background: rgb(0 0 0 / 0.2);
+  color: #eaf2ff;
+}
+.chat-view.chat-dm .message-user .message-surface .code-toolbar {
+  border-color: rgb(255 255 255 / 0.14);
+  background: rgb(255 255 255 / 0.08);
+  color: #d5e2f7;
+}
+.chat-view.chat-dm .message-user .message-surface .table-scroll {
+  border-color: rgb(255 255 255 / 0.18);
+}
+.chat-view.chat-dm .message-user .message-surface table {
+  color: inherit;
+}
+
 .artifact-card {
   margin-top: 14px;
   overflow: hidden;

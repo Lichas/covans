@@ -153,11 +153,11 @@ function MarkdownBotField({
         {label}
       </span>
       {editing ? (
-        <div className={fillRemaining ? 'flex min-h-0 flex-1 flex-col space-y-2' : 'space-y-2'}>
-          <div
-            className={`markdown-editor-shell${fillRemaining ? ' flex flex-1' : ''}`}
-            style={{ minHeight: 380, height: 380, flexShrink: 0 }}
-          >
+        /* 编辑态外层保持普通块级流：一旦作为 flex 项参与剩余空间分配，
+           高度会被压缩到面板可用高度（约 245px），低于 360px 的可读下限。
+           改由侧栏滚动来容纳固定 380px 的编辑区。 */
+        <div className="space-y-2">
+          <div className="markdown-editor-shell" style={{ height: 380 }}>
             <MarkdownCodeLayer value={draft} highlightRef={highlightRef} />
             <textarea
               ref={textareaRef}
@@ -689,39 +689,37 @@ export function BotSettingsPanel() {
       className="bot-settings-panel flex h-full w-[320px] shrink-0 flex-col border-l border-stone-200 bg-stone-50/60 dark:border-stone-800 dark:bg-stone-900/40"
       aria-label="Bot 设定"
     >
-      {/* 头部：头像 + 名称 */}
-      <div className="flex items-center gap-3 border-b border-stone-200 px-4 py-4 dark:border-stone-800">
+      {/* 头部：居中大头像 + 名称（参考资料页的居中布局） */}
+      <div className="flex flex-col items-center border-b border-stone-200 px-4 pb-5 pt-6 dark:border-stone-800">
         <button
           onClick={() => setAvatarOpen(true)}
           className="group relative shrink-0 rounded-full focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-emerald-600"
           title="更换头像"
           aria-label="更换头像"
         >
-          <Avatar name={bot.name} avatar={bot.avatar} size={52} />
+          <Avatar name={bot.name} avatar={bot.avatar} size={76} />
           <span className="absolute inset-0 flex items-center justify-center rounded-full bg-black/35 text-white opacity-0 transition group-hover:opacity-100 group-focus-visible:opacity-100">
-            <PencilIcon width={16} height={16} />
+            <PencilIcon width={18} height={18} />
           </span>
         </button>
-        <div className="min-w-0 flex-1">
-          <input
-            key={bot.id + bot.name}
-            aria-label="Bot 名称"
-            defaultValue={bot.name}
-            onBlur={(e) => {
-              const v = e.target.value.trim()
-              if (v && v !== bot.name)
-                void updateBot(bot.id, { name: v }).catch((e) =>
-                  setError(String(e)),
-                )
-            }}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
-            }}
-            className="selectable w-full rounded-md bg-transparent px-1 py-0.5 text-[15px] font-semibold text-stone-800 outline-none transition hover:bg-stone-100 focus:bg-white focus:ring-1 focus:ring-stone-300 dark:text-stone-100 dark:hover:bg-stone-800 dark:focus:bg-stone-800"
-          />
-          <div className="mt-0.5 truncate px-1 text-[11.5px] text-stone-400">
-            {bot.description || '暂无描述'}
-          </div>
+        <input
+          key={bot.id + bot.name}
+          aria-label="Bot 名称"
+          defaultValue={bot.name}
+          onBlur={(e) => {
+            const v = e.target.value.trim()
+            if (v && v !== bot.name)
+              void updateBot(bot.id, { name: v }).catch((e) =>
+                setError(String(e)),
+              )
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+          }}
+          className="selectable mt-3 w-full rounded-md bg-transparent px-1 py-0.5 text-center text-[16px] font-semibold text-stone-800 outline-none transition hover:bg-stone-100 focus:bg-white focus:ring-1 focus:ring-stone-300 dark:text-stone-100 dark:hover:bg-stone-800 dark:focus:bg-stone-800"
+        />
+        <div className="mt-1 w-full truncate px-1 text-center text-[11.5px] text-stone-400">
+          {bot.description || '暂无描述'}
         </div>
       </div>
 

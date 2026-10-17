@@ -22,6 +22,7 @@ interface Props {
 export const MessageBubble = memo(function MessageBubble({
   message,
   bot,
+  isGroup,
   streaming,
   busy,
   onInspectBot,
@@ -51,7 +52,7 @@ export const MessageBubble = memo(function MessageBubble({
       data-status={message.status}
       aria-label={`${name}的消息`}
     >
-      {!isUser && (
+      {!isUser && isGroup && (
         <button
           className="message-avatar"
           onClick={() => bot && onInspectBot?.(bot.id)}
@@ -63,6 +64,17 @@ export const MessageBubble = memo(function MessageBubble({
       )}
       <div className="message-body">
         <div className="message-meta">
+          {/* 单人聊天参考气泡式布局：头像并入名称胶囊，不再单独占一列。 */}
+          {!isUser && !isGroup && (
+            <button
+              className="message-avatar-inline"
+              onClick={() => bot && onInspectBot?.(bot.id)}
+              title={`查看 ${name} 的设置`}
+              disabled={!bot}
+            >
+              <Avatar name={name} avatar={bot?.avatar ?? ''} size={18} />
+            </button>
+          )}
           <span className="message-author">{name}</span>
           <time
             dateTime={new Date(message.created_at).toISOString()}

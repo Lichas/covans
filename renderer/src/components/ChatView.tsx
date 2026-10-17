@@ -195,7 +195,7 @@ export function ChatView() {
 
   return (
     <section
-      className={`chat-view ${backgroundUrl ? 'group-background' : ''}`}
+      className={`chat-view ${isGroup ? 'chat-group' : 'chat-dm'} ${backgroundUrl ? 'group-background' : ''}`}
       style={backgroundStyle}
     >
       <header
