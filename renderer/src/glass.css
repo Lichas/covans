@@ -109,9 +109,9 @@
 .theme-option-label { display: flex; align-items: center; gap: 7px; }
 .theme-picker .theme-option-label { margin: 9px 4px 5px; font-size: 12px; }
 .theme-picker small { display: block; margin: 0 4px 4px; color: var(--muted); font-size: 10px; }
-.theme-preview { display: grid; grid-template-columns: 25% 1fr; grid-template-rows: 1fr 28%; gap: 8px; height: 68px; padding: 8px; overflow: hidden; border: 1px solid #ffffff45; border-radius: 8px; background: linear-gradient(135deg, #edf4ff, #b9d1fa); }
-.theme-preview-dark { background: linear-gradient(135deg, #102248, #315db3); }
-.theme-preview-system { background: linear-gradient(110deg, #d8e6fb 49%, #1c3e7d 50%); }
+.theme-preview { display: grid; grid-template-columns: 25% 1fr; grid-template-rows: 1fr 28%; gap: 8px; height: 68px; padding: 8px; overflow: hidden; border: 1px solid rgb(24 24 27 / 0.12); border-radius: 8px; background: linear-gradient(135deg, #f7f7f8, #e6e6e9); }
+.theme-preview-dark { background: linear-gradient(135deg, #1c1c20, #0a0a0b); }
+.theme-preview-system { background: linear-gradient(110deg, #f4f4f5 49%, #141416 50%); }
 .theme-preview i { display: block; border-radius: 4px; background: #ffffff35; border: 1px solid #ffffff50; }
 .theme-preview i:first-child { grid-row: 1 / 3; }
 .theme-preview i:nth-child(2) { width: 65%; height: 65%; align-self: center; }
@@ -121,8 +121,8 @@
 .welcome-topline { position: absolute; top: 31px; left: 34px; right: 34px; display: flex; justify-content: space-between; color: var(--muted); font-size: 11px; letter-spacing: 0.3px; pointer-events: none; }
 .welcome-topline span span { padding: 0 12px; opacity: 0.5; }
 .welcome-topline > :last-child { font-size: 10px; letter-spacing: 2px; }
-.welcome-ribbon { position: absolute; z-index: -1; inset: 0; overflow: hidden; color: #6d9be5; opacity: 0.1; pointer-events: none; }
-.dark .welcome-ribbon { color: #5288f1; opacity: 0.17; }
+.welcome-ribbon { position: absolute; z-index: -1; inset: 0; overflow: hidden; color: var(--text); opacity: 0.04; pointer-events: none; }
+.dark .welcome-ribbon { color: #ffffff; opacity: 0.05; }
 .welcome-ribbon svg { position: absolute; top: 4%; right: -18%; display: block; width: min(92%, 970px); transform: rotate(-18deg); }
 .welcome-content { max-width: 800px; padding: clamp(98px, 15vh, 160px) 54px 38px; }
 .welcome-mark { width: 64px; height: 64px; border-radius: 21px; margin-bottom: 30px; backdrop-filter: blur(18px); }
@@ -131,8 +131,8 @@
 .welcome-content > .eyebrow { color: var(--accent); font-size: 9px; letter-spacing: 2.3px; }
 .welcome-actions { margin-top: 28px; gap: 12px; }
 .welcome-primary, .welcome-secondary { border-radius: 12px; padding: 12px 18px; border: 1px solid var(--glass-edge); box-shadow: var(--glass-shadow); }
-.welcome-primary { color: white; background: linear-gradient(135deg, #4c7cdf, #2c5cba); }
-.dark .welcome-primary { color: #102346; background: linear-gradient(135deg, #c2d9ff, #86affb); }
+.welcome-primary { color: #ffffff; background: var(--accent); }
+.dark .welcome-primary { color: #0b0b0c; background: var(--accent); }
 .welcome-secondary { background: var(--glass); backdrop-filter: blur(16px); }
 .welcome-bots { margin-top: 40px; }
 .bot-card-grid { gap: 12px; }
@@ -178,7 +178,7 @@
 .composer-controls { align-items: center; gap: 8px; }
 .composer-controls > button { display: flex; align-items: center; justify-content: center; min-width: 34px; min-height: 34px; border-radius: 50%; }
 .composer-controls > button[aria-label='添加图片'], .composer-controls > button[aria-label='提及成员'] { border: 1px solid var(--line); background: var(--glass); color: var(--muted); }
-.composer-controls > button[aria-label='发送'], .composer-controls > button[aria-label='停止生成'] { margin-left: auto; color: white; background: #3f70ce; box-shadow: inset 0 1px 0 #ffffff40; }
+.composer-controls > button[aria-label='发送'], .composer-controls > button[aria-label='停止生成'] { margin-left: auto; color: #ffffff; background: var(--accent); box-shadow: none; }
 .composer-controls > button[aria-label='停止生成'] + button[aria-label='发送'] { margin-left: 0; }
 .dark .composer-controls > button[aria-label='发送'], .dark .composer-controls > button[aria-label='停止生成'] { color: #132950; background: #a4c4ff; }
 .composer-footer { font-size: 10px; line-height: 1.6; flex-wrap: wrap; gap: 2px 12px; }

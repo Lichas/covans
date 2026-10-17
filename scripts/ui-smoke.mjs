@@ -195,8 +195,8 @@ try {
   await page.reload()
   await expect(themeDock.getByRole('button', { name: '切换到深色主题' })).toHaveAttribute('aria-pressed', 'true')
   await expect(page.locator('html')).toHaveClass(/dark/)
-  await expect(page.locator('.welcome-content')).toHaveCSS('color', 'rgb(238, 244, 255)')
-  await expect(page.locator('.sidebar-brand')).toHaveCSS('color', 'rgb(238, 244, 255)')
+  await expect(page.locator('.welcome-content')).toHaveCSS('color', 'rgb(244, 244, 245)')
+  await expect(page.locator('.sidebar-brand')).toHaveCSS('color', 'rgb(244, 244, 245)')
   // Electron can capture a compositor frame before inherited colors repaint.
   const settleAppearance = () => page.evaluate(() => new Promise((resolve) =>
     requestAnimationFrame(() => requestAnimationFrame(resolve)),
@@ -233,7 +233,7 @@ try {
   await page.getByRole('button', { name: '浅色', exact: true }).click()
   await expectThemeCards()
   await expect(themeDock.getByRole('button', { name: '切换到浅色主题' })).toHaveAttribute('aria-pressed', 'true')
-  await expect(page.locator('.theme-picker .theme-option-label').first()).toHaveCSS('color', 'rgb(33, 53, 82)')
+  await expect(page.locator('.theme-picker .theme-option-label').first()).toHaveCSS('color', 'rgb(24, 24, 27)')
   await settleAppearance()
   await page.screenshot({ path: path.join(artifacts, 'glass-theme-settings.png') })
   await page.keyboard.press('Escape')
@@ -363,13 +363,13 @@ try {
   const identityButton = page.locator('.chat-identity-button')
   await expect(identityButton).toContainText('设计搭档')
   await expect(identityButton).toHaveAttribute('aria-expanded', 'true')
-  await expect(identityButton).toHaveCSS('border-top-color', 'rgb(55, 105, 209)')
+  await expect(identityButton).toHaveCSS('border-top-color', 'rgb(37, 99, 235)')
   await expect(page.locator('.chat-dm .chat-header')).toHaveCSS('border-bottom-width', '0px')
   await expectFadingHeader()
   await expect(page.locator('.bot-profile-header')).toHaveCSS('border-bottom-width', '0px')
   await expect(page.locator('.bot-profile-header')).toHaveCSS('backdrop-filter', 'blur(24px) saturate(1.2)')
-  await expect(page.locator('.app-sidebar')).toHaveCSS('border-right-color', 'rgba(120, 128, 140, 0.22)')
-  await expect(page.getByRole('complementary', { name: 'Bot 设定' })).toHaveCSS('border-left-color', 'rgba(120, 128, 140, 0.22)')
+  await expect(page.locator('.app-sidebar')).toHaveCSS('border-right-color', 'rgba(24, 24, 27, 0.1)')
+  await expect(page.getByRole('complementary', { name: 'Bot 设定' })).toHaveCSS('border-left-color', 'rgba(24, 24, 27, 0.1)')
   await expect(page.locator('.chat-dm .chat-header .chat-actions')).toHaveCount(0)
   const sidebarActions = page.locator('.bot-profile-actions')
   const actionBoxes = await Promise.all([
@@ -606,7 +606,7 @@ try {
   await page.screenshot({ path: path.join(artifacts, 'chat-dark.png') })
   await expect(page.locator('.chat-dm .chat-header')).toHaveCSS('border-bottom-width', '0px')
   await expectFadingHeader()
-  await expect(page.getByRole('complementary', { name: 'Bot 设定' })).toHaveCSS('border-left-color', 'rgba(184, 194, 210, 0.18)')
+  await expect(page.getByRole('complementary', { name: 'Bot 设定' })).toHaveCSS('border-left-color', 'rgba(255, 255, 255, 0.1)')
   await page.getByRole('button', { name: '模型', exact: true }).click()
   await expect(page.getByLabel('响应决策策略').locator('option[value="auto"]')).toHaveText(
     '自动 · Jev 可用时优先',
@@ -651,7 +651,7 @@ try {
   await themeDock.getByRole('button', { name: '切换到深色主题' }).click()
   await expect(page.locator('html')).toHaveClass(/dark/)
   await expectFadingHeader()
-  await expect(page.locator('.chat-header h1')).toHaveCSS('color', 'rgb(238, 244, 255)')
+  await expect(page.locator('.chat-header h1')).toHaveCSS('color', 'rgb(244, 244, 245)')
   await settleAppearance()
   await page.screenshot({ path: path.join(artifacts, 'group-fade-dark.png') })
   await themeDock.getByRole('button', { name: '切换到浅色主题' }).click()
@@ -784,7 +784,7 @@ try {
   await expect(page.locator('.welcome-bot-card')).toHaveCount(3)
   await page.screenshot({ path: path.join(artifacts, 'welcome.png') })
   await themeDock.getByRole('button', { name: '切换到深色主题' }).click()
-  await expect(page.locator('.welcome-content')).toHaveCSS('color', 'rgb(238, 244, 255)')
+  await expect(page.locator('.welcome-content')).toHaveCSS('color', 'rgb(244, 244, 245)')
   await settleAppearance()
   await page.screenshot({ path: path.join(artifacts, 'glass-bots-dark.png') })
   await themeDock.getByRole('button', { name: '切换到浅色主题' }).click()

@@ -3,8 +3,8 @@ import { Monitor, Moon, Sun } from 'lucide-react'
 import { useSettingsStore, type ThemeMode } from '../stores/settingsStore'
 
 const themes = [
-  { value: 'light', label: '浅色', icon: Sun, description: '晨光 · 冰蓝' },
-  { value: 'dark', label: '深色', icon: Moon, description: '深海 · 靛蓝' },
+  { value: 'light', label: '浅色', icon: Sun, description: '白底 · 中性灰' },
+  { value: 'dark', label: '深色', icon: Moon, description: '近黑 · 中性灰' },
   { value: 'system', label: '跟随系统', icon: Monitor, description: '随你的设备变化' },
 ] as const
 

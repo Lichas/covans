@@ -36,7 +36,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
   })
 
   return {
-    theme: 'system',
+    theme: 'light',
     settings: {},
     providers: [],
     loaded: false,
@@ -57,7 +57,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
           get('natural_follow_up'),
           get('local_observability'),
         ])
-        const theme = rawTheme === 'light' || rawTheme === 'dark' ? rawTheme : 'system'
+        const theme = rawTheme === 'dark' || rawTheme === 'system' ? rawTheme : 'light'
         set({
           theme,
           loaded: true,
