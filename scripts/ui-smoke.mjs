@@ -607,11 +607,13 @@ try {
   await expect(page.locator('.chat-dm .chat-header')).toHaveCSS('border-bottom-width', '0px')
   await expectFadingHeader()
   await expect(page.getByRole('complementary', { name: 'Bot 设定' })).toHaveCSS('border-left-color', 'rgba(255, 255, 255, 0.1)')
-  await page.getByRole('button', { name: '模型', exact: true }).click()
-  await expect(page.getByLabel('响应决策策略').locator('option[value="auto"]')).toHaveText(
-    '自动 · Jev 可用时优先',
-  )
-  await page.getByLabel('响应决策策略').selectOption('jev')
+  // 资料页把所有设置摊成「标签 + 摘要 + 操作」行，决策策略是行内的分段控件。
+  await page.getByRole('button', { name: '设定', exact: true }).click()
+  const decisionGroup = page.getByRole('group', { name: '响应决策策略' })
+  await expect(decisionGroup.getByRole('button', { name: '自动' })).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByText('自动 · Jev 可用时优先，失败回退当前 LLM')).toBeVisible()
+  await decisionGroup.getByRole('button', { name: 'Jev' }).click()
+  await expect(decisionGroup.getByRole('button', { name: 'Jev' })).toHaveAttribute('aria-pressed', 'true')
   await expect.poll(async () =>
     page.evaluate(
       async (botId) =>
@@ -849,26 +851,30 @@ try {
   await page.locator('button', { hasText: '新建 Bot' }).last().click()
   const cliDialog = page.getByRole('dialog', { name: '新建 Bot' })
   await expect(cliDialog).toBeVisible()
-  await cliDialog.getByLabel('运行方式').selectOption('codex-cli')
+  // 模型选择器：左轨切换来源，右侧点选模型，底部一键回到来源默认模型。
+  await cliDialog.locator('[data-rail="cli:codex-cli"]').click()
   await cliDialog
-    .getByLabel('CLI 可执行文件（留空自动查找）')
+    .getByLabel('CLI 可执行文件')
     .fill(path.join(root, 'scripts', 'fixtures', 'fake-cli.mjs'))
   await expect(cliDialog.getByRole('status')).toContainText('已安装', { timeout: 20000 })
   await expect(cliDialog.getByRole('status')).toContainText('0.149.0')
   await expect(cliDialog.getByRole('status')).toContainText('fake-cli.mjs')
-  await expect(cliDialog.getByLabel('CLI 模型', { exact: true })).toHaveValue('')
+  await expect(cliDialog.locator('[data-use-bot-default]')).toHaveAttribute('aria-pressed', 'true')
   // API model values must never follow a backend switch into the CLI.
-  await cliDialog.getByLabel('运行方式').selectOption('api')
-  await cliDialog.getByLabel('模型（可选）', { exact: true }).fill('api-only-model')
-  await cliDialog.getByLabel('运行方式').selectOption('codex-cli')
-  await expect(cliDialog.getByLabel('CLI 模型', { exact: true })).toHaveValue('')
-  await expect(cliDialog.getByLabel('CLI 模型', { exact: true }).locator('option[value="account-only-model"]')).toHaveCount(1)
-  await expect(cliDialog.getByLabel('CLI 模型', { exact: true }).locator('option[value="gpt-6-luna"]')).toHaveCount(0)
-  await expect(cliDialog.getByLabel('CLI 模型', { exact: true }).locator('option[value="hidden-model"]')).toHaveCount(0)
-  await cliDialog.getByLabel('CLI 模型', { exact: true }).selectOption('gpt-5.6-sol')
+  await cliDialog.locator(`[data-rail="provider:${fixture.a.provider_id}"]`).click()
+  await expect(cliDialog.locator('[data-rail="provider:' + fixture.a.provider_id + '"]')).toHaveAttribute('aria-pressed', 'true')
+  await cliDialog.locator('[data-model-option="mock-default"]').click()
+  await expect(cliDialog.locator('[data-model-option="mock-default"]')).toHaveAttribute('aria-pressed', 'true')
+  await cliDialog.locator('[data-rail="cli:codex-cli"]').click()
+  await expect(cliDialog.locator('[data-use-bot-default]')).toHaveAttribute('aria-pressed', 'true')
+  await expect(cliDialog.locator('[data-model-option="account-only-model"]')).toHaveCount(1)
+  await expect(cliDialog.locator('[data-model-option="gpt-6-luna"]')).toHaveCount(0)
+  await expect(cliDialog.locator('[data-model-option="hidden-model"]')).toHaveCount(0)
+  await cliDialog.locator('[data-model-option="gpt-5.6-sol"]').click()
+  await expect(cliDialog.locator('[data-model-option="gpt-5.6-sol"]')).toHaveAttribute('aria-pressed', 'true')
   await cliDialog.getByLabel('Provider（判断用，可选）').selectOption('')
-  await expect(cliDialog.getByLabel('CLI 模型', { exact: true })).toHaveValue('gpt-5.6-sol')
-  await cliDialog.getByLabel('文件权限').selectOption('workspace-write')
+  await expect(cliDialog.locator('[data-model-option="gpt-5.6-sol"]')).toHaveAttribute('aria-pressed', 'true')
+  await cliDialog.getByRole('group', { name: '文件权限' }).getByRole('button', { name: '可写' }).click()
   await cliDialog.getByPlaceholder('给你的 Bot 起个名字').fill('CLI 伙伴')
   await page.screenshot({ path: path.join(artifacts, 'new-bot-cli.png') })
   await cliDialog.getByRole('button', { name: '创建并开始聊天' }).click()
@@ -887,9 +893,13 @@ try {
   await page.reload()
   await expect(page.locator('.chat-identity-button')).toContainText('CLI 伙伴')
   await page.getByRole('button', { name: '展开设置', exact: true }).click()
-  await page.getByRole('button', { name: '模型', exact: true }).click()
+  await page.getByRole('button', { name: '设定', exact: true }).click()
   const modelPanel = page.getByRole('complementary', { name: 'Bot 设定' })
-  await expect(modelPanel.getByLabel('CLI 模型', { exact: true })).toHaveValue('gpt-5.6-sol')
+  const modelRow = modelPanel.locator('[data-profile-row="model"]')
+  await expect(modelRow).toContainText('Codex CLI · gpt-5.6-sol')
+  await modelRow.locator('[data-profile-edit="model"]').click()
+  await expect(modelPanel.locator('[data-model-option="gpt-5.6-sol"]')).toHaveAttribute('aria-pressed', 'true')
+  await expect(modelPanel.locator('[data-model-option="gpt-5.6-sol"] [data-bot-model]')).toHaveText('(Bot 的模型)')
   await page.evaluate(() => window.covan.setSetting('natural_follow_up', '0'))
   for (const text of ['第一轮 CLI 模型验证', '第二轮 CLI 模型验证']) {
     await page.getByRole('textbox', { name: '输入消息' }).fill(text)
@@ -902,28 +912,30 @@ try {
   assert.ok(cliCalls.every((call) => call.model === 'gpt-5.6-sol'))
   assert.equal(cliCalls[0].isResume, false)
   assert.equal(cliCalls[1].isResume, true)
-  await modelPanel.getByLabel('CLI 模型', { exact: true }).selectOption('custom')
+  await modelPanel.locator('[data-model-custom]').click()
   await modelPanel.getByLabel('自定义 CLI 模型 ID').fill('custom-cli-model')
   await modelPanel.getByLabel('自定义 CLI 模型 ID').press('Tab')
   await expect.poll(() => page.evaluate(async (id) =>
     (await window.covan.listBots()).find((bot) => bot.id === id)?.model, cliBot.id,
   )).toBe('custom-cli-model')
   // These fields previously used camelCase and silently failed to persist.
-  await modelPanel.getByLabel('CLI 可执行文件（留空自动查找）').fill(alternateCliPath)
+  await modelPanel.getByLabel('CLI 可执行文件').fill(alternateCliPath)
   await expect.poll(() => page.evaluate(async (id) =>
     (await window.covan.listBots()).find((bot) => bot.id === id)?.cli_path, cliBot.id,
   )).toBe(alternateCliPath)
-  await modelPanel.getByLabel('文件权限').selectOption('read-only')
+  await modelPanel.getByRole('group', { name: '文件权限' }).getByRole('button', { name: '只读' }).click()
   await expect.poll(() => page.evaluate(async (id) =>
     (await window.covan.listBots()).find((bot) => bot.id === id)?.cli_access, cliBot.id,
   )).toBe('read-only')
   await page.reload()
   await page.getByRole('button', { name: '展开设置', exact: true }).click()
-  await page.getByRole('button', { name: '模型', exact: true }).click()
-  await expect(modelPanel.getByLabel('自定义 CLI 模型 ID')).toHaveValue('custom-cli-model')
-  await expect(modelPanel.getByLabel('CLI 可执行文件（留空自动查找）')).toHaveValue(alternateCliPath)
-  await expect(modelPanel.getByLabel('文件权限')).toHaveValue('read-only')
-  await modelPanel.getByLabel('CLI 模型', { exact: true }).selectOption('')
+  await page.getByRole('button', { name: '设定', exact: true }).click()
+  await expect(modelPanel.locator('[data-profile-row="model"]')).toContainText('Codex CLI · custom-cli-model')
+  await modelPanel.locator('[data-profile-edit="model"]').click()
+  await expect(modelPanel.locator('[data-model-unlisted]')).toContainText('custom-cli-model')
+  await expect(modelPanel.getByLabel('CLI 可执行文件')).toHaveValue(alternateCliPath)
+  await expect(modelPanel.getByRole('group', { name: '文件权限' }).getByRole('button', { name: '只读' })).toHaveAttribute('aria-pressed', 'true')
+  await modelPanel.locator('[data-use-bot-default]').click()
   await expect.poll(() => page.evaluate(async (id) =>
     (await window.covan.listBots()).find((bot) => bot.id === id)?.model, cliBot.id,
   )).toBe('')
@@ -936,7 +948,7 @@ try {
   await page.getByRole('button', { name: '发送', exact: true }).click()
   await expect(page.locator('article.message-bot').last()).toContainText('当前 CLI 登录账号不支持这个模型', { timeout: 20000 })
   await expect(page.locator('article.message-bot').last()).not.toContainText('invalid_request_error')
-  await modelPanel.getByRole('button', { name: '刷新 CLI 模型', exact: true }).click()
+  await modelPanel.getByRole('button', { name: '刷新模型', exact: true }).click()
   await modelPanel.getByRole('button', { name: '使用 CLI 推荐模型 gpt-5.6-sol', exact: true }).click()
   await expect.poll(() => page.evaluate(async (id) =>
     (await window.covan.listBots()).find((bot) => bot.id === id)?.model, cliBot.id,
@@ -949,8 +961,8 @@ try {
 
   await page.getByRole('button', { name: '新建', exact: true }).click()
   await page.locator('button', { hasText: '新建 Bot' }).last().click()
-  await cliDialog.getByLabel('运行方式').selectOption('claude-cli')
-  await cliDialog.getByLabel('CLI 模型', { exact: true }).selectOption('sonnet')
+  await cliDialog.locator('[data-rail="cli:claude-cli"]').click()
+  await cliDialog.locator('[data-model-option="sonnet"]').click()
   await cliDialog.getByPlaceholder('给你的 Bot 起个名字').fill('Claude CLI 伙伴')
   await cliDialog.getByRole('button', { name: '创建并开始聊天' }).click()
   await expect(cliDialog).toHaveCount(0)

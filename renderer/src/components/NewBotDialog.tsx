@@ -15,7 +15,8 @@ import { useUiStore } from '../stores/uiStore'
 import { Dialog } from './Dialog'
 import { Field, btnGhostCls, btnPrimaryCls, inputCls } from './controls'
 import { ProviderIcon } from './icons'
-import { LocalCliFields, isCliBackend } from './LocalCliFields'
+import { CliAccessSegmented, isCliBackend } from './LocalCliFields'
+import { ModelPicker } from './ModelPicker'
 
 export function NewBotDialog() {
   const open = useUiStore((s) => s.newBotOpen)
@@ -229,62 +230,65 @@ export function NewBotDialog() {
           />
         </Field>
 
-        <LocalCliFields
-          value={{ backend, cliPath, cliAccess, model }}
-          disabled={busy}
-          onChange={(patch) => {
-            if (patch.backend !== undefined) setBackend(patch.backend)
-            if (patch.model !== undefined) setModel(patch.model)
-            if (patch.cliPath !== undefined) setCliPath(patch.cliPath)
-            if (patch.cliAccess !== undefined) setCliAccess(patch.cliAccess)
-          }}
-        />
-
-        <div className="grid grid-cols-2 gap-3">
-          <Field
-            label={isCliBackend(backend) ? 'Provider（判断用，可选）' : 'Provider'}
-          >
-            <div className="flex items-center gap-2">
-              {providerId ? (
-                <ProviderIcon
-                  kind={
-                    providers.find((p) => p.id === providerId)?.kind ?? 'openai'
-                  }
-                  width={22}
-                  height={22}
-                  className="shrink-0"
-                />
-              ) : (
-                <span className="h-[22px] w-[22px] shrink-0 rounded-md border border-dashed border-stone-300 dark:border-stone-600" />
-              )}
-              <select
-                className={`${inputCls} min-w-0 flex-1`}
-                value={providerId}
-                onChange={(e) => {
-                  setProviderId(e.target.value)
-                  if (!isCliBackend(backend)) setModel('')
-                }}
-              >
-                <option value="">稍后配置</option>
-                {providers.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </Field>
-          {!isCliBackend(backend) && (
-            <Field label="模型（可选）">
-              <input
-                className={inputCls}
-                value={model}
-                onChange={(e) => setModel(e.target.value)}
-                placeholder="留空用默认"
-              />
-            </Field>
-          )}
+        <div>
+          <span className="mb-1 block text-[12px] font-medium text-stone-500 dark:text-stone-400">
+            运行方式与默认模型
+          </span>
+          <ModelPicker
+            value={{ backend, providerId: providerId || null, model, cliPath }}
+            disabled={busy}
+            onChange={(next) => {
+              setBackend(next.backend)
+              setProviderId(next.provider_id ?? '')
+              setModel(next.model)
+            }}
+            onCliPath={setCliPath}
+          />
         </div>
+
+        {isCliBackend(backend) && (
+          <div className="grid grid-cols-2 items-end gap-3">
+            <Field label="Provider（判断用，可选）">
+              <div className="flex items-center gap-2">
+                {providerId ? (
+                  <ProviderIcon
+                    kind={
+                      providers.find((p) => p.id === providerId)?.kind ??
+                      'openai'
+                    }
+                    width={22}
+                    height={22}
+                    className="shrink-0"
+                  />
+                ) : (
+                  <span className="h-[22px] w-[22px] shrink-0 rounded-md border border-dashed border-stone-300 dark:border-stone-600" />
+                )}
+                <select
+                  className={`${inputCls} min-w-0 flex-1`}
+                  value={providerId}
+                  onChange={(e) => setProviderId(e.target.value)}
+                >
+                  <option value="">稍后配置</option>
+                  {providers.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </Field>
+            <div className="flex items-center justify-between gap-2 pb-1">
+              <span className="text-[12px] font-medium text-stone-500 dark:text-stone-400">
+                文件权限
+              </span>
+              <CliAccessSegmented
+                value={cliAccess}
+                disabled={busy}
+                onChange={setCliAccess}
+              />
+            </div>
+          </div>
+        )}
 
         {error && (
           <div className="rounded-lg bg-red-50 px-3 py-2 text-[12.5px] text-red-600 dark:bg-red-950/50 dark:text-red-300">

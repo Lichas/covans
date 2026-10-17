@@ -164,7 +164,7 @@ try {
   await expect(
     showcase.getByRole('button', { name: '查看第 1 张生活照' }),
   ).toHaveAttribute('aria-pressed', 'true')
-  await page.locator('[aria-label="Bot 名称"]').focus()
+  await page.getByRole('button', { name: '生活照', exact: true }).focus()
   await page.mouse.move(20, 20)
   await page.emulateMedia({ reducedMotion: 'no-preference' })
   await expect(
@@ -174,7 +174,7 @@ try {
   await expect(
     showcase.getByRole('button', { name: '播放生活照' }),
   ).toBeVisible()
-  await page.locator('[aria-label="Bot 名称"]').focus()
+  await page.getByRole('button', { name: '生活照', exact: true }).focus()
   await page.mouse.move(20, 20)
   const pausedPhoto = await showcase
     .locator('img.is-active')

@@ -236,6 +236,12 @@ export const ChevronDownIcon = (p: P) => (
   </svg>
 )
 
+export const ChevronRightIcon = (p: P) => (
+  <svg {...base(p)}>
+    <path d="m9 6 6 6-6 6" />
+  </svg>
+)
+
 export const PencilIcon = (p: P) => (
   <svg {...base(p)}>
     <path d="M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5z" />
