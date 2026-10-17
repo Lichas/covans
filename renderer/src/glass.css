@@ -160,7 +160,10 @@
 .chat-view > .chat-notice { margin-top: var(--chat-header-height); z-index: 6; }
 .chat-view > .chat-notice ~ .message-scroll-wrap .message-scroll { padding-top: 0; }
 .chat-header-avatar { border-radius: 50%; box-shadow: 0 0 0 3px var(--glass); }
-.chat-dm .chat-header { justify-content: center; padding-block: 10px; }
+.chat-dm .chat-header, .chat-group .chat-header { justify-content: center; padding-block: 10px; }
+/* 群聊顶部与单聊同布局，但用圆角矩形（不是胶囊）：头像与名称在同一张卡片里。 */
+.chat-identity-button.is-group { border-radius: 12px; padding: 6px 16px 6px 8px; }
+.chat-header-actions { position: absolute; top: 50%; right: 16px; display: flex; align-items: center; gap: 4px; transform: translateY(-50%); }
 .chat-identity-button { display: flex; align-items: center; gap: 9px; max-width: 100%; padding: 8px 15px 8px 10px; border: 1px solid transparent; border-radius: 999px; background: var(--glass); -webkit-app-region: no-drag; transition: background 150ms, border-color 150ms; }
 .chat-identity-button:hover { background: var(--soft); }
 .chat-identity-button[aria-expanded="true"] { background: var(--soft); border-color: var(--accent); }

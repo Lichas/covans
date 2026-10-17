@@ -657,9 +657,35 @@ try {
   await settleAppearance()
   await page.screenshot({ path: path.join(artifacts, 'group-fade-dark.png') })
   await themeDock.getByRole('button', { name: '切换到浅色主题' }).click()
+  // 群聊顶部与单聊同布局：居中的身份卡片用会话列表同款群头像，形状是圆角矩形。
+  const groupHeader = await page.locator('.chat-group .chat-identity-button').evaluate((element) => {
+    const rect = element.getBoundingClientRect()
+    const header = element.closest('.chat-header').getBoundingClientRect()
+    return {
+      radius: parseFloat(getComputedStyle(element).borderTopLeftRadius),
+      offset: Math.abs(rect.left + rect.width / 2 - (header.left + header.width / 2)),
+      avatars: element.querySelectorAll('img').length,
+      title: element.querySelector('h1')?.textContent ?? '',
+    }
+  })
+  assert.ok(groupHeader.radius > 0 && groupHeader.radius <= 12, `群聊身份卡片应为圆角矩形（实际 ${groupHeader.radius}px）`)
+  assert.ok(groupHeader.offset < 2, `群聊身份卡片应像单聊一样居中（偏移 ${groupHeader.offset}px）`)
+  assert.ok(groupHeader.avatars >= 2, '群聊顶部使用与会话列表一致的成员头像')
+  assert.equal(groupHeader.title, '灵感工作室', '群聊顶部显示群名')
   await page.getByRole('button', { name: '展开设置', exact: true }).click()
   await expect(page.getByText('回复机制', { exact: true }).first()).toBeVisible()
   await expect(page.getByRole('button', { name: /^主动回复/ })).toBeVisible()
+  const modeCards = await page.locator('.group-mode-card').evaluateAll((cards) =>
+    cards.map((card) => {
+      const rect = card.getBoundingClientRect()
+      return { radius: parseFloat(getComputedStyle(card).borderTopLeftRadius), width: rect.width, height: rect.height }
+    }),
+  )
+  assert.ok(
+    modeCards.length === 2 &&
+      modeCards.every(({ radius, width, height }) => radius > 0 && radius < Math.min(width, height) / 2),
+    '回复机制卡片是圆角矩形，不是胶囊',
+  )
   await expect(
     page.getByRole('button', { name: /^顺序回复/ }),
   ).toHaveAttribute('aria-pressed', 'true')

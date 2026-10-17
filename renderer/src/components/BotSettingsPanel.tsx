@@ -14,6 +14,7 @@ import { useSettingsStore } from '../stores/settingsStore'
 import { useUiStore } from '../stores/uiStore'
 import { Avatar } from './Avatar'
 import { AvatarDialog } from './AvatarSettings'
+import { GroupAvatar } from './Sidebar'
 import { AvatarLifestyle } from './AvatarLifestyle'
 import { MemoryPanel } from './MemoryPanel'
 import { WorkspacePanel } from './WorkspacePanel'
@@ -23,7 +24,7 @@ import { CliAccessSegmented, isCliBackend } from './LocalCliFields'
 import { ModelPicker, describeBotModel } from './ModelPicker'
 import { api } from '../lib/api'
 import { Toggle, inputCls } from './controls'
-import { ChevronRightIcon, CloseIcon, PencilIcon, UsersIcon } from './icons'
+import { ChevronRightIcon, CloseIcon, PencilIcon } from './icons'
 import { avatarSrc } from '../lib/format'
 import { GROUP_BACKGROUNDS, groupBackgroundUrl } from '../lib/groupBackground'
 
@@ -855,9 +856,8 @@ function GroupSettingsPanel({ chat }: { chat: ChatSummary }) {
       aria-label="群聊设定"
     >
       <div className="flex items-center gap-3 border-b border-stone-200 px-4 py-4 dark:border-stone-800">
-        <span className="grid h-[46px] w-[46px] shrink-0 place-items-center rounded-full bg-stone-200 text-stone-600 dark:bg-stone-800 dark:text-stone-300">
-          <UsersIcon width={20} height={20} />
-        </span>
+        {/* 群头像与左栏会话列表、聊天顶部保持一致。 */}
+        <GroupAvatar chat={chat} />
         <div className="min-w-0">
           <div className="truncate text-[15px] font-semibold text-stone-800 dark:text-stone-100">
             {chat.name || '群聊设置'}
@@ -882,7 +882,7 @@ function GroupSettingsPanel({ chat }: { chat: ChatSummary }) {
                 disabled={!!saving}
                 aria-pressed={selected}
                 onClick={() => void choose(mode.id)}
-                className={`w-full rounded-xl border p-3.5 text-left transition ${
+                className={`group-mode-card w-full shape-rect rounded-xl border p-3.5 text-left transition ${
                   selected
                     ? 'border-stone-500 bg-white shadow-sm dark:border-stone-500 dark:bg-stone-800'
                     : 'border-stone-200 bg-white/60 hover:border-stone-300 hover:bg-white dark:border-stone-800 dark:bg-stone-900/40 dark:hover:border-stone-700 dark:hover:bg-stone-800/70'

@@ -31,7 +31,7 @@ export function chatDisplayName(chat: ChatSummary): string {
 }
 
 /** 群聊叠头像 + N 角标 */
-function GroupAvatar({ chat }: { chat: ChatSummary }) {
+export function GroupAvatar({ chat }: { chat: ChatSummary }) {
   const members = chat.member_bots.slice(0, 2)
   const extra = chat.member_bots.length
   return (

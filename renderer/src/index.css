@@ -251,23 +251,6 @@ button:disabled {
   padding: 12px 26px;
   border-bottom: 0;
 }
-.chat-subtitle {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  color: var(--muted);
-  font-size: 11px;
-  margin-top: 3px;
-}
-.header-group-icon {
-  display: grid;
-  place-items: center;
-  width: 34px;
-  height: 34px;
-  border-radius: 11px;
-  color: var(--accent);
-  background: var(--soft);
-}
 .message-scroll-wrap {
   position: relative;
   min-height: 0;

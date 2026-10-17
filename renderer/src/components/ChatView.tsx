@@ -18,7 +18,7 @@ import { formatMessageDay, messageDay } from '../lib/format'
 import { groupBackgroundUrl } from '../lib/groupBackground'
 import { Composer } from './Composer'
 import { MessageBubble } from './MessageBubble'
-import { chatDisplayName } from './Sidebar'
+import { GroupAvatar, chatDisplayName } from './Sidebar'
 import { Avatar } from './Avatar'
 import { WelcomeView } from './WelcomeView'
 import { Dialog } from './Dialog'
@@ -34,7 +34,6 @@ import {
   NewTopicIcon,
   SparkIcon,
   UserPlusIcon,
-  UsersIcon,
 } from './icons'
 
 export function ChatView({
@@ -264,21 +263,27 @@ export function ChatView({
       >
         {isGroup ? (
           <>
-            <div className="flex min-w-0 items-center gap-3">
-              <span className="header-group-icon">
-                <UsersIcon width={19} height={19} />
-              </span>
-              <div className="min-w-0">
-                <h1 className="truncate text-[14px] font-semibold">{title}</h1>
-                <div className="chat-subtitle">
-                  {generating
-                    ? '成员正在准备回复…'
-                    : `${chat.member_bots.length} 位成员 · 共享上下文`}
-                </div>
-              </div>
-            </div>
+            {/* 群聊顶部与单聊一致：居中的头像 + 名称；群头像与左栏会话列表同一组件。 */}
+            <button
+              className="chat-identity-button is-group shape-rect"
+              aria-label={rightPanelOpen ? '收起群聊设置' : '展开群聊设置'}
+              aria-expanded={rightPanelOpen}
+              aria-controls="bot-settings-panel"
+              title={`${title} · ${chat.member_bots.length} 位成员 · 共享上下文 · 群聊设置 · ⌘.`}
+              onClick={() => {
+                if (rightPanelOpen && !inspectedBotId) {
+                  setRightPanelOpen(false)
+                  return
+                }
+                inspectBot(null)
+                setRightPanelOpen(true)
+              }}
+            >
+              <GroupAvatar chat={chat} />
+              <h1 className="truncate text-[14px] font-semibold">{title}</h1>
+            </button>
             <div
-              className="flex shrink-0 items-center gap-1"
+              className="chat-header-actions"
               style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
             >
               {chatActions}
