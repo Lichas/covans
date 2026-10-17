@@ -444,12 +444,14 @@ export async function runAgent(
   }
   try {
     observe('agent.dispatch.started', { chat_id: chatId, bot_id: bot.id, message_id: opts.messageId ?? '', ...(opts.traceId ? { trace_id: opts.traceId } : {}), ...(opts.taskId ? { scheduled_task_id: opts.taskId } : {}), max_tokens: bot.max_tokens, reasoning: bot.reasoning_effort })
-    if (isMockBot(bot)) {
-      await runMockAgent(bot, historyMessages, callbacks, opts, ctrl.signal)
-      return
-    }
+    // CLI 后端决定正文由本机 CLI 生成；判断用 Provider（哪怕是 mock）
+    // 只参与「是否发言」判断，不能接管正文。
     if (isCliBot(bot)) {
       await runCliAgent(chatId, bot, historyMessages, callbacks, opts, ctrl.signal)
+      return
+    }
+    if (isMockBot(bot)) {
+      await runMockAgent(bot, historyMessages, callbacks, opts, ctrl.signal)
       return
     }
     await runPiAgent(chatId, bot, historyMessages, callbacks, opts, ctrl.signal)

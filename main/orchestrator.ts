@@ -642,11 +642,14 @@ function decisionState(
 /**
  * 判断该 Bot 是否有可用的“是否发言 / 是否续发”判断引擎。
  * 本地 CLI Bot 不依赖 Provider 也能回复正文，但判断需要 Provider 或已配置的 Jev。
+ * `auto` 与 `jev` 都会走 Jev，所以已配置 Jev 时两者都算有引擎；只有 `llm`
+ * 明确要求用当前模型判断，才必须配置判断用 Provider。
  */
 function hasResponseDecisionEngine(bot: Bot): boolean {
   if (!isCliBot(bot)) return true
-  if (bot.response_decision_strategy === 'jev' && getJevConfig().has_api_key) return true
-  return Boolean(bot.provider_id)
+  if (bot.provider_id) return true
+  if (bot.response_decision_strategy === 'llm') return false
+  return getJevConfig().has_api_key
 }
 
 async function shouldReply(
@@ -984,6 +987,9 @@ async function draftNaturalFollowUp(
   // 没有判断引擎时不做自然追问：追问判断本身需要一次模型调用，
   // 否则只能无条件追问，与“确有补充价值才发”的契约冲突。
   if (!hasResponseDecisionEngine(bot)) return null
+  // CLI Bot 的对话正文由 CLI 生成，这里不额外启动一次 CLI；只有配置了判断用
+  // Provider 才能起草追问，否则（例如只有 Jev）直接跳过，省掉一次注定失败的 completion。
+  if (isCliBot(bot) && !bot.provider_id) return null
   try {
     const recentReplies = db
       .listCurrentTopicMessages(chatId, 5)

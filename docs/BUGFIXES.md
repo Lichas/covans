@@ -14,6 +14,20 @@
 - **修复**：移除照片背景对用户气泡的覆盖，单聊和群聊分别保留无背景时的默认样式；背景预览与选图按钮从通用胶囊规则中豁免，统一使用 14px 圆角矩形。
 - **回归**：真实 Electron UI 测试通过界面切换浅色/深色主题及海崖/星夜背景，比较有无背景时的用户气泡配色、阴影和模糊；单聊检查文字对比度至少 4.5:1，并检查两类图片卡片不是胶囊。
 
+## 2026-10-17 · CLI Bot 在群里不主动说话（`auto` + Jev 被误判为无判断引擎）
+
+- **症状**：本地 CLI Bot 在群聊里只回 @提及，即使已经配置了 TypeSafe Jev；设定页也不说明原因。
+- **根因**：`hasResponseDecisionEngine()` 只在策略显式为 `jev` 时认 Jev，而默认策略是 `auto`；`auto` 在 `decideResponse()` 里同样会走 Jev，于是「已配置 Jev 的 CLI Bot」被提前判成没有判断引擎，落入只响应 @提及的分支。
+- **修复**：判断引擎按真实策略解析——有判断用 Provider 即可；否则 `auto` / `jev` 且 Jev 已配置也算可用，只有 `llm` 明确要求 Provider。设定页在缺少判断引擎时于「判断用 Provider」行标注「群聊里只会被 @ 唤醒」，选中 Provider 后即时恢复。
+- **回归**：`smoke` 在 Jev 已配置的环境下覆盖 `llm` 无 Provider（静默且不启动 CLI）、@提及强制发言、`auto` + Jev 正常参与；`test:ui` 覆盖说明行出现与选中 Provider 后消失。
+
+## 2026-10-17 · 判断用 Provider 接管了 CLI Bot 的正文
+
+- **症状**：给本地 CLI Bot 选中判断用 Provider 后，它的回复改由该 Provider 生成，CLI 完全没被调用（测试里表现为假 CLI 调用数为 0、正文变成 mock 文本）。
+- **根因**：`runAgent` 先判断 `isMockBot()`（按 `provider_id` 的 Provider 类型），再判断 `isCliBot()`；把 mock Provider 设为判断用时，mock 分支抢在 CLI 之前。
+- **修复**：分发顺序改为 CLI 后端优先；判断用 Provider 只参与「是否发言 / 是否续发」的 completion，不接管正文。
+- **回归**：`smoke` 给 CLI Bot 配置 mock 判断用 Provider，断言正文仍来自假 CLI 且调用模型正确。
+
 ## 2026-10-17 · CLI 模型选择器列出账号不支持的模型
 
 - **症状**：用户从下拉框选择 `gpt-6-luna` 后，Codex CLI 返回 ChatGPT account 不支持该模型的 400 错误，气泡直接展示 JSON。

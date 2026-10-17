@@ -545,6 +545,24 @@ console.log('\n[1e] 本地 CLI 运行后端')
     '修改模型后重建 CLI 会话并带上新模型',
   )
 
+  // 判断用 Provider 不能接管 CLI 的正文：CLI 后端优先于 mock Provider。
+  const mockJudge = db.saveProvider({ name: 'Mock 判断用', kind: 'mock' })
+  const judgeBot = db.createBot({
+    name: 'CLI 带判断 Provider',
+    backend: 'codex-cli',
+    cli_path: fakeCli,
+    model: 'gpt-5.6-sol',
+    provider_id: mockJudge.id,
+  })
+  const judgeChat = db.createDm(judgeBot.id)
+  const judged = await runTurn(judgeBot, judgeChat, [userTurn('正文必须来自 CLI')], '')
+  assert(
+    judged.text.includes('假 CLI 回复') && calls().at(-1).model === 'gpt-5.6-sol',
+    '判断用 Provider（含 mock）不接管 CLI Bot 的正文生成',
+  )
+  db.deleteBot(judgeBot.id)
+  db.deleteProvider(mockJudge.id)
+
   // Claude 方言：改用 -p/stream-json，且只读映射为 plan 权限模式
   process.env.COVAN_FAKE_CLI_DIALECT = 'claude'
   const claudeBot = db.createBot({
@@ -1154,6 +1172,63 @@ assert(
     .filter((m) => m.sender_type === 'bot' && m.status === 'done').length === 5,
   '即使每轮都决定回复，群聊也在第 5 轮硬停止',
 )
+
+console.log('\n[4e] 本地 CLI Bot 的群聊判断：Jev 可用则参与，否则只响应 @提及')
+{
+  const fakeCli = path.join(root, 'scripts/fixtures', 'fake-cli.mjs')
+  // [1e] 结束时会清掉环境变量，这里重新指定一个独立的调用日志。
+  const cliLog = path.join(tmp, 'cli-group-calls.jsonl')
+  process.env.COVAN_FAKE_CLI_LOG = cliLog
+  const cliCallCount = () =>
+    fs.existsSync(cliLog)
+      ? fs.readFileSync(cliLog, 'utf8').trim().split('\n').filter(Boolean).length
+      : 0
+  const cliReplies = (chatId) =>
+    db
+      .listMessages(chatId, undefined, 20)
+      .filter((message) => message.sender_type === 'bot' && message.status === 'done')
+
+  // 明确的传统 LLM 策略 + 没有判断用 Provider：群里没有判断引擎，只响应 @提及。
+  const silent = db.createBot({
+    name: 'CLI 静默',
+    backend: 'codex-cli',
+    cli_path: fakeCli,
+    model: 'gpt-5.6-sol',
+    response_decision_strategy: 'llm',
+  })
+  const silentGroup = db.createGroup('CLI 静默群', [silent.id])
+  const beforeQuiet = cliCallCount()
+  await orchestrator.sendUserMessage(silentGroup.id, '这条没有点名', [])
+  assert(cliReplies(silentGroup.id).length === 0, '没有判断引擎的 CLI Bot 在群里保持安静')
+  assert(
+    cliCallCount() === beforeQuiet,
+    '没有判断引擎时不会为每条群消息启动一次 CLI',
+  )
+  await orchestrator.sendUserMessage(silentGroup.id, '@CLI 静默 你来回答', [silent.id])
+  assert(
+    cliCallCount() > beforeQuiet && cliReplies(silentGroup.id).length === 1,
+    '@提及仍会强制没有判断引擎的 CLI Bot 发言',
+  )
+  db.deleteBot(silent.id)
+
+  // 默认 auto + 已配置 Jev：判断交给 Jev，不需要判断用 Provider。
+  const autoBot = db.createBot({
+    name: 'CLI 自动',
+    backend: 'codex-cli',
+    cli_path: fakeCli,
+    model: 'gpt-5.6-sol',
+  })
+  assert(autoBot.response_decision_strategy === 'auto', 'CLI Bot 默认使用自动判断策略')
+  const autoGroup = db.createGroup('CLI 自动群', [autoBot.id])
+  const beforeAuto = cliCallCount()
+  await orchestrator.sendUserMessage(autoGroup.id, '这条没有点名也要判断', [])
+  assert(
+    cliReplies(autoGroup.id).length === 1 && cliCallCount() > beforeAuto,
+    'auto 策略在 Jev 已配置时让 CLI Bot 正常参与群聊',
+  )
+  db.deleteBot(autoBot.id)
+  delete process.env.COVAN_FAKE_CLI_LOG
+}
 
 console.log('\n[5] 记忆：手动写入 + 自动提取触发')
 const mem = db.addMemory(botA.id, '用户偏好中文交流', 'preference', 'manual')

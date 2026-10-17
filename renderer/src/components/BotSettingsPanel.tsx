@@ -21,6 +21,7 @@ import { ScheduledTasksPanel } from './ScheduledTasksPanel'
 import { ExtensionsPanel } from './ExtensionsPanel'
 import { CliAccessSegmented, isCliBackend } from './LocalCliFields'
 import { ModelPicker, describeBotModel } from './ModelPicker'
+import { api } from '../lib/api'
 import { Toggle, inputCls } from './controls'
 import { ChevronRightIcon, CloseIcon, PencilIcon, UsersIcon } from './icons'
 import { avatarSrc } from '../lib/format'
@@ -255,6 +256,7 @@ function ProfileRow({
   editing,
   editLabel = '编辑',
   editAriaLabel,
+  mentionOnly,
   onEdit,
   children,
 }: {
@@ -267,11 +269,17 @@ function ProfileRow({
   editing?: boolean
   editLabel?: string
   editAriaLabel?: string
+  /** 标记「群里只会被 @ 唤醒」的说明行，供回归测试断言。 */
+  mentionOnly?: boolean
   onEdit?: () => void
   children?: React.ReactNode
 }) {
   return (
-    <div className="profile-row" data-profile-row={id}>
+    <div
+      className="profile-row"
+      data-profile-row={id}
+      data-mention-only={mentionOnly ? 'true' : undefined}
+    >
       <div className="profile-row-body">
         <div className="profile-row-label">
           {leading}
@@ -349,6 +357,7 @@ function ProfileTab({
   const updateBot = useBotsStore((s) => s.updateBot)
   const [editing, setEditing] = useState<ProfileEdit>(null)
   const [temp, setTemp] = useState(bot.temperature)
+  const [jevReady, setJevReady] = useState(false)
   const tempTimer = useRef<ReturnType<typeof setTimeout>>()
 
   useEffect(() => setTemp(bot.temperature), [bot.id, bot.temperature])
@@ -366,6 +375,25 @@ function ProfileTab({
   )
   const effort = EFFORT_OPTIONS.find((option) => option.value === bot.reasoning_effort)
   const instructions = plainSummary(bot.system_prompt)
+
+  // 本地 CLI 的正文由 CLI 生成，但「是否发言」需要 Provider 或 Jev 判断。
+  useEffect(() => {
+    if (!cli) return
+    let active = true
+    api
+      .getJevConfig()
+      .then((config) => {
+        if (active) setJevReady(config.has_api_key)
+      })
+      .catch(() => undefined)
+    return () => {
+      active = false
+    }
+  }, [cli])
+
+  const canJudge =
+    !!bot.provider_id ||
+    (jevReady && bot.response_decision_strategy !== 'llm')
 
   const commitTemp = (value: number) => {
     setTemp(value)
@@ -472,7 +500,12 @@ function ProfileTab({
         <ProfileRow
           id="judge"
           label="判断用 Provider"
-          hint="只用于判断是否发言、是否续发，不影响正文生成"
+          mentionOnly={!canJudge}
+          hint={
+            canJudge
+              ? '只用于判断是否发言、是否续发，不影响正文生成'
+              : '未选择且 Jev 未就绪：群聊里只会被 @ 唤醒，不会主动开口'
+          }
           action={
             <select
               aria-label="Provider（判断用，可选）"
@@ -563,7 +596,11 @@ function ProfileTab({
       <ProfileRow
         id="decision"
         label="响应决策"
-        hint={decision?.hint}
+        hint={
+          cli && !canJudge
+            ? '本地 CLI 的发言判断需要判断用 Provider 或已配置的 Jev；当前缺一个。'
+            : decision?.hint
+        }
         action={
           <div className="segmented" role="group" aria-label="响应决策策略">
             {DECISION_OPTIONS.map((option) => (

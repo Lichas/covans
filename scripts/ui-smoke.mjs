@@ -900,6 +900,16 @@ try {
   await modelRow.locator('[data-profile-edit="model"]').click()
   await expect(modelPanel.locator('[data-model-option="gpt-5.6-sol"]')).toHaveAttribute('aria-pressed', 'true')
   await expect(modelPanel.locator('[data-model-option="gpt-5.6-sol"] [data-bot-model]')).toHaveText('(Bot 的模型)')
+  // CLI Bot 没有判断用 Provider、Jev 也未配置时，群里只响应 @提及。
+  const judgeRow = modelPanel.locator('[data-profile-row="judge"]')
+  await expect(judgeRow).toHaveAttribute('data-mention-only', 'true')
+  await expect(judgeRow).toContainText('群聊里只会被 @ 唤醒')
+  // 选中判断用 Provider 后立刻恢复群聊判断，并写回 Bot。
+  await judgeRow.getByLabel('Provider（判断用，可选）').selectOption(fixture.a.provider_id)
+  await expect(judgeRow).not.toHaveAttribute('data-mention-only', 'true')
+  await expect.poll(() => page.evaluate(async (id) =>
+    (await window.covan.listBots()).find((bot) => bot.id === id)?.provider_id, cliBot.id,
+  )).toBe(fixture.a.provider_id)
   await page.evaluate(() => window.covan.setSetting('natural_follow_up', '0'))
   for (const text of ['第一轮 CLI 模型验证', '第二轮 CLI 模型验证']) {
     await page.getByRole('textbox', { name: '输入消息' }).fill(text)
