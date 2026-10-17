@@ -440,6 +440,24 @@ console.log('\n[1e] 本地 CLI 运行后端')
     'CLI 路径不存在时返回可读错误而不是抛异常',
   )
 
+  const catalog = await cli.listLocalCliModels('codex-cli', fakeCli)
+  assert(catalog.models.map((m) => m.id).join(',') === 'gpt-5.6-sol,gpt-5.6-luna,gpt-5.6-terra,account-only-model',
+    'CLI 模型来自分页目录，去重并过滤隐藏项，不使用写死列表')
+  assert(catalog.models.find((m) => m.id === 'gpt-5.6-sol')?.recommended, '保留 CLI 推荐模型标识')
+  const missingCatalog = await cli.listLocalCliModels('codex-cli', path.join(tmp, 'missing-cli'))
+  assert(!missingCatalog.models.length && !!missingCatalog.error, 'CLI 模型读取失败不回退假设的可用模型')
+  const previousCatalogMode = process.env.COVAN_FAKE_CLI_CATALOG_MODE
+  try {
+    for (const mode of ['error', 'invalid', 'empty', 'loop']) {
+      process.env.COVAN_FAKE_CLI_CATALOG_MODE = mode
+      const result = await cli.listLocalCliModels('codex-cli', fakeCli)
+      assert(!result.models.length && !!result.error, `模型目录 ${mode} 返回可恢复错误且不暴露部分目录`)
+    }
+  } finally {
+    if (previousCatalogMode === undefined) delete process.env.COVAN_FAKE_CLI_CATALOG_MODE
+    else process.env.COVAN_FAKE_CLI_CATALOG_MODE = previousCatalogMode
+  }
+
   const cliBot = db.createBot({
     name: 'CLI 冒烟',
     backend: 'codex-cli',
@@ -448,6 +466,13 @@ console.log('\n[1e] 本地 CLI 运行后端')
     model: 'gpt-5.6-sol',
   })
   const cliChat = db.createDm(cliBot.id)
+
+  const unsupportedBot = db.createBot({ name: '不支持模型', backend: 'codex-cli', cli_path: fakeCli, model: 'gpt-6-luna' })
+  const unsupportedChat = db.createDm(unsupportedBot.id)
+  const unsupported = await runTurn(unsupportedBot, unsupportedChat, [userTurn('你好')], '模型错误用例')
+  assert(unsupported.errors.some((e) => e.includes('当前 CLI 登录账号不支持这个模型') && e.includes('刷新 CLI 模型列表') && !e.includes('invalid_request_error')),
+    '账号不支持模型时显示中文修复入口，不直接展示原始 JSON')
+  assert(db.getBot(unsupportedBot.id).model === 'gpt-6-luna', '模型错误不静默替换用户的模型选择')
 
   // 首轮：新会话，提示词应包含人设与既有转录
   const first = await runTurn(
@@ -545,6 +570,7 @@ console.log('\n[1e] 本地 CLI 运行后端')
   delete process.env.COVAN_FAKE_CLI_LOG
 
   db.deleteBot(cliBot.id)
+  db.deleteBot(unsupportedBot.id)
   db.deleteBot(claudeBot.id)
 }
 

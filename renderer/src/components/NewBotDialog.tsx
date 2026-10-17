@@ -230,10 +230,11 @@ export function NewBotDialog() {
         </Field>
 
         <LocalCliFields
-          value={{ backend, cliPath, cliAccess }}
+          value={{ backend, cliPath, cliAccess, model }}
           disabled={busy}
           onChange={(patch) => {
             if (patch.backend !== undefined) setBackend(patch.backend)
+            if (patch.model !== undefined) setModel(patch.model)
             if (patch.cliPath !== undefined) setCliPath(patch.cliPath)
             if (patch.cliAccess !== undefined) setCliAccess(patch.cliAccess)
           }}
@@ -261,7 +262,7 @@ export function NewBotDialog() {
                 value={providerId}
                 onChange={(e) => {
                   setProviderId(e.target.value)
-                  setModel('')
+                  if (!isCliBackend(backend)) setModel('')
                 }}
               >
                 <option value="">稍后配置</option>
@@ -273,14 +274,16 @@ export function NewBotDialog() {
               </select>
             </div>
           </Field>
-          <Field label="模型（可选）">
-            <input
-              className={inputCls}
-              value={model}
-              onChange={(e) => setModel(e.target.value)}
-              placeholder="留空用默认"
-            />
-          </Field>
+          {!isCliBackend(backend) && (
+            <Field label="模型（可选）">
+              <input
+                className={inputCls}
+                value={model}
+                onChange={(e) => setModel(e.target.value)}
+                placeholder="留空用默认"
+              />
+            </Field>
+          )}
         </div>
 
         {error && (

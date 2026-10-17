@@ -1,0 +1,43 @@
+/* ui.css — 形状与首页留白覆盖层
+ *
+ * 放在 index.css / glass.css 之后加载，只做两类低风险覆盖：
+ * 1. 按钮统一为胶囊形（卡片、网格、分段控件除外，避免大圆角把卡片压成橄榄形）。
+ * 2. 首页移除 hero 文案后的留白收紧，以及顶部品牌图标尺寸。
+ */
+
+button,
+[role='button'] {
+  border-radius: 999px;
+}
+
+/* 卡片、头像网格、分段控件这类「面」状按钮保持块状圆角。 */
+.welcome-bot-card,
+.preset-avatar-grid > button,
+.avatar-source-tabs button,
+.theme-option,
+.group-background-grid > button,
+.user-memory-row,
+.bot-card-grid > button {
+  border-radius: 14px;
+}
+
+/* 顶部品牌改用应用图标。 */
+.brand-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  object-fit: cover;
+  display: block;
+  box-shadow: 0 3px 10px rgb(20 40 80 / 0.18);
+}
+
+/* 首页移除 hero 文案与快捷键行后：内容垂直居中，且不与顶部 80px 的窗口拖拽区重叠
+ * （重叠会让「创建你的 Bot」等按钮收到的是拖拽而不是点击）。 */
+.welcome-content {
+  margin-block: auto;
+  padding-top: clamp(96px, 12vh, 140px);
+}
+
+.welcome-actions {
+  margin-top: 0;
+}

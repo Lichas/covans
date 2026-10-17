@@ -13,6 +13,7 @@ import { contentText, type Message as PiMessage } from '@earendil-works/pi-ai'
 import type {
   Bot,
   LocalCliKind,
+  LocalCliModelCatalog,
   LocalCliProbe,
   WorkspaceArtifact,
 } from '../../shared/types'
@@ -22,6 +23,7 @@ import { observe } from '../observability'
 import { describeWorkspaceArtifact, ensureWorkspace } from '../workspace'
 import { claudeAdapter } from './claude'
 import { codexAdapter } from './codex'
+import { readCodexModels } from './models'
 import type { CliAdapter, CliInvocation, CliTurnHandlers, CliTurnOutcome } from './types'
 
 const PROBE_TIMEOUT_MS = 10_000
@@ -178,6 +180,25 @@ export async function probeLocalCli(
   return { kind, available: true, path: executable, version, error: '' }
 }
 
+export async function listLocalCliModels(
+  kind: LocalCliKind,
+  executablePath = '',
+): Promise<LocalCliModelCatalog> {
+  if (kind === 'claude-cli') {
+    return { source: 'aliases', models: ['sonnet', 'opus', 'haiku'].map((id) => ({
+      id, name: id, recommended: false,
+    })) }
+  }
+  if (kind !== 'codex-cli') throw new Error('不支持的本地 CLI 类型')
+  const env = cliEnvironment()
+  try {
+    const executable = resolveExecutable('codex', executablePath, env)
+    return await readCodexModels(executable, env)
+  } catch {
+    return { source: 'cli', models: [], error: '未找到 Codex CLI，请先安装或检查可执行文件路径。' }
+  }
+}
+
 // ---------- 提示词构建 ----------
 
 function transcriptText(messages: PiMessage[]): string {
@@ -323,6 +344,8 @@ function spawnCli(
 function friendlyCliError(outcome: { errorMessage: string }, stderr: string, exitCode: number | null): string {
   const raw = (outcome.errorMessage || stderr || '').trim()
   const lower = raw.toLowerCase()
+  if (lower.includes('model') && (lower.includes('not supported') || lower.includes('model_not_found') || lower.includes('does not exist')))
+    return '当前 CLI 登录账号不支持这个模型。请打开右栏「模型」，刷新 CLI 模型列表并选择返回的模型后重试。'
   if (lower.includes('not logged in') || lower.includes('login') || lower.includes('authentication') || lower.includes('401') || lower.includes('unauthorized'))
     return `CLI 尚未登录或凭据已失效，请先在终端完成登录后重试。原始信息：${raw.slice(0, 300)}`
   if (lower.includes('usage limit') || lower.includes('quota'))

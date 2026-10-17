@@ -2,7 +2,7 @@ import { useBotsStore } from '../stores/botsStore'
 import { useChatsStore } from '../stores/chatsStore'
 import { useUiStore } from '../stores/uiStore'
 import { Avatar } from './Avatar'
-import { PlusIcon, SparkIcon, UsersIcon } from './icons'
+import { PlusIcon, UsersIcon } from './icons'
 
 export function WelcomeView() {
   const bots = useBotsStore((s) => s.bots)
@@ -18,17 +18,8 @@ export function WelcomeView() {
       <div className="welcome-ribbon" aria-hidden="true">
         <svg viewBox="0 0 900 900" fill="none"><path d="M770 190C370-100 70 340 340 485S940 490 635 765C420 940 100 710 205 530" stroke="currentColor" strokeWidth="110" strokeLinecap="round" /></svg>
       </div>
-      <div className="welcome-topline"><span>Covan <span>/</span> 我的空间</span><span>让灵感自在发生</span></div>
+      <div className="welcome-topline"><span>Covan <span>/</span> 我的空间</span></div>
       <div className="welcome-content">
-        <span className="welcome-mark">
-          <SparkIcon width={32} height={32} />
-        </span>
-        <span className="eyebrow">A LITTLE SPACE, ENDLESS POSSIBILITIES</span>
-        <h1>好想法，从对话开始。</h1>
-        <p>
-          工作里的搭档，生活里的灵感。
-          <br />在 Covan，找到与你合拍的 Bot。
-        </p>
         <div className="welcome-actions">
           <button
             className="welcome-primary"
@@ -66,17 +57,6 @@ export function WelcomeView() {
             </div>
           </div>
         )}
-        <div className="welcome-shortcuts">
-          <span>
-            <kbd>⌘ 1</kbd> 新建 Bot
-          </span>
-          <span>
-            <kbd>⌘ K</kbd> 搜索会话
-          </span>
-          <span>
-            <kbd>⌘ ,</kbd> 设置
-          </span>
-        </div>
       </div>
     </section>
   )

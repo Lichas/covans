@@ -5,6 +5,7 @@
 // 用 COVAN_FAKE_CLI_LOG 指定一个文件，每次调用追加一行 JSON，便于断言提示词与会话续接。
 import fs from 'node:fs'
 import path from 'node:path'
+import { createInterface } from 'node:readline'
 
 const dialect = process.env.COVAN_FAKE_CLI_DIALECT === 'claude' ? 'claude' : 'codex'
 const args = process.argv.slice(2)
@@ -27,6 +28,31 @@ if (args.includes('--version')) {
   process.exit(0)
 }
 
+// Model discovery never starts inference or writes workspace files.
+if (args[0] === 'app-server') {
+  const mode = process.env.COVAN_FAKE_CLI_CATALOG_MODE || ''
+  createInterface({ input: process.stdin }).on('line', (line) => {
+    const message = JSON.parse(line)
+    if (message.method === 'initialize') emit({ id: message.id, result: {} })
+    else if (message.method === 'model/list') {
+      if (mode === 'error') emit({ id: message.id, error: { code: -1, message: 'catalog failed' } })
+      else if (mode === 'invalid') emit({ id: message.id, result: { data: 'invalid' } })
+      else if (mode === 'empty') emit({ id: message.id, result: { data: [], nextCursor: null } })
+      else {
+        const data = message.params.cursor ? [
+          { model: 'gpt-5.6-terra', displayName: 'Terra' },
+          { model: 'account-only-model', displayName: 'Account model' },
+          { model: 'gpt-5.6-sol', isDefault: true },
+          { model: 'hidden-model', hidden: true },
+        ] : [
+          { model: 'gpt-5.6-sol', displayName: 'Sol', isDefault: true },
+          { model: 'gpt-5.6-luna', displayName: 'Luna' },
+        ]
+        emit({ id: message.id, result: { data, nextCursor: mode === 'loop' ? 'same' : message.params.cursor ? null : 'page2' } })
+      }
+    }
+  })
+} else {
 // codex: exec [resume <id>] ... <prompt>；claude: -p <prompt> ...
 const isResume =
   dialect === 'claude'
@@ -48,6 +74,13 @@ logCall({
   model: modelIndex >= 0 ? args[modelIndex + 1] : '',
   imageCount: args.filter((arg) => arg === '-i').length,
 })
+
+if (modelIndex >= 0 && args[modelIndex + 1] === 'gpt-6-luna') {
+  const message = JSON.stringify({ type: 'error', status: 400, error: { type: 'invalid_request_error', message: "The 'gpt-6-luna' model is not supported when using Codex with a ChatGPT account." } })
+  emit({ type: 'thread.started', thread_id: SESSION_ID })
+  emit({ type: 'turn.failed', error: { message } })
+  process.exit(1)
+}
 
 if (prompt.includes('FAIL_ME')) {
   if (dialect === 'claude') {
@@ -105,3 +138,5 @@ if (dialect === 'claude') {
   emit({ type: 'turn.completed', usage: { input_tokens: 11, output_tokens: 7 } })
 }
 process.exit(0)
+
+}

@@ -10,6 +10,7 @@ import { ThemeSwitcher } from './ThemeSwitcher'
 import { api } from '../lib/api'
 import { PinnedBots } from './PinnedBots'
 import { ChatContextMenu } from './ChatContextMenu'
+import appIcon from '../assets/app-icon.png'
 import { formatChatTime } from '../lib/format'
 import {
   ChatIcon,
@@ -266,8 +267,8 @@ export function Sidebar() {
           className="sidebar-brand"
           aria-label="Covan 首页"
         >
-          <span className="brand-symbol"><SparkIcon width={23} height={23} /></span>
-          Covan<span className="brand-caption">空间</span>
+          <img className="brand-icon" src={appIcon} alt="" />
+          Covan
         </button>
         <button
           onClick={() => setMenuOpen((v) => !v)}
@@ -355,12 +356,11 @@ export function Sidebar() {
         <div className="profile-row">
           <button className="profile-entry" aria-label="关于我" title="我的资料与共同记忆" onClick={() => setProfileOpen(true)}>
             <span className="profile-avatar"><Avatar name={profile.name || '我'} avatar={profile.avatar} size={42} /></span>
-            <span className="profile-copy"><strong>{profile.name || '关于我'}</strong><small>很高兴见到你</small></span>
+            <span className="profile-copy"><strong>{profile.name || '关于我'}</strong></span>
           </button>
           <button className="icon-button profile-settings" onClick={() => setSettingsOpen(true)} aria-label="设置" title="设置 · ⌘ ,"><GearIcon width={19} height={19} /></button>
         </div>
         <ThemeSwitcher compact />
-        <div className="sidebar-footnote"><span />你的 Bot，你的空间。</div>
       </div>
     </aside>
   )

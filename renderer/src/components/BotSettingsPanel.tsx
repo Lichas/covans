@@ -20,7 +20,7 @@ import { ScheduledTasksPanel } from './ScheduledTasksPanel'
 import { ExtensionsPanel } from './ExtensionsPanel'
 import { LocalCliFields, isCliBackend } from './LocalCliFields'
 import { Field, Toggle, inputCls } from './controls'
-import { PencilIcon, ProviderIcon, UsersIcon } from './icons'
+import { CloseIcon, PencilIcon, ProviderIcon, UsersIcon } from './icons'
 import { MarkdownContent } from './MarkdownContent'
 import { GROUP_BACKGROUNDS, groupBackgroundUrl } from '../lib/groupBackground'
 
@@ -388,8 +388,15 @@ function ModelTab({ bot }: { bot: Bot }) {
             backend: bot.backend,
             cliPath: bot.cli_path,
             cliAccess: bot.cli_access,
+            model: bot.model,
           }}
-          onChange={(patch) => save(patch)}
+          onChange={({ cliPath, cliAccess, ...patch }) =>
+            save({
+              ...patch,
+              ...(cliPath !== undefined ? { cli_path: cliPath } : {}),
+              ...(cliAccess !== undefined ? { cli_access: cliAccess } : {}),
+            })
+          }
         />
         <Field
           label={isCliBackend(bot.backend) ? 'Provider（判断用，可选）' : 'Provider'}
@@ -425,15 +432,17 @@ function ModelTab({ bot }: { bot: Bot }) {
             </select>
           </div>
         </Field>
-        <BotField
-          label="模型（留空用 Provider 默认）"
-          value={bot.model}
-          placeholder={
-            providers.find((p) => p.id === bot.provider_id)?.default_model ||
-            '如 gpt-4o'
-          }
-          onSave={(v) => save({ model: v })}
-        />
+        {!isCliBackend(bot.backend) && (
+          <BotField
+            label="模型（留空用 Provider 默认）"
+            value={bot.model}
+            placeholder={
+              providers.find((p) => p.id === bot.provider_id)?.default_model ||
+              '如 gpt-4o'
+            }
+            onSave={(v) => save({ model: v })}
+          />
+        )}
         <Field label="响应决策策略">
           <select
             aria-label="响应决策策略"
@@ -642,7 +651,11 @@ function GroupSettingsPanel({ chat }: { chat: ChatSummary }) {
   )
 }
 
-export function BotSettingsPanel() {
+export function BotSettingsPanel({
+  onActionsTarget,
+}: {
+  onActionsTarget: (node: HTMLDivElement | null) => void
+}) {
   const chat = useActiveChat()
   const inspectedBotId = useUiStore((s) => s.inspectedBotId)
   const rightPanelOpen = useUiStore((s) => s.rightPanelOpen)
@@ -687,21 +700,36 @@ export function BotSettingsPanel() {
   return (
     <aside
       className="bot-settings-panel flex h-full w-[320px] shrink-0 flex-col border-l border-stone-200 bg-stone-50/60 dark:border-stone-800 dark:bg-stone-900/40"
+      id="bot-settings-panel"
       aria-label="Bot 设定"
     >
-      {/* 头部：居中大头像 + 名称（参考资料页的居中布局） */}
-      <div className="flex flex-col items-center border-b border-stone-200 px-4 pb-5 pt-6 dark:border-stone-800">
-        <button
-          onClick={() => setAvatarOpen(true)}
-          className="group relative shrink-0 rounded-full focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-emerald-600"
-          title="更换头像"
-          aria-label="更换头像"
-        >
-          <Avatar name={bot.name} avatar={bot.avatar} size={76} />
-          <span className="absolute inset-0 flex items-center justify-center rounded-full bg-black/35 text-white opacity-0 transition group-hover:opacity-100 group-focus-visible:opacity-100">
-            <PencilIcon width={18} height={18} />
-          </span>
-        </button>
+      <div className="bot-profile-header relative flex flex-col items-center border-b border-stone-200 px-4 pb-5 pt-6 dark:border-stone-800">
+        {chat.type === 'dm' && (
+          <button
+            className="icon-button bot-panel-close"
+            aria-label="关闭 Bot 设定"
+            title="关闭 Bot 设定"
+            onClick={() => useUiStore.getState().setRightPanelOpen(false)}
+          >
+            <CloseIcon width={16} height={16} />
+          </button>
+        )}
+        <div className="bot-profile-portrait">
+          <button
+            onClick={() => setAvatarOpen(true)}
+            className="group relative shrink-0 rounded-full focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-emerald-600"
+            title="更换头像"
+            aria-label="更换头像"
+          >
+            <Avatar name={bot.name} avatar={bot.avatar} size={76} />
+            <span className="absolute inset-0 flex items-center justify-center rounded-full bg-black/35 text-white opacity-0 transition group-hover:opacity-100 group-focus-visible:opacity-100">
+              <PencilIcon width={18} height={18} />
+            </span>
+          </button>
+          {chat.type === 'dm' && (
+            <div className="bot-profile-actions" ref={onActionsTarget} />
+          )}
+        </div>
         <input
           key={bot.id + bot.name}
           aria-label="Bot 名称"

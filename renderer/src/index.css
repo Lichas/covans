@@ -77,6 +77,7 @@ input[type='range'] {
   --glass: rgb(255 255 255 / 0.62);
   --glass-strong: rgb(247 250 255 / 0.9);
   --glass-edge: rgb(255 255 255 / 0.88);
+  --pane-divider: rgb(120 128 140 / 0.22);
   --glass-shadow: 0 12px 36px rgb(45 79 140 / 0.08), inset 0 1px 0 var(--glass-edge);
   --bubble-bot-bg: rgb(255 255 255 / 0.7);
   --bubble-bot-edge: rgb(255 255 255 / 0.82);
@@ -102,6 +103,7 @@ input[type='range'] {
   --glass: rgb(30 54 99 / 0.55);
   --glass-strong: rgb(22 40 73 / 0.94);
   --glass-edge: rgb(174 205 255 / 0.22);
+  --pane-divider: rgb(184 194 210 / 0.18);
   --glass-shadow: 0 16px 40px rgb(2 10 35 / 0.18), inset 0 1px 0 var(--glass-edge);
   --bubble-bot-bg: rgb(30 54 99 / 0.62);
   --bubble-bot-edge: rgb(140 175 235 / 0.2);
@@ -246,12 +248,7 @@ button:disabled {
   justify-content: space-between;
   min-height: 76px;
   padding: 12px 26px;
-  border-bottom: 1px solid var(--line);
-}
-.chat-view.group-background .chat-header {
-  border-bottom-color: rgb(255 255 255 / 0.45);
-  background: rgb(255 255 255 / 0.56);
-  backdrop-filter: blur(18px) saturate(1.15);
+  border-bottom: 0;
 }
 .chat-subtitle {
   display: flex;
@@ -2425,10 +2422,6 @@ kbd {
       rgb(28 28 27 / 0.88)
     ),
     var(--group-bg-image);
-}
-.dark .chat-view.group-background .chat-header {
-  border-bottom-color: rgb(255 255 255 / 0.08);
-  background: rgb(28 28 27 / 0.58);
 }
 .dark .chat-view.group-background .message-scroll {
   background: linear-gradient(

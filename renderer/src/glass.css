@@ -10,7 +10,7 @@
   width: 256px;
   height: 100%;
   flex-shrink: 0;
-  border-right: 1px solid var(--glass-edge);
+  border-right: 1px solid var(--pane-divider);
   background: color-mix(in srgb, var(--panel) 62%, transparent);
   backdrop-filter: blur(28px) saturate(1.2);
   box-shadow: 4px 0 30px rgb(9 32 81 / 0.025);
@@ -128,9 +128,34 @@
 .welcome-bot-card strong { font-size: 13px; }
 .welcome-bot-card div > span { font-size: 11px; }
 .welcome-shortcuts { margin-top: 30px; }
-.chat-view { background: transparent; }
-.chat-header { background: var(--glass); border-color: var(--glass-edge); backdrop-filter: blur(24px) saturate(1.2); min-height: 82px; }
+.chat-view { --chat-header-height: 82px; background: transparent; }
+.chat-dm { --chat-header-height: 68px; }
+/* The scrolling messages extend behind the header. Only this masked layer blurs,
+   so the toolbar stays crisp while both tint and blur fade out without an edge. */
+.chat-view > .chat-header {
+  position: absolute; inset: 0 0 auto; height: var(--chat-header-height);
+  min-height: 0; z-index: 5; isolation: isolate;
+  border: 0; background: transparent; box-shadow: none; backdrop-filter: none;
+}
+.chat-header::before {
+  content: ''; position: absolute; inset: 0 0 -36px; z-index: -1; pointer-events: none;
+  background: linear-gradient(to bottom, var(--glass), color-mix(in srgb, var(--glass) 60%, transparent) 52%, transparent);
+  backdrop-filter: blur(32px) saturate(1.25);
+  mask-image: linear-gradient(to bottom, #000 0%, rgb(0 0 0 / 0.85) 38%, transparent 100%);
+}
+.chat-view .message-scroll { padding-top: var(--chat-header-height); scroll-padding-top: calc(var(--chat-header-height) + 36px); }
+.chat-view > .chat-notice { margin-top: var(--chat-header-height); z-index: 6; }
+.chat-view > .chat-notice ~ .message-scroll-wrap .message-scroll { padding-top: 0; }
 .chat-header-avatar { border-radius: 50%; box-shadow: 0 0 0 3px var(--glass); }
+.chat-dm .chat-header { justify-content: center; padding-block: 10px; }
+.chat-identity-button { display: flex; align-items: center; gap: 9px; max-width: 100%; padding: 8px 15px 8px 10px; border: 1px solid transparent; border-radius: 999px; background: var(--glass); -webkit-app-region: no-drag; transition: background 150ms, border-color 150ms; }
+.chat-identity-button:hover { background: var(--soft); }
+.chat-identity-button[aria-expanded="true"] { background: var(--soft); border-color: var(--accent); }
+.chat-identity-button:focus-visible { outline: 2px solid #808080; outline-offset: 3px; }
+.bot-profile-header { padding-top: 40px; border-bottom: 0; background: color-mix(in srgb, var(--glass) 35%, transparent); backdrop-filter: blur(24px) saturate(1.2); }
+.bot-profile-portrait { position: relative; display: flex; align-items: center; justify-content: center; min-height: 108px; }
+.bot-profile-actions { position: absolute; left: calc(100% + 22px); top: 50%; transform: translateY(-50%); }
+.bot-panel-close { position: absolute; top: 8px; right: 8px; }
 .message-user .message-surface { background: var(--glass); border: 1px solid var(--glass-edge); box-shadow: 0 4px 16px rgb(15 37 83 / 0.04); backdrop-filter: blur(12px); border-radius: 18px 5px 18px 18px; }
 .composer-shell { max-width: 930px; padding-bottom: 16px; }
 .composer-box { align-items: stretch; padding: 17px 18px 13px; border-radius: 24px; border-color: color-mix(in srgb, var(--accent) 35%, var(--glass-edge)); background: var(--glass); box-shadow: var(--glass-shadow); backdrop-filter: blur(28px) saturate(1.3); }
@@ -146,14 +171,12 @@
 .composer-footer { font-size: 10px; line-height: 1.6; flex-wrap: wrap; gap: 2px 12px; }
 .empty-chat { margin-top: 70px; }
 .suggestion-list button { background: var(--glass); border-color: var(--glass-edge); border-radius: 13px; box-shadow: inset 0 1px 0 var(--glass-edge); }
-.bot-settings-panel { background: var(--glass); border-color: var(--glass-edge); backdrop-filter: blur(28px); }
+.bot-settings-panel, .dark .bot-settings-panel { background: var(--glass); border-color: var(--pane-divider); backdrop-filter: blur(28px); }
 .dialog-backdrop { background: rgb(8 23 50 / 0.25); backdrop-filter: blur(10px); }
 .glass-dialog { border-color: var(--glass-edge); border-radius: 22px; background: var(--glass-strong); box-shadow: 0 30px 100px rgb(4 19 50 / 0.25), inset 0 1px 0 var(--glass-edge); backdrop-filter: blur(36px) saturate(1.2); }
 /* Photo backgrounds retain a readable veil in either palette. */
 .chat-view.group-background::before { background-image: linear-gradient(180deg, #edf3fc60, #edf3fcca 55%, #edf3fce8), var(--group-bg-image); }
 .dark .chat-view.group-background::before { background-image: linear-gradient(180deg, #101d3d70, #101d3db8 52%, #101d3de0), var(--group-bg-image); }
-.chat-view.group-background .chat-header,
-.dark .chat-view.group-background .chat-header { border-color: var(--glass-edge); background: var(--glass); }
 .chat-view.group-background .message-scroll,
 .dark .chat-view.group-background .message-scroll { background: transparent; }
 .chat-view.group-background .message-bot .message-surface,
@@ -182,8 +205,9 @@
   #message-composer { min-height: 42px; }
 }
 @media (prefers-reduced-transparency: reduce) {
-  .app-sidebar, .bot-settings-panel, .chat-header, .glass-dialog,
+  .app-sidebar, .bot-settings-panel, .glass-dialog,
   .composer-box, .welcome-bot-card { background: var(--surface); backdrop-filter: none; }
+  .chat-header::before { background: var(--surface); backdrop-filter: none; }
 }
 @media (prefers-reduced-motion: reduce) {
   .welcome-bot-card:hover { transform: none; }

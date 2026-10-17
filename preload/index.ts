@@ -12,6 +12,7 @@ import type {
 
 const api: CovanApi = {
   probeLocalCli: (kind, executablePath) => ipcRenderer.invoke(CH.probeLocalCli, kind, executablePath),
+  listLocalCliModels: (kind, executablePath) => ipcRenderer.invoke(CH.listLocalCliModels, kind, executablePath),
   listExtensions: () => ipcRenderer.invoke(CH.listExtensions),
   saveMcpServer: (input) => ipcRenderer.invoke(CH.saveMcpServer, input),
   deleteMcpServer: (id) => ipcRenderer.invoke(CH.deleteMcpServer, id),

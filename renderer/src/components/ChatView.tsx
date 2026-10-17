@@ -1,3 +1,4 @@
+import { createPortal } from 'react-dom'
 import {
   Fragment,
   useEffect,
@@ -11,7 +12,6 @@ import { useBotMap } from '../stores/botsStore'
 import { useActiveChat } from '../stores/chatsStore'
 import { useMessagesStore } from '../stores/messagesStore'
 import { useUiStore } from '../stores/uiStore'
-import { useSettingsStore } from '../stores/settingsStore'
 import { useDraftsStore } from '../stores/draftsStore'
 import { api } from '../lib/api'
 import { formatMessageDay, messageDay } from '../lib/format'
@@ -32,13 +32,16 @@ import {
   DownloadIcon,
   GearIcon,
   NewTopicIcon,
-  ProviderIcon,
   SparkIcon,
   UserPlusIcon,
   UsersIcon,
 } from './icons'
 
-export function ChatView() {
+export function ChatView({
+  actionsTarget,
+}: {
+  actionsTarget: HTMLDivElement | null
+}) {
   const chat = useActiveChat()
   const botMap = useBotMap()
   const messagesByChat = useMessagesStore((s) => s.messages)
@@ -63,7 +66,6 @@ export function ChatView() {
   const setRightPanelOpen = useUiStore((s) => s.setRightPanelOpen)
   const inspectedBotId = useUiStore((s) => s.inspectedBotId)
   const inspectBot = useUiStore((s) => s.inspectBot)
-  const providers = useSettingsStore((s) => s.providers)
   const scrollRef = useRef<HTMLDivElement>(null)
   const stickToBottom = useRef(true)
   const historyAnchor = useRef<{
@@ -94,7 +96,6 @@ export function ChatView() {
   }, [chat, messagesByChat, streaming])
   const lastContent = messages.at(-1)?.content
   const bot = chat?.bot_id ? botMap.get(chat.bot_id) : undefined
-  const provider = providers.find((p) => p.id === bot?.provider_id)
 
   useLayoutEffect(() => {
     stickToBottom.current = true
@@ -193,6 +194,65 @@ export function ChatView() {
       } as React.CSSProperties)
     : undefined
 
+  const chatActions = (
+    <div
+      className={`chat-actions ${isGroup ? 'flex items-center gap-1' : 'flex flex-col gap-1'}`}
+      aria-label="会话操作"
+      style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+    >
+      <button
+        className="icon-button"
+        aria-label={isGroup ? '邀请 Bot' : '建群'}
+        title={isGroup ? '邀请 Bot 加入群聊' : '邀请 Bot 组建群聊'}
+        onClick={() => setInviteChatId(chat.id)}
+      >
+        <UserPlusIcon width={17} height={17} />
+      </button>
+      <button
+        className="icon-button topic-header-action"
+        aria-label="开始新话题"
+        title={
+          topicState?.suggestion_reason
+            ? '当前上下文较长，开始新话题'
+            : '压缩上下文并开始新话题'
+        }
+        disabled={
+          generating ||
+          topicStarting ||
+          (topicState?.current_message_count ?? 0) === 0
+        }
+        onClick={() => {
+          setTopicError('')
+          setTopicDialogOpen(true)
+        }}
+      >
+        <NewTopicIcon width={17} height={17} />
+        {topicState?.suggestion_reason && (
+          <span className="topic-suggestion-dot" />
+        )}
+      </button>
+      <button
+        className="icon-button"
+        aria-label="导出会话"
+        title="下载完整会话为 Markdown"
+        disabled={!messages.length || generating || exporting}
+        onClick={async () => {
+          setExporting(true)
+          try {
+            const path = await api.exportChat(chat.id)
+            setExportState(path ? '会话已导出' : '')
+          } catch (e) {
+            setExportState(String(e))
+          } finally {
+            setExporting(false)
+          }
+        }}
+      >
+        <DownloadIcon width={17} height={17} />
+      </button>
+    </div>
+  )
+
   return (
     <section
       className={`chat-view ${isGroup ? 'chat-group' : 'chat-dm'} ${backgroundUrl ? 'group-background' : ''}`}
@@ -202,111 +262,64 @@ export function ChatView() {
         className="chat-header"
         style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
       >
-        <div className="flex min-w-0 items-center gap-3">
-          {isGroup ? (
-            <span className="header-group-icon">
-              <UsersIcon width={19} height={19} />
-            </span>
-          ) : (
+        {isGroup ? (
+          <>
+            <div className="flex min-w-0 items-center gap-3">
+              <span className="header-group-icon">
+                <UsersIcon width={19} height={19} />
+              </span>
+              <div className="min-w-0">
+                <h1 className="truncate text-[14px] font-semibold">{title}</h1>
+                <div className="chat-subtitle">
+                  {generating
+                    ? '成员正在准备回复…'
+                    : `${chat.member_bots.length} 位成员 · 共享上下文`}
+                </div>
+              </div>
+            </div>
+            <div
+              className="flex shrink-0 items-center gap-1"
+              style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+            >
+              {chatActions}
+              <button
+                className={`icon-button ${rightPanelOpen ? 'active' : ''}`}
+                onClick={() => {
+                  if (rightPanelOpen && !inspectedBotId) {
+                    setRightPanelOpen(false)
+                    return
+                  }
+                  inspectBot(null)
+                  setRightPanelOpen(true)
+                }}
+                aria-label={rightPanelOpen ? '收起设置' : '展开设置'}
+                title="群聊设置 · ⌘."
+              >
+                <GearIcon width={17} height={17} />
+              </button>
+            </div>
+          </>
+        ) : (
+          <button
+            className="chat-identity-button"
+            aria-label={rightPanelOpen ? '收起设置' : '展开设置'}
+            aria-expanded={rightPanelOpen}
+            aria-controls="bot-settings-panel"
+            title={`${title} · Bot 设置 · ⌘.`}
+            onClick={toggleRightPanel}
+          >
             <Avatar
               name={title}
               avatar={bot?.avatar ?? ''}
-              size={34}
+              size={26}
               activity={generating}
               className="chat-header-avatar"
             />
-          )}
-          <div className="min-w-0">
             <h1 className="truncate text-[14px] font-semibold">{title}</h1>
-            <div className="chat-subtitle">
-              {provider && (
-                <ProviderIcon kind={provider.kind} width={12} height={12} />
-              )}
-              {generating
-                ? isGroup
-                  ? '成员正在准备回复…'
-                  : '正在回复…'
-                : isGroup
-                  ? `${chat.member_bots.length} 位成员 · 共享上下文`
-                  : bot?.model || provider?.default_model || '尚未配置模型'}
-            </div>
-          </div>
-        </div>
-        <div
-          className="flex shrink-0 items-center gap-1"
-          style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
-        >
-          <button
-            className="icon-button"
-            aria-label="邀请 Bot"
-            title={isGroup ? '邀请 Bot 加入群聊' : '邀请 Bot 组建群聊'}
-            onClick={() => setInviteChatId(chat.id)}
-          >
-            <UserPlusIcon width={17} height={17} />
           </button>
-          <button
-            className="icon-button topic-header-action"
-            aria-label="开始新话题"
-            title={
-              topicState?.suggestion_reason
-                ? '当前上下文较长，开始新话题'
-                : '压缩上下文并开始新话题'
-            }
-            disabled={
-              generating ||
-              topicStarting ||
-              (topicState?.current_message_count ?? 0) === 0
-            }
-            onClick={() => {
-              setTopicError('')
-              setTopicDialogOpen(true)
-            }}
-          >
-            <NewTopicIcon width={17} height={17} />
-            {topicState?.suggestion_reason && (
-              <span className="topic-suggestion-dot" />
-            )}
-          </button>
-          <button
-            className="icon-button"
-            aria-label="导出会话"
-            title="导出完整会话为 Markdown"
-            disabled={!messages.length || generating || exporting}
-            onClick={async () => {
-              setExporting(true)
-              try {
-                const path = await api.exportChat(chat.id)
-                setExportState(path ? '会话已导出' : '')
-              } catch (e) {
-                setExportState(String(e))
-              } finally {
-                setExporting(false)
-              }
-            }}
-          >
-            <DownloadIcon width={17} height={17} />
-          </button>
-          <button
-            className={`icon-button ${rightPanelOpen ? 'active' : ''}`}
-            onClick={() => {
-              if (!isGroup) {
-                toggleRightPanel()
-                return
-              }
-              if (rightPanelOpen && !inspectedBotId) {
-                setRightPanelOpen(false)
-                return
-              }
-              inspectBot(null)
-              setRightPanelOpen(true)
-            }}
-            aria-label={rightPanelOpen ? '收起设置' : '展开设置'}
-            title="Bot 设置 · ⌘."
-          >
-            <GearIcon width={17} height={17} />
-          </button>
-        </div>
+        )}
       </header>
+      {!isGroup && actionsTarget && createPortal(chatActions, actionsTarget)}
       {exportState && (
         <div className="chat-notice" role="status">
           {exportState}

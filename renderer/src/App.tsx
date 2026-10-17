@@ -1,5 +1,5 @@
 // App.tsx — 三栏布局装配 + 启动加载 + 事件订阅 + 全局快捷键
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { BotSettingsPanel } from './components/BotSettingsPanel'
 import { ArtifactPreviewPanel } from './components/ArtifactPreviewPanel'
 import { ChatView } from './components/ChatView'
@@ -18,6 +18,9 @@ import { api } from './lib/api'
 import { UserProfileDialog } from './components/UserProfileDialog'
 
 export default function App() {
+  // ChatView owns the actions/dialog state; the DM sidebar hosts its toolbar.
+  const [chatActionsTarget, setChatActionsTarget] =
+    useState<HTMLDivElement | null>(null)
   const setNewBotOpen = useUiStore((s) => s.setNewBotOpen)
   const setNewGroupOpen = useUiStore((s) => s.setNewGroupOpen)
 
@@ -88,8 +91,8 @@ export default function App() {
   return (
     <div className="app-shell flex h-full w-full overflow-hidden">
       <Sidebar />
-      <ChatView />
-      <BotSettingsPanel />
+      <ChatView actionsTarget={chatActionsTarget} />
+      <BotSettingsPanel onActionsTarget={setChatActionsTarget} />
       <ArtifactPreviewPanel />
       <SettingsModal />
       <NewBotDialog />

@@ -45,6 +45,17 @@ export interface LocalCliProbe {
   error?: string
 }
 
+export interface LocalCliModel {
+  id: string
+  name: string
+  recommended: boolean
+}
+export interface LocalCliModelCatalog {
+  models: LocalCliModel[]
+  source: 'cli' | 'aliases'
+  error?: string
+}
+
 export type BotGender = 'female' | 'male'
 
 export type McpTransport = 'stdio' | 'http' | 'sse'
@@ -449,6 +460,7 @@ export interface DiagnosticReport {
 
 export interface CovanApi {
   probeLocalCli(kind: LocalCliKind, executablePath?: string): Promise<LocalCliProbe>
+  listLocalCliModels(kind: LocalCliKind, executablePath?: string): Promise<LocalCliModelCatalog>
   listExtensions(): Promise<ExtensionCatalog>
   saveMcpServer(input: McpServerInput): Promise<McpServer>
   deleteMcpServer(id: string): Promise<void>

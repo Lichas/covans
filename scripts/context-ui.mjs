@@ -191,9 +191,7 @@ try {
   page = await app.firstWindow()
   await page.emulateMedia({ reducedMotion: 'reduce' })
   page.on('pageerror', (e) => errors.push(e.message))
-  await expect(
-    page.getByRole('heading', { name: '好想法，从对话开始。' }),
-  ).toBeVisible()
+  await expect(page.getByRole('button', { name: '创建你的 Bot' })).toBeVisible()
   const fixture = await page.evaluate(async (base) => {
     const api = window.covan
     const p = await api.saveProvider({

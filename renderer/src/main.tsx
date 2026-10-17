@@ -4,6 +4,7 @@ import App from './App'
 import 'katex/dist/katex.min.css'
 import './index.css'
 import './glass.css'
+import './ui.css'
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

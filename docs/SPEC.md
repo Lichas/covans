@@ -216,6 +216,7 @@ interface CovanApi {
   saveJevConfig(input: JevConfigInput): Promise<JevConfig>; // api_key 省略保留、空串清除
   testJev(): Promise<TestJevResult>;
   probeLocalCli(kind: LocalCliKind, executablePath?: string): Promise<LocalCliProbe>; // 只探测本机可执行文件与版本
+  listLocalCliModels(kind: LocalCliKind, executablePath?: string): Promise<LocalCliModelCatalog>; // 本机 CLI 模型目录（不启动推理）
 
   // bots
   listBots(): Promise<Bot[]>;
@@ -340,11 +341,14 @@ type CovanEvent =
 
 - 每个 Bot 有一种运行方式 `backend`：`api`（默认，走 Provider）或 `codex-cli` / `claude-cli`（正文由本机已登录的 CLI 生成）。CLI Bot 仍可配置 Provider，仅用于「是否发言 / 是否续发」判断，不影响正文生成。`cli_access` 为 `read-only`（默认）或 `workspace-write`；`cli_path` 为空时在 PATH 中按命令名查找。
 - 运行方式、可执行文件路径、模型、文件权限与工作区组成会话指纹。首次发言以 `cli_path` 启动一次 CLI，把系统提示（人设、记忆、审核规则）、既有转录与当前用户消息合并为起始提示词，并记录 CLI 返回的会话 ID；同一 Bot 在同一会话中后续轮次改为续接，只发送最新一条用户消息。指纹变化、清空聊天记录、开始新话题或删除会话都会丢弃映射并重新建立会话。会话映射存 `bot_cli_sessions`，CLI 自身的会话与登录状态仍由 CLI 管理。
+- 新建 Bot 与已有 Bot 的模型页共用独立的「CLI 模型」选择器：支持 CLI 默认（保存空 `model`）、CLI 返回的模型目录和自定义 ID。Codex 不再使用写死模型列表；Claude 仍提供 `sonnet` / `opus` / `haiku` 稳定别名并明确标注。Codex 目录可能来自 CLI 缓存，不视作账号权限验证，实际可用性以回复结果为准；空 `model` 沿用 CLI 自己的配置，不等于目录推荐模型。已保存模型不在目录时保留原值、显示提示并提供明确选择 CLI 推荐模型的按钮；不静默替换用户选择。切换运行方式清空旧模型，避免把 API 或另一种 CLI 的模型带入；修改判断用 Provider 不清空已选择的 CLI 模型。自定义 ID 在失焦或 Enter 时提交，新建时随 Bot 保存，模型页即时保存，重载后回显。CLI 路径和权限分别以 `cli_path` / `cli_access` 保存。
 - 模型（Bot 的 `model` 字段）在新建与续接调用中都必须下发：`codex exec resume` 不带 `-m`、`claude --resume` 不带 `--model` 时会回退 CLI 自己的默认模型，与建会话时不一致会触发 CLI 警告，默认模型不可用时整轮直接失败。为空时才使用 CLI 默认模型。
 - Codex：`codex exec --json --sandbox <read-only|workspace-write> -C <工作区> --skip-git-repo-check [-m 模型] [-i 图片] <提示词>`；续接为 `codex exec resume <会话 ID> --json --skip-git-repo-check [-m 模型]`（resume 不支持 `--sandbox` 与 `-C`，沙箱与工作目录在首次会话确定后继承）。解析 stdout 的 JSONL：`thread.started` 取会话 ID，`item.completed` 中 `agent_message` 取正文增量、`file_change` 转为交付产物、`command_execution`/`reasoning`/`mcp_tool_call` 仅记入观测，`turn.completed` 取 Token 用量，`turn.failed` 与顶层 `error` 视为失败。上行事件形态已用 codex-cli 0.149.0 真机核对。
 - Claude：`claude -p <提示词> --output-format stream-json --verbose [--model <模型>] [--resume <会话 ID>] --permission-mode <plan|acceptEdits>`，只读映射为 `plan`、可写映射为 `acceptEdits`。解析 `system(init)` 取会话 ID，`assistant` 的文本块取正文，`result.subtype!=='success'` 或 `is_error` 视为失败。Claude 适配器按文档化契约实现，尚未在真机验证。
 - 两条适配器都不存储用户凭据，完全依赖 CLI 自身的登录状态；子进程继承用户真实 HOME 与 PATH（并补齐 Homebrew 等常见安装目录，避免 GUI 启动时找不到命令），以 Bot 工作区为工作目录。正文为空、CLI 未安装、未登录或额度用尽都转为可见错误，不产生空白完成消息。
 - 本地 CLI Bot 没有 Provider 且未配置 Jev 时不存在可用的判断引擎：群聊中只响应 @提及（不沿用“判断失败即回复”的兜底，否则每条群消息都会启动一次 CLI），私聊不做自然追问；两种情况都写入脱敏观测事件。
+- `cli:models` 解析指定 CLI 路径；Codex 通过 `app-server --listen stdio://` 执行 `initialize` → `initialized` → `model/list`，分页读取公开目录、去重并过滤隐藏项，只向 renderer 返回模型 ID/显示名/推荐标记。不启动 thread/turn，不发送聊天内容，不请求或返回凭据；CLI 自身可能刷新联网目录。15 秒超时、2MB 响应上限、最多 10 页；失败或空目录返回可恢复错误，保留默认/自定义入口，不退回静态列表。结束即关闭进程，未退出时限时终止；界面提供刷新按钮且忽略旧路径/旧请求结果。
+- CLI 返回模型不支持（含截图中的 ChatGPT account 400）时，气泡显示中文修复建议：打开「模型」、刷新目录、选择返回的模型后重试，不直接展示原始 JSON，不自动改模型或重新计费调用。
 - `cli:probe` 只在本机按命令名或给定路径查找可执行文件并运行 `--version`，返回 `{kind, available, path, version, error}`，不读取登录凭据，也不发起网络请求。
 
 ## 6. 分层记忆系统（memory.ts / db.ts）
@@ -480,9 +484,10 @@ await agent.prompt(userText)   // agent.abort() 用于 stopChat
 - 三栏：Sidebar 256px / ChatView 自适应 / BotSettingsPanel 320px（默认收起）。
 - 外观采用冰蓝浅色 / 深海蓝深色主题与静态渐变光晕。侧栏、顶部栏、Composer、首页 Bot 卡片和弹窗使用半透明磨砂、细高光边框与柔和阴影；消息阅读区保持低干扰，用户消息为紧凑玻璃气泡，Bot 回复使用宽阅读区域；代码、表格和块级公式独立滚动。首页装饰线条不可聚焦、不拦截点击；动效遵守减少动效偏好。
 - Sidebar：搜索框；单聊列表项右键「置顶 / 取消置顶」，最多3个 Bot，数据库层同样校验；群聊列表项右键提供经确认的「删除群聊」，永久删除群及关联记录。顶部仅在有置顶时显示横排圆形头像，不显示空槽位或添加入口。会话列表项=头像(群聊显示叠头像+N角标)/名称/最后消息预览/时间/未读蓝点；搜索下方为「我的 Bot」「新建群聊」快捷入口；底部为个人头像、名称（未填写时为「关于我」）、资料入口、设置及浅色/深色/跟随系统主题按钮。主题按钮有名称、tooltip 和选中态，复用 settings.theme，与通用设置同步、立即生效并持久化；跟随系统时响应系统主题变化。顶部「+」菜单新建 Bot(⌘1) / 创建群聊(⌘2)。
-- ChatView：顶部 Bot/群名、完整会话导出和设置入口；群聊齿轮打开回复机制和聊天背景设置。会话可使用 `resources/group-backgrounds` 内置图片作为聊天背景，新建群随机分配一张，旧群首次启动补齐一张；私聊默认无背景，可在 Bot 设定页手动选择、随机或清除。renderer 只能经 `covan-bg://builtin/<file>` 读取清单内文件。私聊 Bot 在准备回复、流式回复或执行工具时，顶部头像显示一圈旋转的 Siri 风格渐变状态环，并遵守减少动效偏好；Agent 私聊记录中实际回复中的 Bot 头像同样显示该状态。消息显示作者、时间、跨日分隔；支持 Markdown（含行内/块级 LaTeX 公式）、多图、代码复制、原文复制、引用回复和错误重试。Bot 本轮真实写入或编辑工作区文件时，回复下方显示结构化交付卡，不从回复文本猜测文件名；卡片支持在右侧可调整宽度的产物预览窗预览 Markdown、HTML、TXT、代码、图片和 PDF，并支持定位和打开文件夹。Composer 支持群聊 @ 提及、独立持久草稿与中文输入法保护；上方以动画小头像显示正在思考/回复的成员。主动回复中可继续发送新消息。
+- ChatView：顶部显示当前 Bot/群名与右栏入口，单聊会话操作放在 Bot 右栏，群聊工具栏保留完整会话导出和齿轮；群聊齿轮打开回复机制和聊天背景设置。会话可使用 `resources/group-backgrounds` 内置图片作为聊天背景，新建群随机分配一张，旧群首次启动补齐一张；私聊默认无背景，可在 Bot 设定页手动选择、随机或清除。renderer 只能经 `covan-bg://builtin/<file>` 读取清单内文件。私聊 Bot 在准备回复、流式回复或执行工具时，顶部头像显示一圈旋转的 Siri 风格渐变状态环，并遵守减少动效偏好；Agent 私聊记录中实际回复中的 Bot 头像同样显示该状态。消息显示作者、时间、跨日分隔；支持 Markdown（含行内/块级 LaTeX 公式）、多图、代码复制、原文复制、引用回复和错误重试。Bot 本轮真实写入或编辑工作区文件时，回复下方显示结构化交付卡，不从回复文本猜测文件名；卡片支持在右侧可调整宽度的产物预览窗预览 Markdown、HTML、TXT、代码、图片和 PDF，并支持定位和打开文件夹。Composer 支持群聊 @ 提及、独立持久草稿与中文输入法保护；上方以动画小头像显示正在思考/回复的成员。主动回复中可继续发送新消息。
+- 单聊聊天顶部居中显示小头像和名称胶囊按钮，点击切换 Bot 右栏，支持键盘激活和 ⌘./Ctrl+.，用 `aria-expanded` 表达开合状态；头像保留生成状态环。单聊顶部不再显示模型副标题或会话操作图标。头像名称按钮仅在右栏展开时显示蓝色边框，未选中时悬停和键盘聚焦均不显示蓝框（键盘焦点使用中性描边）。单聊与群聊聊天顶部共用覆盖于消息之上的透明渐变毛玻璃层：色泽与模糊一起向下渐隐为全透明，无均匀矩形底色、横线或阴影边界；滚动消息可从顶部层后方通过，头像/名称/操作按钮保持清晰，首条消息与定位目标预留顶部空间。背景照片、浅色和深色模式均使用该效果；减少透明度偏好时移除模糊但保留渐隐轮廓。右栏头像区域保留半透明毛玻璃且无底部横线；左右栏竖分割线使用低对比中性灰，深色主题使用相应的浅灰透明度。建群（保留当前单聊并邀请其他 Bot）、开始新话题（保留历史并压缩上下文）、下载 Markdown 会话三项操作按此顺序在右栏大头像右侧纵向排列；右栏有独立关闭按钮。操作沿用原来的确认、禁用条件和错误反馈，群聊仍使用原顶部工具栏。
 - BotSettingsPanel（右栏，单聊选中时显示）：头像与身份信息；生活照、设定、记忆、工作区、定时、模型、扩展七个标签页（按从左到右排列）。单聊的设定页在人设前显示当前会话的聊天背景选择器，默认以当前背景预览卡和「更换」入口紧凑呈现，展开后显示图库；这只更新当前 dm 会话，不写入 Bot 人设。设定页的人设 System Prompt 默认以 Markdown 预览显示，预览区域至少 220px 高并自动填满设定页剩余空间，底部保留 20px 内边距；点击铅笔进入编辑态，编辑区至少 360px 高，使用等宽透明输入层叠加 Markdown 语法高亮层，支持标题、代码围栏、行内代码、强调、链接和注释高亮，并提供取消/完成操作。点击完成后保存 `system_prompt`，取消恢复进入编辑前内容；编辑中的草稿不会因外部 Bot 更新覆盖。模型页独立管理 provider、model、响应决策策略、temperature、reasoning effort 与 max tokens。
-- SettingsModal（通用）：采用左侧分类导航、右侧内容区的设置布局；分类包括通用、Provider、Bot、定时任务、头像生成、MCP、Skills、Debug，MCP、Skills 与 Debug 为同级一级分类。通用包含账户占位、外观（主题跟随系统/浅色/深色、语言）、Bot（时区自动检测、自然追问开关、自动审核开关 + 规则文本、TypeSafe API Key / Jev 模型 / 置信度阈值）、Provider 管理（列表 + 新增/编辑表单 + 测试连接按钮）。Provider 列表、配置表单、Bot 模型选择和聊天头部使用对应厂商的图形标识，不使用字母或文字缩写；OpenAI-compatible 与 Mock 使用中性图形。
+- SettingsModal（通用）：采用左侧分类导航、右侧内容区的设置布局；分类包括通用、Provider、Bot、定时任务、头像生成、MCP、Skills、Debug，MCP、Skills 与 Debug 为同级一级分类。通用包含账户占位、外观（主题跟随系统/浅色/深色、语言）、Bot（时区自动检测、自然追问开关、自动审核开关 + 规则文本、TypeSafe API Key / Jev 模型 / 置信度阈值）、Provider 管理（列表 + 新增/编辑表单 + 测试连接按钮）。Provider 列表、配置表单、Bot 的 Provider 选择使用对应厂商的图形标识，不使用字母或文字缩写；OpenAI-compatible 与 Mock 使用中性图形。
 - 新建 Bot 对话框：名称/人设模板下拉（开发分队四人、产品经理、设计师、虚拟女友「小美女」、虚拟男友「小帅哥」、空白自定义）/描述/provider/模型。
 - 中文 UI。
 
