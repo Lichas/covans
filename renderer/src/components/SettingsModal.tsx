@@ -1,5 +1,5 @@
-import { ThemeSwitcher } from './ThemeSwitcher'
 // components/SettingsModal.tsx — 设置弹窗：通用 / Provider 管理 / Bot
+import { ThemeSwitcher } from './ThemeSwitcher'
 import { useEffect, useState } from 'react'
 import type {
   JevConfig,
@@ -51,6 +51,34 @@ function GeneralSection() {
         </div>
         <ThemeSwitcher />
       </div>
+      {api.nativeGlass && (
+        <div>
+          <div className="mb-2 text-[13px] font-medium text-stone-700 dark:text-stone-200">
+            窗口透明度
+          </div>
+          <div className="segmented" role="group" aria-label="窗口透明度">
+            {[
+              ['standard', '标准'],
+              ['clear', '更透'],
+              ['ultra', '最透'],
+            ].map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                data-glass-level={value}
+                aria-pressed={(settings['window_transparency'] || 'standard') === value}
+                onClick={() => void setSettingValue('window_transparency', value)}
+                className={`segmented-item shape-rect${(settings['window_transparency'] || 'standard') === value ? ' is-selected' : ''}`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <p className="mt-1.5 max-w-[420px] text-[11.5px] leading-relaxed text-stone-400">
+            标准在原生毛玻璃上再叠一层淡色；更透只留原生材质；最透换用更透明的材质。右侧阅读卡片始终保持不透明。
+          </p>
+        </div>
+      )}
       <div className="space-y-3 rounded-xl border border-stone-200 px-3.5 py-3 dark:border-stone-700">
         <div className="flex items-center justify-between gap-4">
           <div>

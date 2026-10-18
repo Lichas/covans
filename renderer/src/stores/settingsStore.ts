@@ -12,6 +12,14 @@ function applyTheme(mode: ThemeMode) {
   document.documentElement.classList.toggle('dark', dark)
 }
 
+/** 窗口透明度：只有 macOS 的原生材质可以调，低层 CSS 通过 data-glass 选择。 */
+export type WindowTransparency = 'standard' | 'clear' | 'ultra'
+
+export function applyWindowTransparency(level: string) {
+  document.documentElement.dataset.glass =
+    level === 'clear' || level === 'ultra' ? level : 'standard'
+}
+
 interface SettingsState {
   theme: ThemeMode
   settings: Record<string, string>
@@ -50,12 +58,14 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
           reviewRules,
           naturalFollowUp,
           localObservability,
+          rawGlass,
         ] = await Promise.all([
           get('theme'),
           get('auto_review'),
           get('review_rules'),
           get('natural_follow_up'),
           get('local_observability'),
+          get('window_transparency'),
         ])
         const theme = rawTheme === 'dark' || rawTheme === 'system' ? rawTheme : 'light'
         set({
@@ -67,9 +77,11 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
             review_rules: reviewRules,
             natural_follow_up: naturalFollowUp,
             local_observability: localObservability,
+            window_transparency: rawGlass || 'standard',
           },
         })
         applyTheme(theme)
+        applyWindowTransparency(rawGlass || 'standard')
       } catch {
         set({ loaded: true })
         applyTheme('system')
@@ -87,6 +99,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
 
     setSettingValue: async (key, value) => {
       set({ settings: { ...get().settings, [key]: value } })
+      if (key === 'window_transparency') applyWindowTransparency(value)
       await api.setSetting(key, value)
     },
 

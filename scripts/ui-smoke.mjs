@@ -232,6 +232,16 @@ try {
     await expect(content.locator(':scope > *')).toHaveCount(1)
   }
   await settingsNav.getByRole('button', { name: '通用', exact: true }).click()
+  // macOS 原生毛玻璃：窗口透明度可调（标准/更透/最透），并写入设置。
+  const glassGroup = settingsDialog.getByRole('group', { name: '窗口透明度' })
+  await expect(glassGroup.getByRole('button', { name: '标准' })).toHaveAttribute('aria-pressed', 'true')
+  await glassGroup.getByRole('button', { name: '更透' }).click()
+  await expect(page.locator('html')).toHaveAttribute('data-glass', 'clear')
+  await expect.poll(() => page.evaluate(() => window.covan.getSetting('window_transparency'))).toBe('clear')
+  await glassGroup.getByRole('button', { name: '最透' }).click()
+  await expect(page.locator('html')).toHaveAttribute('data-glass', 'ultra')
+  await glassGroup.getByRole('button', { name: '标准' }).click()
+  await expect(page.locator('html')).toHaveAttribute('data-glass', 'standard')
   await expect(settingsDialog.locator('[data-general-static]')).toHaveCount(2)
   for (const row of await settingsDialog.locator('[data-general-static]').all()) await expect(row).toHaveCSS('border-top-width', '0px')
   const contentTop = (await settingsDialog.getByRole('main').boundingBox()).y

@@ -21,6 +21,7 @@ import { CH } from '../shared/ipcChannels'
 import { isGroupBackground } from '../shared/groupBackgrounds'
 import * as db from './db'
 import { listProviderModels, testProviderConnection } from './agentRuntime'
+import { applyWindowTransparency } from './windowShell'
 import {
   getChatTopicState,
   isTurnRunning,
@@ -490,6 +491,8 @@ export function registerIpc(): void {
     db.setSetting(key, value)
     if (key === 'theme' && ['light', 'dark', 'system'].includes(value))
       nativeTheme.themeSource = value as 'light' | 'dark' | 'system'
+    // 窗口透明度要改的是原生材质，必须由主进程执行。
+    if (key === 'window_transparency') applyWindowTransparency(value)
   })
   handle(CH.openObservabilityLogs, async () => {
     const err = await shell.openPath(observabilityDirectory())

@@ -38,6 +38,11 @@ html[data-native-glass='true'] .app-shell { background: transparent; }
 }
 html[data-native-glass='true'] .app-sidebar { background: rgb(255 255 255 / 0.12); backdrop-filter: none; }
 html[data-native-glass='true'].dark .app-sidebar { background: rgb(14 14 18 / 0.12); }
+/* 窗口透明度分级：更透去掉自绘淡色，只留原生材质；最透同时换 under-window 材质。 */
+html[data-native-glass='true'][data-glass='clear'] .app-sidebar,
+html[data-native-glass='true'][data-glass='ultra'] .app-sidebar,
+html[data-native-glass='true'].dark[data-glass='clear'] .app-sidebar,
+html[data-native-glass='true'].dark[data-glass='ultra'] .app-sidebar { background: transparent; }
 .sidebar-brand-row {
   position: relative;
   display: flex;

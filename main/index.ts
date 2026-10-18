@@ -8,6 +8,7 @@ import type { CovanEvent } from '../shared/types'
 import { CH } from '../shared/ipcChannels'
 import { getDb, getSetting, initDb } from './db'
 import { initWorkspace, resolveWorkspaceFile } from './workspace'
+import { initialVibrancy, setShellWindow } from './windowShell'
 import { initOrchestrator, runScheduledTask } from './orchestrator'
 import { configureWebNetworkAdapter } from './tools/web'
 import { renderWebPage } from './tools/browser'
@@ -267,6 +268,7 @@ function setDockIcon(): void {
 function createWindow(): void {
   const theme = getSetting('theme')
   nativeTheme.themeSource = theme === 'dark' || theme === 'system' ? theme : 'light'
+  const transparency = getSetting('window_transparency')
   const win = new BrowserWindow({
     title: 'Covan',
     width: 1400,
@@ -277,7 +279,12 @@ function createWindow(): void {
     // 先隐藏再在 ready-to-show 显示：透明窗口在渲染完成前会闪一下白色。
     show: false,
     ...(process.platform === 'darwin'
-      ? { transparent: true, backgroundColor: '#00000000', vibrancy: 'sidebar' as const, visualEffectState: 'active' as const }
+      ? {
+          transparent: true,
+          backgroundColor: '#00000000',
+          vibrancy: initialVibrancy(transparency),
+          visualEffectState: 'active' as const,
+        }
       : { backgroundColor: '#f5f5f4' }),
     webPreferences: {
       preload: path.join(__dirname, '../preload/index.mjs'),
@@ -287,6 +294,8 @@ function createWindow(): void {
     },
   })
 
+  setShellWindow(win)
+  win.on('closed', () => setShellWindow(null))
   win.once('ready-to-show', () => win.show())
 
   win.webContents.setWindowOpenHandler(({ url }) => {
