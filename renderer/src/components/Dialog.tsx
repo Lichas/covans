@@ -9,6 +9,7 @@ interface Props {
   bodyClassName?: string
   onClose: () => void
   children: React.ReactNode
+  footer?: React.ReactNode
 }
 
 export function Dialog({
@@ -18,6 +19,7 @@ export function Dialog({
   bodyClassName,
   onClose,
   children,
+  footer,
 }: Props) {
   const ref = useRef<HTMLDivElement>(null)
   const titleId = useId()
@@ -86,9 +88,9 @@ export function Dialog({
         aria-modal="true"
         aria-labelledby={titleId}
         tabIndex={-1}
-        className={`glass-dialog ${width} max-w-[92vw] max-h-[85vh] animate-fadeIn overflow-hidden rounded-2xl border border-stone-200 bg-white shadow-xl dark:border-stone-700 dark:bg-stone-800`}
+        className={`glass-dialog flex flex-col ${width} max-w-[92vw] max-h-[85vh] animate-fadeIn overflow-hidden rounded-2xl border border-stone-200 bg-white shadow-xl dark:border-stone-700 dark:bg-stone-800`}
       >
-        <div className="flex items-center justify-between border-b border-stone-200 px-5 py-3.5 dark:border-stone-700">
+        <div className="flex shrink-0 items-center justify-between border-b border-stone-200 px-5 py-3.5 dark:border-stone-700">
           <h2
             id={titleId}
             className="text-[15px] font-semibold text-stone-800 dark:text-stone-100"
@@ -104,13 +106,11 @@ export function Dialog({
           </button>
         </div>
         <div
-          className={
-            bodyClassName ??
-            'scroll-thin max-h-[calc(85vh-52px)] overflow-y-auto'
-          }
+          className={`min-h-0 ${bodyClassName ?? 'scroll-thin overflow-y-auto'}`}
         >
           {children}
         </div>
+        {footer && <div className="dialog-footer flex shrink-0 items-center justify-end gap-2 border-t border-stone-200 px-5 py-3 dark:border-stone-700">{footer}</div>}
       </div>
     </div>
   )

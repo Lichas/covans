@@ -1,4 +1,5 @@
 // components/NewGroupDialog.tsx — 创建群聊对话框
+import type { GroupReplyMode } from '@shared/types'
 import { useState } from 'react'
 import { useBotsStore } from '../stores/botsStore'
 import { useChatsStore } from '../stores/chatsStore'
@@ -15,10 +16,12 @@ export function NewGroupDialog() {
 
   const [name, setName] = useState('')
   const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [replyMode, setReplyMode] = useState<GroupReplyMode>('sequential')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
   const reset = () => {
+    setReplyMode('sequential')
     setName('')
     setSelected(new Set())
     setError('')
@@ -42,7 +45,7 @@ export function NewGroupDialog() {
     setBusy(true)
     setError('')
     try {
-      await createGroup(name.trim(), [...selected])
+      await createGroup(name.trim(), [...selected], undefined, replyMode)
       close()
     } catch (e) {
       setError(String(e))
@@ -100,9 +103,18 @@ export function NewGroupDialog() {
           </div>
         </div>
 
-        <div className="rounded-xl bg-stone-100/80 px-3.5 py-3 text-[11.5px] leading-relaxed text-stone-500 dark:bg-stone-800/60 dark:text-stone-400">
-          新群默认使用「顺序回复」。创建后可在群聊右上角设置中切换为「主动回复」。
-        </div>
+        <fieldset className="space-y-2">
+          <legend className="text-[12px] font-medium text-stone-500">回复方式</legend>
+          {([
+            ['sequential', '依次发言', '成员按顺序判断是否发言，可参考前面成员的回复。'],
+            ['active', '自主参与', '成员同时判断是否参与，适合开放讨论。'],
+          ] as const).map(([value, label, hint]) => (
+            <label key={value} className="flex cursor-pointer items-start gap-2 rounded-xl border border-stone-200 p-3 dark:border-stone-700">
+              <input type="radio" name="group-reply-mode" value={value} checked={replyMode === value} onChange={() => setReplyMode(value)} />
+              <span><strong className="block text-[13px] font-medium">{label}</strong><span className="text-[11px] text-stone-500">{hint}</span></span>
+            </label>
+          ))}
+        </fieldset>
 
         {error && <div className="rounded-lg bg-red-50 px-3 py-2 text-[12.5px] text-red-600 dark:bg-red-950/50 dark:text-red-300">{error}</div>}
 

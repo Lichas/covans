@@ -157,35 +157,14 @@ export function NewBotDialog() {
   }
 
   return (
-    <Dialog open={open} title="新建 Bot" onClose={close}>
+    <Dialog open={open} title="新建 Bot" onClose={close} footer={
+      <>
+        {(!name.trim() || !preferenceLoaded) && <span className="mr-auto text-[11px] text-stone-500" aria-live="polite">{!name.trim() ? '请输入名称' : '正在加载偏好…'}</span>}
+        <button className={btnGhostCls} onClick={close} disabled={busy}>取消</button>
+        <button className={btnPrimaryCls} disabled={!name.trim() || busy || !preferenceLoaded} onClick={() => void submit()}>{busy ? '创建中…' : '创建并开始聊天'}</button>
+      </>
+    }>
       <div className="space-y-4 p-5">
-        <div className="new-bot-identity">
-          <div className="mb-3 flex items-center justify-between">
-            <span className="text-xs font-medium text-stone-500">
-              选择初始形象
-            </span>
-            <GenderPicker
-              value={gender}
-              disabled={busy}
-              onChange={(next) => {
-                setGender(next)
-                setAvatar('')
-              }}
-            />
-          </div>
-          <PresetAvatarPicker
-            presets={presets}
-            gender={gender}
-            value={selectedAvatar}
-            disabled={busy}
-            onChange={(p) => setAvatar(p.avatar)}
-          />
-          {presetError && (
-            <p role="alert" className="text-xs text-red-500">
-              {presetError}
-            </p>
-          )}
-        </div>
         <Field label="名称">
           <input
             className={inputCls}
@@ -224,16 +203,6 @@ export function NewBotDialog() {
             />
           </Field>
         }
-
-        <Field label="描述（可选）">
-          <input
-            className={inputCls}
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            placeholder="一句话介绍"
-          />
-        </Field>
-
         <div>
           <span className="mb-1 block text-[12px] font-medium text-stone-500 dark:text-stone-400">
             运行方式与默认模型
@@ -241,6 +210,7 @@ export function NewBotDialog() {
           <ModelPicker
             value={{ backend, providerId: providerId || null, model, cliPath }}
             disabled={busy}
+            showCliConfig={false}
             onChange={(next) => {
               setBackend(next.backend)
               setProviderId(next.provider_id ?? '')
@@ -250,6 +220,45 @@ export function NewBotDialog() {
           />
         </div>
 
+        <details className="new-bot-advanced rounded-xl border border-stone-200 p-3 dark:border-stone-700">
+          <summary className="cursor-pointer text-[12px] font-medium">外观与高级设置</summary>
+          <div className="mt-3 space-y-4">
+        <div className="new-bot-identity">
+          <div className="mb-3 flex items-center justify-between">
+            <span className="text-xs font-medium text-stone-500">
+              选择初始形象
+            </span>
+            <GenderPicker
+              value={gender}
+              disabled={busy}
+              onChange={(next) => {
+                setGender(next)
+                setAvatar('')
+              }}
+            />
+          </div>
+          <PresetAvatarPicker
+            presets={presets}
+            gender={gender}
+            value={selectedAvatar}
+            disabled={busy}
+            onChange={(p) => setAvatar(p.avatar)}
+          />
+          {presetError && (
+            <p role="alert" className="text-xs text-red-500">
+              {presetError}
+            </p>
+          )}
+        </div>
+        <Field label="描述（可选）">
+          <input
+            className={inputCls}
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            placeholder="一句话介绍"
+          />
+        </Field>
+            {isCliBackend(backend) && <Field label="CLI 可执行文件"><input className={inputCls} value={cliPath} disabled={busy} placeholder={backend === 'codex-cli' ? 'codex' : 'claude'} onChange={(e) => setCliPath(e.target.value)} /></Field>}
         {isCliBackend(backend) && (
           <div className="grid grid-cols-2 items-end gap-3">
             <Field label="Provider（判断用，可选）">
@@ -296,25 +305,14 @@ export function NewBotDialog() {
             </div>
           </div>
         )}
+          </div>
+        </details>
 
         {error && (
           <div className="rounded-lg bg-red-50 px-3 py-2 text-[12.5px] text-red-600 dark:bg-red-950/50 dark:text-red-300">
             {error}
           </div>
         )}
-
-        <div className="flex justify-end gap-2 pt-1">
-          <button className={btnGhostCls} onClick={close}>
-            取消
-          </button>
-          <button
-            className={btnPrimaryCls}
-            disabled={!name.trim() || busy || !preferenceLoaded}
-            onClick={() => void submit()}
-          >
-            {busy ? '创建中…' : '创建并开始聊天'}
-          </button>
-        </div>
       </div>
     </Dialog>
   )

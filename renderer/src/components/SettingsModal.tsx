@@ -80,7 +80,7 @@ function GeneralSection() {
         <div className="mb-2 text-[13px] font-medium text-stone-700 dark:text-stone-200">
           语言
         </div>
-        <div className="rounded-lg border border-stone-200 bg-stone-50 px-3 py-2 text-[13px] text-stone-500 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-400">
+        <div data-general-static="language" className="text-[13px] text-stone-500 dark:text-stone-400">
           跟随系统（当前：中文）
         </div>
       </div>
@@ -88,7 +88,7 @@ function GeneralSection() {
         <div className="mb-2 text-[13px] font-medium text-stone-700 dark:text-stone-200">
           关于 Covan
         </div>
-        <div className="rounded-lg border border-dashed border-stone-300 px-3 py-3 text-[12.5px] text-stone-400 dark:border-stone-600">
+        <div data-general-static="about" className="text-[12.5px] leading-relaxed text-stone-400">
           会话、Bot 设定和草稿保存在这台设备上。模型服务由你配置的 Provider
           提供。
         </div>

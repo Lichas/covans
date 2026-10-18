@@ -1103,6 +1103,7 @@ export function createGroup(
   name: string,
   memberBotIds: string[],
   coordinatorBotId?: string,
+  replyMode: 'active' | 'sequential' = 'sequential',
 ): Chat {
   const id = newId()
   const now = Date.now()
@@ -1110,8 +1111,8 @@ export function createGroup(
   const d = getDb()
   const tx = d.transaction(() => {
     d.prepare(
-      "INSERT INTO chats (id,type,name,bot_id,coordinator_bot_id,background_image,last_message_at,unread,created_at) VALUES (?,'group',?,NULL,?,?,0,0,?)",
-    ).run(id, name, coordinatorBotId ?? null, background, now)
+      "INSERT INTO chats (id,type,name,bot_id,coordinator_bot_id,background_image,reply_mode,last_message_at,unread,created_at) VALUES (?,'group',?,NULL,?,?,?,0,0,?)",
+    ).run(id, name, coordinatorBotId ?? null, background, replyMode, now)
     const ins = d.prepare(
       'INSERT OR IGNORE INTO chat_members (chat_id,bot_id,role) VALUES (?,?,?)',
     )

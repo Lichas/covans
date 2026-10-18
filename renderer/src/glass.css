@@ -1,20 +1,43 @@
 /* Liquid glass: a shared ambient canvas, translucent chrome, quiet reading surfaces. */
 .app-shell {
-  background: var(--ambient);
+  background: var(--panel);
   color: var(--text);
   isolation: isolate;
 }
+/* The native material samples behind the window. Every renderer ancestor must
+   stay clear for it to show through; a CSS blur alone cannot reveal a desktop. */
+html[data-native-glass='true'],
+html[data-native-glass='true'] body,
+html[data-native-glass='true'] #root,
+html[data-native-glass='true'] .app-shell { background: transparent; }
+.app-content-card {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  margin: 8px 10px 10px 8px;
+  overflow: hidden;
+  isolation: isolate;
+  border: 1px solid var(--pane-divider);
+  border-radius: 16px;
+  background: var(--canvas);
+  box-shadow: 0 8px 28px rgb(0 0 0 / 0.14), 0 1px 3px rgb(0 0 0 / 0.08);
+}
+.dark .app-content-card { box-shadow: 0 8px 32px rgb(0 0 0 / 0.45), 0 1px 3px rgb(0 0 0 / 0.25); }
 .app-sidebar {
   display: flex;
   flex-direction: column;
   width: 256px;
   height: 100%;
   flex-shrink: 0;
-  border-right: 1px solid var(--pane-divider);
+  border-right: 0;
   background: color-mix(in srgb, var(--panel) 62%, transparent);
   backdrop-filter: blur(28px) saturate(1.2);
-  box-shadow: 4px 0 30px rgb(0 0 0 / 0.03);
+  box-shadow: none;
 }
+html[data-native-glass='true'] .app-sidebar { background: rgb(255 255 255 / 0.12); backdrop-filter: none; }
+html[data-native-glass='true'].dark .app-sidebar { background: rgb(14 14 18 / 0.12); }
 .sidebar-brand-row {
   position: relative;
   display: flex;
@@ -118,12 +141,6 @@
 .theme-error { color: #d85b70; font-size: 11px; margin-top: 6px; }
 .welcome-view { background: transparent; isolation: isolate; overflow-x: hidden; }
 .welcome-drag { height: 80px; }
-.welcome-topline { position: absolute; top: 31px; left: 34px; right: 34px; display: flex; justify-content: space-between; color: var(--muted); font-size: 11px; letter-spacing: 0.3px; pointer-events: none; }
-.welcome-topline span span { padding: 0 12px; opacity: 0.5; }
-.welcome-topline > :last-child { font-size: 10px; letter-spacing: 2px; }
-.welcome-ribbon { position: absolute; z-index: -1; inset: 0; overflow: hidden; color: var(--text); opacity: 0.04; pointer-events: none; }
-.dark .welcome-ribbon { color: #ffffff; opacity: 0.05; }
-.welcome-ribbon svg { position: absolute; top: 4%; right: -18%; display: block; width: min(92%, 970px); transform: rotate(-18deg); }
 .welcome-content { max-width: 800px; padding: clamp(98px, 15vh, 160px) 54px 38px; }
 .welcome-mark { width: 64px; height: 64px; border-radius: 21px; margin-bottom: 30px; backdrop-filter: blur(18px); }
 .welcome-content h1 { font-size: clamp(28px, 3.2vw, 42px); font-weight: 550; letter-spacing: -1.5px; margin-top: 18px; }
@@ -201,8 +218,8 @@
 .dark .chat-view.group-background .date-divider span { background: var(--glass-strong); border-color: var(--glass-edge); }
 /* 胶囊按钮规则统一放在 ui.css（最后加载），避免两处 !important 互相覆盖。 */
 @media (max-width: 1100px) {
+  .app-content-card { margin: 6px 6px 6px 0; border-radius: 14px; }
   .welcome-content { padding-inline: 35px; }
-  .welcome-topline > :last-child { display: none; }
   .chat-header { padding-inline: 20px; }
   .composer-box { padding: 13px; border-radius: 19px; }
   .composer-footer > span:last-child { margin-left: auto; }
@@ -218,6 +235,8 @@
   #message-composer { min-height: 42px; }
 }
 @media (prefers-reduced-transparency: reduce) {
+  html[data-native-glass='true'] .app-shell { background: var(--panel); }
+  html[data-native-glass='true'] .app-sidebar { background: var(--panel); }
   .app-sidebar, .bot-settings-panel, .glass-dialog,
   .composer-box, .welcome-bot-card { background: var(--surface); backdrop-filter: none; }
   .chat-header::before { background: var(--surface); backdrop-filter: none; }

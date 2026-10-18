@@ -3,6 +3,7 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import { CH } from '../shared/ipcChannels'
 import type {
   BotInput,
+  GroupReplyMode,
   CovanApi,
   CovanEvent,
   MemoryKind,
@@ -11,6 +12,7 @@ import type {
 } from '../shared/types'
 
 const api: CovanApi = {
+  nativeGlass: process.platform === 'darwin',
   probeLocalCli: (kind, executablePath) => ipcRenderer.invoke(CH.probeLocalCli, kind, executablePath),
   listLocalCliModels: (kind, executablePath) => ipcRenderer.invoke(CH.listLocalCliModels, kind, executablePath),
   listExtensions: () => ipcRenderer.invoke(CH.listExtensions),
@@ -79,7 +81,8 @@ const api: CovanApi = {
     name: string,
     memberBotIds: string[],
     coordinatorBotId?: string,
-  ) => ipcRenderer.invoke(CH.createGroup, name, memberBotIds, coordinatorBotId),
+    replyMode?: GroupReplyMode,
+  ) => ipcRenderer.invoke(CH.createGroup, name, memberBotIds, coordinatorBotId, replyMode),
   updateChat: (
     id: string,
     patch: {

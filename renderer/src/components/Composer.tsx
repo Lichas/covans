@@ -361,6 +361,7 @@ export function Composer({ chat }: Props) {
             const ta = e.currentTarget
             updateMentionPopup(ta.value, ta.selectionStart ?? ta.value.length)
           }}
+          title="支持 Markdown · 多图粘贴与拖放；Enter 发送，Shift + Enter 换行"
           placeholder={
             isGroup ? '一起讨论点什么？输入 @ 提及成员' : '有什么新想法？'
           }
@@ -414,20 +415,9 @@ export function Composer({ chat }: Props) {
         )}
       </div>
       </div>
-      <div className="composer-footer">
-        <span>
-          {importing
-            ? '正在导入图片…'
-            : generating
-              ? allowDuringGeneration
-                ? '群聊回复中 · 可继续补充，思考中的成员会更新上下文'
-                : '正在回复，你可以先写下一条消息'
-              : text || attachments.length
-                ? '草稿已在本地保存'
-                : '支持 Markdown · 多图粘贴与拖放'}
-        </span>
-        <span>Enter 发送 · Shift + Enter 换行</span>
-      </div>
+      {(importing || generating) && <div className="composer-footer" role="status">
+        {importing ? '正在导入图片…' : allowDuringGeneration ? '回复中，可继续补充' : '回复中，可先写下一条'}
+      </div>}
     </div>
   )
 }

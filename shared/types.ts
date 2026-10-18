@@ -459,6 +459,8 @@ export interface DiagnosticReport {
 }
 
 export interface CovanApi {
+  /** Platform capability only; native vibrancy is configured by the main window. */
+  readonly nativeGlass: boolean
   probeLocalCli(kind: LocalCliKind, executablePath?: string): Promise<LocalCliProbe>
   listLocalCliModels(kind: LocalCliKind, executablePath?: string): Promise<LocalCliModelCatalog>
   listExtensions(): Promise<ExtensionCatalog>
@@ -530,6 +532,7 @@ export interface CovanApi {
     name: string,
     memberBotIds: string[],
     coordinatorBotId?: string,
+    replyMode?: GroupReplyMode,
   ): Promise<Chat>
   updateChat(
     id: string,

@@ -3,10 +3,10 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { app, BrowserWindow, net, protocol, safeStorage } from 'electron'
+import { app, BrowserWindow, nativeTheme, net, protocol, safeStorage } from 'electron'
 import type { CovanEvent } from '../shared/types'
 import { CH } from '../shared/ipcChannels'
-import { getDb, initDb } from './db'
+import { getDb, getSetting, initDb } from './db'
 import { initWorkspace, resolveWorkspaceFile } from './workspace'
 import { initOrchestrator, runScheduledTask } from './orchestrator'
 import { configureWebNetworkAdapter } from './tools/web'
@@ -265,6 +265,8 @@ function setDockIcon(): void {
 }
 
 function createWindow(): void {
+  const theme = getSetting('theme')
+  nativeTheme.themeSource = theme === 'dark' || theme === 'system' ? theme : 'light'
   const win = new BrowserWindow({
     title: 'Covan',
     width: 1400,
@@ -272,7 +274,11 @@ function createWindow(): void {
     minWidth: 960,
     minHeight: 600,
     titleBarStyle: 'hiddenInset',
-    backgroundColor: '#f5f5f4',
+    // 先隐藏再在 ready-to-show 显示：透明窗口在渲染完成前会闪一下白色。
+    show: false,
+    ...(process.platform === 'darwin'
+      ? { transparent: true, backgroundColor: '#00000000', vibrancy: 'sidebar' as const, visualEffectState: 'active' as const }
+      : { backgroundColor: '#f5f5f4' }),
     webPreferences: {
       preload: path.join(__dirname, '../preload/index.mjs'),
       contextIsolation: true,
@@ -280,6 +286,8 @@ function createWindow(): void {
       nodeIntegration: false,
     },
   })
+
+  win.once('ready-to-show', () => win.show())
 
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:\/\//i.test(url))

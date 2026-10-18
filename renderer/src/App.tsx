@@ -91,9 +91,11 @@ export default function App() {
   return (
     <div className="app-shell flex h-full w-full overflow-hidden">
       <Sidebar />
-      <ChatView actionsTarget={chatActionsTarget} />
-      <BotSettingsPanel onActionsTarget={setChatActionsTarget} />
-      <ArtifactPreviewPanel />
+      <div className="app-content-card">
+        <ChatView actionsTarget={chatActionsTarget} />
+        <BotSettingsPanel onActionsTarget={setChatActionsTarget} />
+        <ArtifactPreviewPanel />
+      </div>
       <SettingsModal />
       <NewBotDialog />
       <NewGroupDialog />

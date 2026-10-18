@@ -131,8 +131,25 @@ try {
   page = await app.firstWindow()
   page.on('pageerror', (e) => errors.push(e.message))
   await expect(page.getByRole('button', { name: '创建你的 Bot' })).toBeVisible()
+  await expect(page.locator('.welcome-topline, .welcome-ribbon')).toHaveCount(0)
   await page.getByRole('button', { name: '创建你的 Bot' }).click()
-  await expect(page.getByRole('dialog', { name: '新建 Bot' })).toBeVisible()
+  const firstCreateDialog = page.getByRole('dialog', { name: '新建 Bot' })
+  await expect(firstCreateDialog).toBeVisible()
+  await expect(firstCreateDialog.locator('.new-bot-advanced')).not.toHaveAttribute('open')
+  const createFooter = firstCreateDialog.locator('.dialog-footer')
+  await expect(createFooter).toContainText('请输入名称')
+  await firstCreateDialog.getByLabel('名称', { exact: true }).fill('精简表单')
+  await expect(createFooter.locator('span')).toHaveCount(0)
+  await firstCreateDialog.getByLabel('名称', { exact: true }).fill('')
+  await expect(createFooter.getByRole('button', { name: '创建并开始聊天' })).toBeVisible()
+  await firstCreateDialog.getByText('外观与高级设置', { exact: true }).click()
+  // Opening details may grow the dialog; scrolling its body must not move
+  // the independent footer after that layout change.
+  const beforeScroll = await createFooter.boundingBox()
+  await firstCreateDialog.getByLabel('描述（可选）').scrollIntoViewIfNeeded()
+  const afterScroll = await createFooter.boundingBox()
+  assert.ok(Math.abs(beforeScroll.y - afterScroll.y) < 1)
+  await page.screenshot({ path: path.join(artifacts, 'new-bot-fixed-footer.png') })
   await page.keyboard.press('Escape')
   await expect(page.getByRole('dialog')).toHaveCount(0)
   console.log('✓ Welcome actions and dialog dismissal')
@@ -215,6 +232,8 @@ try {
     await expect(content.locator(':scope > *')).toHaveCount(1)
   }
   await settingsNav.getByRole('button', { name: '通用', exact: true }).click()
+  await expect(settingsDialog.locator('[data-general-static]')).toHaveCount(2)
+  for (const row of await settingsDialog.locator('[data-general-static]').all()) await expect(row).toHaveCSS('border-top-width', '0px')
   const contentTop = (await settingsDialog.getByRole('main').boundingBox()).y
   const firstControlTop = (await settingsDialog.getByText('外观主题', { exact: true }).boundingBox()).y
   assert.ok(firstControlTop - contentTop < 32, 'Settings content starts directly below the dialog title')
@@ -349,6 +368,20 @@ try {
     { fixture, markdown },
   )
   await page.reload()
+  await page.keyboard.press('Control+2')
+  const groupDialog = page.getByRole('dialog', { name: '创建群聊' })
+  await expect(groupDialog.getByRole('radio', { name: /依次发言/ })).toBeChecked()
+  await groupDialog.getByLabel('群名称').fill('创建时选择模式')
+  await groupDialog.getByRole('checkbox', { name: /设计搭档/ }).check()
+  await groupDialog.getByRole('radio', { name: /自主参与/ }).check()
+  await groupDialog.getByRole('button', { name: '创建群聊', exact: true }).click()
+  const createdModeGroup = await page.evaluate(async () => (await window.covan.listChats()).find((c) => c.name === '创建时选择模式'))
+  assert.equal(createdModeGroup.reply_mode, 'active')
+  await page.reload()
+  assert.equal(await page.evaluate(async (id) => (await window.covan.listChats()).find((c) => c.id === id).reply_mode, createdModeGroup.id), 'active')
+  await page.evaluate((id) => window.covan.deleteChat(id), createdModeGroup.id)
+  await page.reload()
+  console.log('✓ Group reply mode is chosen at creation and persists across reload')
   await page
     .locator('aside')
     .getByRole('button', { name: '设计搭档', exact: true })
@@ -368,7 +401,16 @@ try {
   await expectFadingHeader()
   await expect(page.locator('.bot-profile-header')).toHaveCSS('border-bottom-width', '0px')
   await expect(page.locator('.bot-profile-header')).toHaveCSS('backdrop-filter', 'blur(24px) saturate(1.2)')
-  await expect(page.locator('.app-sidebar')).toHaveCSS('border-right-color', 'rgba(24, 24, 27, 0.1)')
+  // 左栏是整块原生毛玻璃，右栏内容浮在一张带描边的圆角卡片上：
+  // 分界由卡片自己的边和阴影表达，左栏不再画右边框。
+  await expect(page.locator('html')).toHaveAttribute('data-native-glass', 'true')
+  await expect(page.locator('.app-shell')).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)')
+  await expect(page.locator('.app-content-card')).toHaveCSS('border-top-left-radius', '16px')
+  await expect(page.locator('.app-content-card')).toHaveCSS('border-top-color', 'rgba(24, 24, 27, 0.1)')
+  const cardShadow = await page.locator('.app-content-card').evaluate((el) => getComputedStyle(el).boxShadow)
+  assert.ok(cardShadow !== 'none', '内容卡片应有外阴影，与毛玻璃左栏分层')
+  await expect(page.locator('.app-sidebar')).toHaveCSS('border-right-width', '0px')
+  await expect(page.locator('.app-sidebar')).toHaveCSS('backdrop-filter', 'none')
   await expect(page.getByRole('complementary', { name: 'Bot 设定' })).toHaveCSS('border-left-color', 'rgba(24, 24, 27, 0.1)')
   await expect(page.locator('.chat-dm .chat-header .chat-actions')).toHaveCount(0)
   const sidebarActions = page.locator('.bot-profile-actions')
@@ -412,6 +454,8 @@ try {
   await expect(page.getByText('已暂停', { exact: true })).toBeVisible()
   await page.screenshot({ path: path.join(artifacts, 'scheduled-tasks.png') })
   await page.getByRole('button', { name: '设定', exact: true }).click()
+  for (const row of await page.locator('.profile-rows > .profile-row').all()) await expect(row).toHaveCSS('border-bottom-width', '0px')
+  await expect(page.locator('.profile-section-title')).toHaveCSS('border-top-width', '1px')
   await page.getByRole('button', { name: '更换', exact: true }).click()
   await expectReadablePhotoBackgrounds('dm')
   await page.getByRole('button', { name: '收起', exact: true }).click()
@@ -493,7 +537,10 @@ try {
   console.log('✓ New topic compresses context while preserving visible DM history')
 
   const composer = page.getByRole('textbox', { name: '输入消息' })
+  await expect(page.locator('.composer-footer')).toHaveCount(0)
+  await expect(composer).toHaveAttribute('title', /Shift \+ Enter/)
   await composer.fill('独立草稿 A')
+  await expect(page.locator('.composer-footer')).toHaveCount(0)
   await page
     .locator('aside')
     .getByRole('button', { name: '产品搭档', exact: true })
@@ -674,6 +721,12 @@ try {
   assert.equal(groupHeader.title, '灵感工作室', '群聊顶部显示群名')
   await page.getByRole('button', { name: '展开设置', exact: true }).click()
   await expect(page.getByText('回复机制', { exact: true }).first()).toBeVisible()
+  const contextDetails = page.locator('.group-context-details')
+  await expect(contextDetails).not.toHaveAttribute('open')
+  await contextDetails.locator('summary').click()
+  await expect(contextDetails).toContainText('最近 5 条消息')
+  await contextDetails.locator('summary').click()
+  await expect(page.getByText(/群成员回复机制/)).toHaveCount(0)
   await expect(page.getByRole('button', { name: /^主动回复/ })).toBeVisible()
   const modeCards = await page.locator('.group-mode-card').evaluateAll((cards) =>
     cards.map((card) => {
@@ -809,7 +862,15 @@ try {
   console.log('✓ Group completion and recoverable configuration errors')
 
   await page.getByRole('button', { name: 'Covan 首页' }).click()
-  await expect(page.locator('.welcome-bot-card')).toHaveCount(3)
+  await expect(page.locator('.welcome-all-bot-card')).toHaveCount(3)
+  const recentSection = page.getByRole('region', { name: '最近对话' })
+  await expect(recentSection.locator(`[data-chat-id="${fixture.group.id}"]`)).toContainText('灵感工作室')
+  const recentBounds = await recentSection.boundingBox()
+  const welcomeActionBounds = await page.locator('.welcome-actions').boundingBox()
+  assert.ok(recentBounds.y < welcomeActionBounds.y && recentBounds.y < 160)
+  await recentSection.locator(`[data-chat-id="${fixture.group.id}"]`).click()
+  await expect(page.locator('.chat-header h1')).toHaveText('灵感工作室')
+  await page.getByRole('button', { name: 'Covan 首页' }).click()
   await page.screenshot({ path: path.join(artifacts, 'welcome.png') })
   await themeDock.getByRole('button', { name: '切换到深色主题' }).click()
   await expect(page.locator('.welcome-content')).toHaveCSS('color', 'rgb(244, 244, 245)')
@@ -877,15 +938,26 @@ try {
   await page.locator('button', { hasText: '新建 Bot' }).last().click()
   const cliDialog = page.getByRole('dialog', { name: '新建 Bot' })
   await expect(cliDialog).toBeVisible()
+  await cliDialog.getByText('外观与高级设置', { exact: true }).click()
   // 模型选择器：左轨切换来源，右侧点选模型，底部一键回到来源默认模型。
   await cliDialog.locator('[data-rail="cli:codex-cli"]').click()
   await cliDialog
     .getByLabel('CLI 可执行文件')
     .fill(path.join(root, 'scripts', 'fixtures', 'fake-cli.mjs'))
-  await expect(cliDialog.getByRole('status')).toContainText('已安装', { timeout: 20000 })
-  await expect(cliDialog.getByRole('status')).toContainText('0.149.0')
-  await expect(cliDialog.getByRole('status')).toContainText('fake-cli.mjs')
+  await expect(cliDialog.getByRole('status')).toContainText('已检测到 CLI', { timeout: 20000 })
+  const cliDetails = cliDialog.locator('.model-cli-details')
+  await expect(cliDetails).not.toHaveAttribute('open')
+  await cliDetails.locator('summary').click()
+  await expect(cliDetails).toContainText('0.149.0')
+  await expect(cliDetails).toContainText('fake-cli.mjs')
+  await expect(cliDialog.locator('[data-use-bot-default]')).toHaveText('恢复默认')
+  await expect(cliDialog.locator('.model-pane-title')).toHaveCount(0)
+  for (const part of ['.model-effective', '.model-cli-config', '.model-default-action']) {
+    await expect(cliDialog.locator(part)).toHaveCSS('border-top-width', '0px')
+    await expect(cliDialog.locator(part)).toHaveCSS('border-bottom-width', '0px')
+  }
   await expect(cliDialog.locator('[data-use-bot-default]')).toHaveAttribute('aria-pressed', 'true')
+  await expect(cliDialog.locator('[data-effective-model]')).toContainText('具体模型由 CLI 自身配置决定')
   // API model values must never follow a backend switch into the CLI.
   await cliDialog.locator(`[data-rail="provider:${fixture.a.provider_id}"]`).click()
   await expect(cliDialog.locator('[data-rail="provider:' + fixture.a.provider_id + '"]')).toHaveAttribute('aria-pressed', 'true')
@@ -898,6 +970,7 @@ try {
   await expect(cliDialog.locator('[data-model-option="hidden-model"]')).toHaveCount(0)
   await cliDialog.locator('[data-model-option="gpt-5.6-sol"]').click()
   await expect(cliDialog.locator('[data-model-option="gpt-5.6-sol"]')).toHaveAttribute('aria-pressed', 'true')
+  await expect(cliDialog.locator('[data-effective-model]')).toHaveText('本次将使用：Codex CLI · gpt-5.6-sol')
   await cliDialog.getByLabel('Provider（判断用，可选）').selectOption('')
   await expect(cliDialog.locator('[data-model-option="gpt-5.6-sol"]')).toHaveAttribute('aria-pressed', 'true')
   await cliDialog.getByRole('group', { name: '文件权限' }).getByRole('button', { name: '可写' }).click()
@@ -957,6 +1030,7 @@ try {
     (await window.covan.listBots()).find((bot) => bot.id === id)?.model, cliBot.id,
   )).toBe('custom-cli-model')
   // These fields previously used camelCase and silently failed to persist.
+  await modelPanel.locator('.model-cli-details summary').click()
   await modelPanel.getByLabel('CLI 可执行文件').fill(alternateCliPath)
   await expect.poll(() => page.evaluate(async (id) =>
     (await window.covan.listBots()).find((bot) => bot.id === id)?.cli_path, cliBot.id,

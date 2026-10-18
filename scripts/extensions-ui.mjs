@@ -222,16 +222,20 @@ try {
   await dialog.getByRole('button', { name: 'MCP', exact: true }).click()
   const global = page.getByTestId('global-extensions')
   await global.getByRole('button', { name: '安装', exact: true }).click()
-  await global.getByLabel('名称', { exact: true }).fill('本地工具集')
-  await global.getByLabel('启动命令').fill(process.execPath)
-  await global
-    .getByLabel('参数（JSON 数组）')
-    .fill(
-      JSON.stringify([
-        path.join(root, 'scripts/fixtures/mcp-server.mjs'),
-        pidFile,
-      ]),
-    )
+  await global.getByLabel('快速导入').fill(JSON.stringify({ mcpServers: {
+    '本地工具集': { command: process.execPath, args: [path.join(root, 'scripts/fixtures/mcp-server.mjs'), pidFile] },
+    '远程示例': { url: 'https://example.com/mcp', type: 'sse' },
+  }}))
+  await global.getByRole('button', { name: '解析并填入' }).click()
+  assert.equal((await api('listExtensions')).servers.length, 0, 'parsing must not install or execute')
+  await global.getByLabel('选择要导入的服务').selectOption('1')
+  await expect(global.getByLabel('连接方式')).toHaveValue('sse')
+  await expect(global.getByLabel('服务 URL')).toHaveValue('https://example.com/mcp')
+  await global.getByLabel('选择要导入的服务').selectOption('0')
+  await global.locator('.mcp-advanced summary').click()
+  await expect(global.getByLabel('名称', { exact: true })).toHaveValue('本地工具集')
+  await expect(global.getByLabel('启动命令')).toHaveValue(process.execPath)
+  await expect(global.getByLabel('参数（JSON 数组）')).toHaveValue(JSON.stringify([path.join(root, 'scripts/fixtures/mcp-server.mjs'), pidFile], null, 2))
   await global.getByRole('button', { name: '安装', exact: true }).click()
   await expect(global.getByText('本地工具集', { exact: true })).toBeVisible()
   await global

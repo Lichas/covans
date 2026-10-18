@@ -1,7 +1,7 @@
 // components/ModelPicker.tsx — 模型选择器：左侧 Provider / 本地 CLI 轨，右侧模型列表
 //
 // 借鉴 OpenMausBot 的 SimpleModelPane：Provider 轨只负责切换浏览对象，真正的
-// 变更发生在点选某个模型或底部「使用 Bot 默认模型」时，因此浏览别家 Provider
+// 变更发生在点选某个模型或底部「跟随来源默认」时，因此浏览别家 Provider
 // 不会顺手清掉 Bot 已保存的模型。新建 Bot 时还没有已保存状态，轨的点击会直接
 // 提交运行方式（commitEngineOnBrowse），与旧的下拉框行为一致。
 import { useEffect, useRef, useState } from 'react'
@@ -50,17 +50,17 @@ export function isCliBackend(backend: BotBackend): backend is LocalCliKind {
 /** Bot 当前模型来源的展示名，用于「默认模型」行的摘要。 */
 export function describeBotModel(
   backend: BotBackend,
-  providers: { id: string; name: string; kind: ProviderKind }[],
+  providers: { id: string; name: string; kind: ProviderKind; default_model?: string }[],
   providerId: string | null,
   model: string,
 ): string {
   if (isCliBackend(backend)) {
     const label = CLI_KINDS.find((entry) => entry.kind === backend)?.label ?? backend
-    return `${label} · ${model || 'CLI 默认'}`
+    return `${label} · ${model || '跟随 CLI 配置（未指定模型）'}`
   }
   const provider = providers.find((entry) => entry.id === providerId)
   if (!provider) return model || '未选择 Provider'
-  return `${provider.name} · ${model || 'Provider 默认'}`
+  return `${provider.name} · ${model || provider.default_model || 'Provider 未设置默认模型'}`
 }
 
 export function ModelPicker({
@@ -240,6 +240,7 @@ export function ModelPicker({
       : models
   const listed = models.includes(selectedId)
   const selectedRail = rail === committedRail
+  const effectiveModel = describeBotModel(value.backend, providers, value.providerId, value.model)
   /** 底部按钮只在「当前来源 + 无显式模型」时才算选中。 */
   const usesEngineDefault = !value.model && selectedRail
 
@@ -330,6 +331,12 @@ export function ModelPicker({
 
   return (
     <div className="model-picker" data-model-picker>
+      <div className="model-effective" data-effective-model aria-live="polite">
+        <strong>本次将使用：{effectiveModel}</strong>
+        {cliKind && !value.model && <p>未指定模型，具体模型由 CLI 自身配置决定；目录推荐不会自动生效。选择一个模型即可明确指定。</p>}
+        {!cliKind && !value.providerId && <p>选择下方模型来源；也可先创建，稍后配置。</p>}
+        {!cliKind && value.providerId && !value.model && <p>跟随当前 Provider 的默认设置。</p>}
+      </div>
       <div className={`model-picker-body${railCli ? ' is-cli' : ''}`}>
         <div className="model-rail" role="group" aria-label="模型来源">
           <div className="model-rail-label">Provider</div>
@@ -350,11 +357,11 @@ export function ModelPicker({
 
         <div className="model-pane">
           <div className="model-pane-head">
-            <span className="model-pane-title">
+            {!selectedRail && <span className="model-pane-title">
               {railCli
                 ? (CLI_KINDS.find((entry) => entry.kind === railCli)?.label ?? 'CLI')
                 : (railProvider?.name ?? 'Provider')}
-            </span>
+            </span>}
             <button
               type="button"
               data-model-refresh
@@ -517,9 +524,14 @@ export function ModelPicker({
               ))}
           </div>
 
-          {railCli && showCliConfig && (
+          {railCli && (
             <div className="model-cli-config">
-              <label className="model-cli-field" title="留空时在 PATH 中按命令名查找">
+              <div className="model-cli-status" role="status">
+                {probing ? '正在检测 CLI…' : probe?.available ? '已检测到 CLI' : '未检测到 CLI'}
+              </div>
+              <details className="model-cli-details">
+                <summary>运行详情</summary>
+              {showCliConfig && <label className="model-cli-field" title="留空时在 PATH 中按命令名查找">
                 <span>CLI 可执行文件</span>
                 <input
                   className="model-custom-input"
@@ -528,19 +540,14 @@ export function ModelPicker({
                   placeholder={railCli === 'codex-cli' ? 'codex' : 'claude'}
                   onChange={(event) => onCliPath?.(event.target.value)}
                 />
-              </label>
-              <div className="model-cli-status" role="status">
-                {probing
-                  ? '正在检测…'
-                  : probe?.available
-                    ? `已安装${probe.version ? ` · 版本 ${probe.version}` : ''}`
-                    : probe?.error || '未检测到'}
-                {probe?.available && probe.path && <span>{probe.path}</span>}
-              </div>
+              </label>}
+                {probe?.available && <p className="model-cli-version">已安装{probe.version ? ` · 版本 ${probe.version}` : ''}</p>}
+                {probe?.available && probe.path && <p className="model-cli-path">{probe.path}</p>}
               <p className="model-cli-hint">
                 正文由 CLI 自身登录与额度生成；改模型、路径或权限会重建会话。
                 目录可能有缓存，可用性以回复为准。
               </p>
+              </details>
             </div>
           )}
         </div>
@@ -550,19 +557,14 @@ export function ModelPicker({
         type="button"
         data-use-bot-default
         aria-pressed={usesEngineDefault}
-        disabled={disabled}
+        disabled={disabled || (!railCli && !railProvider)}
         onClick={useEngineDefault}
         className={`model-default-action shape-rect${usesEngineDefault ? ' is-selected' : ''}`}
         title={
-          selectedRail
-            ? '清空显式模型，沿用当前来源的默认模型'
-            : '切换到左侧来源并使用它的默认模型'
+          railCli ? '跟随 CLI 配置，不指定具体模型' : `跟随 ${railProvider?.name || 'Provider'} 默认：${engineDefault || '尚未配置'}`
         }
       >
-        <span className="model-default-text">使用 Bot 默认模型</span>
-        <span className="model-default-hint">
-          {railCli ? 'CLI 默认' : engineDefault || 'Provider 默认'}
-        </span>
+        <span className="model-default-text">恢复默认</span>
         {usesEngineDefault && <CheckIcon width={13} height={13} className="model-item-check" />}
       </button>
     </div>

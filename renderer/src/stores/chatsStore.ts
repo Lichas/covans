@@ -17,6 +17,7 @@ interface ChatsState {
     name: string,
     memberBotIds: string[],
     coordinatorBotId?: string,
+    replyMode?: GroupReplyMode,
   ) => Promise<Chat>
   updateChat: (
     id: string,
@@ -77,8 +78,8 @@ export const useChatsStore = create<ChatsState>((set, get) => ({
     return chat
   },
 
-  createGroup: async (name, memberBotIds, coordinatorBotId) => {
-    const chat = await api.createGroup(name, memberBotIds, coordinatorBotId)
+  createGroup: async (name, memberBotIds, coordinatorBotId, replyMode) => {
+    const chat = await api.createGroup(name, memberBotIds, coordinatorBotId, replyMode)
     await get().loadChats()
     await get().selectChat(chat.id)
     return chat

@@ -22,6 +22,7 @@ import type {
   McpTransport,
 } from '@shared/types'
 import { api } from '../lib/api'
+import { parseMcpImport } from '../lib/mcpImport'
 import { useUiStore } from '../stores/uiStore'
 import { Field, Toggle, btnGhostCls, btnPrimaryCls, inputCls } from './controls'
 import { MarkdownContent } from './MarkdownContent'
@@ -75,6 +76,16 @@ function McpForm({
   const [url, setUrl] = useState(server?.url ?? '')
   const [env, setEnv] = useState('')
   const [headers, setHeaders] = useState('')
+  const [source, setSource] = useState('')
+  const [imports, setImports] = useState<McpServerInput[]>([])
+  const [importIndex, setImportIndex] = useState(0)
+  const [imported, setImported] = useState(false)
+  const applyImport = (input: McpServerInput) => {
+    setName(input.name); setTransport(input.transport); setCommand(input.command || '')
+    setArgs(JSON.stringify(input.args || [], null, 2)); setCwd(input.cwd || ''); setUrl(input.url || '')
+    setEnv(input.env ? JSON.stringify(input.env, null, 2) : ''); setHeaders(input.headers ? JSON.stringify(input.headers, null, 2) : '')
+    setImported(true); setError('')
+  }
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const save = async () => {
@@ -128,6 +139,18 @@ function McpForm({
           {server ? '编辑 MCP' : '安装 MCP'}
         </h3>
       </div>
+      {!server && <div className="space-y-2 rounded-xl border border-stone-200 p-3 dark:border-stone-700">
+        <Field label="快速导入">
+          <textarea className={`${inputCls} min-h-20 resize-y font-mono`} value={source} onChange={(e) => setSource(e.target.value)} placeholder={'粘贴 MCP JSON 配置、启动命令或服务 URL'} autoComplete="off" spellCheck={false} />
+        </Field>
+        <button type="button" className={btnGhostCls} disabled={!source.trim() || busy} onClick={() => {
+          try { const next = parseMcpImport(source); setImports(next); setImportIndex(0); applyImport(next[0]); setSource('') }
+          catch (e) { setError(errorText(e)) }
+        }}>解析并填入</button>
+        {imports.length > 1 && <Field label="选择要导入的服务"><select className={inputCls} value={importIndex} onChange={(e) => { const index = Number(e.target.value); setImportIndex(index); applyImport(imports[index]) }}>{imports.map((item, i) => <option key={i} value={i}>{item.name}</option>)}</select></Field>}
+        <p className="text-[11px] text-stone-500">仅解析配置；检查下方内容后点击安装。多个服务请选择其中一个，本次仅安装该服务。</p>
+        {imported && <p role="status" className="text-[11px] text-emerald-600">配置已填入，尚未安装。可展开高级配置检查参数。</p>}
+      </div>}
       <Field label="名称">
         <input
           autoFocus
@@ -160,6 +183,8 @@ function McpForm({
               onChange={(e) => setCommand(e.target.value)}
             />
           </Field>
+          <details className="mcp-advanced space-y-3" open={server ? true : undefined}>
+            <summary className="cursor-pointer text-xs text-stone-500">高级配置 · 参数、工作目录、环境变量</summary>
           <Field label="参数（JSON 数组）">
             <textarea
               className={`${inputCls} min-h-20 resize-y font-mono`}
@@ -190,6 +215,7 @@ function McpForm({
               spellCheck={false}
             />
           </Field>
+          </details>
           <p className="text-xs text-stone-500">本地命令以当前用户权限运行。</p>
         </>
       ) : (
@@ -204,6 +230,8 @@ function McpForm({
               onChange={(e) => setUrl(e.target.value)}
             />
           </Field>
+          <details className="mcp-advanced space-y-3" open={server ? true : undefined}>
+            <summary className="cursor-pointer text-xs text-stone-500">高级配置 · 认证请求头</summary>
           <Field label="请求头（JSON，留空保留）">
             <textarea
               className={`${inputCls} min-h-24 resize-y font-mono`}
@@ -218,6 +246,7 @@ function McpForm({
               spellCheck={false}
             />
           </Field>
+          </details>
         </>
       )}
       {error && (
@@ -225,7 +254,7 @@ function McpForm({
           {error}
         </p>
       )}
-      <div className="flex justify-end gap-2">
+      <div className="sticky bottom-0 flex justify-end gap-2 border-t border-stone-200 bg-[var(--surface)] py-3 dark:border-stone-700">
         <button
           type="button"
           className={btnGhostCls}
@@ -778,9 +807,10 @@ export function ExtensionsPanel({
                 : !catalog.skills.length) && (
                 <div className="flex flex-col items-center gap-3 py-10 text-stone-400">
                   <Download size={24} strokeWidth={1.5} />
-                  <p className="text-xs">
-                    尚未安装 {tab === 'mcp' ? 'MCP 服务' : 'Skills'}
-                  </p>
+                  <div className="text-center text-xs">
+                    尚未安装 {activeTab === 'mcp' ? 'MCP 服务' : 'Skills'}
+                    <p className="mt-2 text-xs">{activeTab === 'mcp' ? '连接外部工具，让 Bot 使用文件、搜索或应用能力。点击安装，可粘贴现有 MCP 配置或服务地址。' : '导入包含 SKILL.md 的本地目录或 HTTPS Git 仓库，为 Bot 添加工作流程。'}</p>
+                  </div>
                   {botId && (
                     <button className={btnGhostCls} onClick={openManager}>
                       安装扩展

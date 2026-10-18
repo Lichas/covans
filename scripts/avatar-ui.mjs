@@ -58,6 +58,7 @@ try {
       assert.ok(fs.existsSync(path.join(profile, photo)))
     }
   await page.getByRole('button', { name: '创建你的 Bot' }).click()
+  await page.getByText('外观与高级设置', { exact: true }).click()
   await expect(page.getByRole('button', { name: '♀ 女生' })).toHaveAttribute(
     'aria-pressed',
     'true',
@@ -335,6 +336,7 @@ try {
     .toBeGreaterThan(0)
   await page.keyboard.press('Control+1')
   await expect(page.getByRole('dialog', { name: '新建 Bot' })).toBeVisible()
+  await page.getByText('外观与高级设置', { exact: true }).click()
   await page.getByLabel('人设模板').selectOption('boyfriend')
   await expect(page.getByRole('button', { name: '♂ 男生' })).toHaveAttribute(
     'aria-pressed',
@@ -373,6 +375,7 @@ try {
   await expect(showcase.locator('img[src*="seaside-boardwalk"]')).toHaveCount(0)
   await page.keyboard.press('Control+1')
   await expect(page.getByRole('dialog', { name: '新建 Bot' })).toBeVisible()
+  await page.getByText('外观与高级设置', { exact: true }).click()
   await page.getByLabel('人设模板').selectOption('boyfriend')
   await expect(page.getByLabel('人设预览（可编辑）')).toHaveValue(
     /用户未开启成熟内容偏好/,

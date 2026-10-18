@@ -832,21 +832,18 @@ function GroupSettingsPanel({ chat }: { chat: ChatSummary }) {
     id: GroupReplyMode
     title: string
     description: string
-    badge: string
   }[] = [
     {
       id: 'active',
       title: '主动回复',
       description:
-        '每位成员并发结合前文总结与最新 5 条消息，自己判断是否发言。思考时收到新消息会刷新尚未完成的判断。',
-      badge: '并发',
+        '成员同时判断是否参与讨论。',
     },
     {
       id: 'sequential',
       title: '顺序回复',
       description:
-        '成员按群成员顺序逐个判断与发言，后面的成员可以看到前面成员的回复。',
-      badge: '低并发',
+        '成员依次发言，可参考前面成员的回复。',
     },
   ]
 
@@ -863,7 +860,7 @@ function GroupSettingsPanel({ chat }: { chat: ChatSummary }) {
             {chat.name || '群聊设置'}
           </div>
           <div className="mt-0.5 text-[11.5px] text-stone-400">
-            {chat.member_bots.length} 位成员 · 群成员回复机制
+            {chat.member_bots.length} 位成员
           </div>
         </div>
       </div>
@@ -892,15 +889,7 @@ function GroupSettingsPanel({ chat }: { chat: ChatSummary }) {
                   <span className="text-[13px] font-medium text-stone-800 dark:text-stone-100">
                     {mode.title}
                   </span>
-                  <span
-                    className={`rounded-full px-2 py-0.5 text-[10px] ${
-                      selected
-                        ? 'bg-stone-800 text-white dark:bg-stone-200 dark:text-stone-900'
-                        : 'bg-stone-100 text-stone-400 dark:bg-stone-800'
-                    }`}
-                  >
-                    {saving === mode.id ? '保存中…' : mode.badge}
-                  </span>
+                  {saving === mode.id && <span className="text-[10px] text-stone-500">保存中…</span>}
                 </div>
                 <p className="mt-2 text-[11.5px] leading-[1.65] text-stone-500 dark:text-stone-400">
                   {mode.description}
@@ -910,10 +899,10 @@ function GroupSettingsPanel({ chat }: { chat: ChatSummary }) {
           })}
         </div>
 
-        <div className="mt-5 rounded-xl bg-stone-100/80 p-3.5 text-[11px] leading-relaxed text-stone-500 dark:bg-stone-800/60 dark:text-stone-400">
-          Covan 会持续保存群聊前文总结。成员判断时只携带该总结与最新 5
-          条消息，避免群聊越长越慢。
-        </div>
+        <details className="group-context-details mt-4 text-[11px] text-stone-500">
+          <summary className="cursor-pointer">讨论方式说明</summary>
+          <p className="mt-2 leading-relaxed">群聊保留前文摘要，结合最近 5 条消息判断是否发言。思考时收到新消息，会更新尚未完成的判断。</p>
+        </details>
 
         <div className="mt-6">
           <ChatBackgroundPicker chat={chat} />

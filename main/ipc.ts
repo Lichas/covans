@@ -1,5 +1,5 @@
 // main/ipc.ts — 注册 SPEC §4 全部 ipcMain.handle 通道（白名单）
-import { app, clipboard, dialog, ipcMain, shell, BrowserWindow } from 'electron'
+import { app, clipboard, dialog, ipcMain, nativeTheme, shell, BrowserWindow } from 'electron'
 import fs from 'node:fs'
 import path from 'node:path'
 import type {
@@ -260,7 +260,13 @@ export function registerIpc(): void {
   })
   handle(
     CH.createGroup,
-    (name: string, memberBotIds: string[], coordinatorBotId?: string) => {
+    (
+      name: string,
+      memberBotIds: string[],
+      coordinatorBotId?: string,
+      replyMode: 'active' | 'sequential' = 'sequential',
+    ) => {
+      if (!['active', 'sequential'].includes(replyMode)) throw new Error('无效的群聊回复方式')
       assertStr(name, 'name')
       assertStrArray(memberBotIds, 'memberBotIds')
       if (memberBotIds.length === 0)
@@ -272,7 +278,7 @@ export function registerIpc(): void {
         assertStr(coordinatorBotId, 'coordinatorBotId')
         if (!db.getBot(coordinatorBotId)) throw new Error('协调者 Bot 不存在')
       }
-      return db.createGroup(name, memberBotIds, coordinatorBotId ?? undefined)
+      return db.createGroup(name, memberBotIds, coordinatorBotId ?? undefined, replyMode)
     },
   )
   handle(
@@ -482,6 +488,8 @@ export function registerIpc(): void {
     assertStr(key, 'key')
     if (typeof value !== 'string') throw new Error('参数 value 必须是字符串')
     db.setSetting(key, value)
+    if (key === 'theme' && ['light', 'dark', 'system'].includes(value))
+      nativeTheme.themeSource = value as 'light' | 'dark' | 'system'
   })
   handle(CH.openObservabilityLogs, async () => {
     const err = await shell.openPath(observabilityDirectory())

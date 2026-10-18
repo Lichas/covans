@@ -26,13 +26,20 @@ button:not(.shape-rect) {
 /* 首页移除 hero 文案与快捷键行后：内容垂直居中，且不与顶部 80px 的窗口拖拽区重叠
  * （重叠会让「创建你的 Bot」等按钮收到的是拖拽而不是点击）。 */
 .welcome-content {
-  margin-block: auto;
-  padding-top: clamp(96px, 12vh, 140px);
+  margin-block: 0;
+  padding-top: 96px;
 }
 
 .welcome-actions {
-  margin-top: 0;
+  margin-top: 24px;
 }
+.welcome-recent h1 { margin: 0; font-size: 20px; }
+.welcome-chat-card small { display: block; margin-top: 5px; color: var(--muted); font-size: 10px; }
+.welcome-all-bot-card { margin-top: 12px; }
+.model-effective { padding: 10px 12px; font-size: 12px; overflow-wrap: anywhere; }
+.model-effective strong { font-weight: 500; }
+.model-effective p { margin-top: 4px; font-size: 11px; color: var(--muted); }
+.dialog-footer { background: var(--surface); }
 
 /* 模型选择器：左侧 Provider / 本地 CLI 轨，右侧模型列表（参考 OpenMausBot）。
  * 这里的按钮都是「面」而不是胶囊，统一加 .shape-rect 保住 8px 圆角。 */
@@ -50,6 +57,9 @@ button:not(.shape-rect) {
   min-height: 0;
 }
 .model-picker-body.is-cli {
+  height: 236px;
+}
+.model-picker-body.is-cli:has(.model-cli-details[open]) {
   height: 344px;
 }
 .model-rail {
@@ -240,7 +250,6 @@ button:not(.shape-rect) {
 }
 .model-cli-config {
   flex: none;
-  border-top: 1px solid var(--line);
   padding: 6px 10px 8px;
 }
 .model-cli-hint {
@@ -261,19 +270,12 @@ button:not(.shape-rect) {
   line-height: 1.45;
   color: var(--muted);
 }
-.model-cli-status > span {
-  display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  opacity: 0.7;
-}
+
 .model-default-action {
   display: flex;
   width: 100%;
   align-items: center;
   gap: 6px;
-  border-top: 1px solid var(--line);
   padding: 7px 10px;
   font-size: 12px;
   color: var(--muted);
@@ -290,15 +292,7 @@ button:not(.shape-rect) {
   flex: none;
   font-weight: 500;
 }
-.model-default-hint {
-  min-width: 0;
-  flex: 1;
-  overflow: hidden;
-  font-size: 11px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  opacity: 0.75;
-}
+
 
 /* 分段控件：权限、推理强度、响应决策等行内选择。 */
 .segmented {
@@ -343,7 +337,7 @@ button:not(.shape-rect) {
   align-items: center;
   gap: 6px 10px;
   padding: 11px 16px;
-  border-bottom: 1px solid var(--line);
+  border-bottom: 0;
 }
 .profile-rows > .profile-row:last-child {
   border-bottom: 0;
@@ -392,7 +386,14 @@ button:not(.shape-rect) {
   padding-top: 2px;
 }
 .profile-section-title {
+  margin-top: 8px;
+  border-top: 1px solid var(--line);
   padding: 14px 16px 2px;
   font-size: 11px;
   color: var(--muted);
 }
+
+.model-pane-head:not(:has(.model-pane-title)) { justify-content: flex-end; }
+.model-cli-details summary { cursor: pointer; color: var(--muted); font-size: 11px; }
+.model-cli-details[open] summary { margin-bottom: 8px; }
+.model-cli-version, .model-cli-path { margin-top: 4px; font-size: 11px; color: var(--muted); overflow-wrap: anywhere; }

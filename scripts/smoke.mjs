@@ -49,6 +49,7 @@ await build({
     observability: path.join(root, 'main/observability.ts'),
     decisionStrategy: path.join(root, 'main/decisionStrategy.ts'),
     cli: path.join(root, 'main/cli/index.ts'),
+    mcpImport: path.join(root, 'renderer/src/lib/mcpImport.ts'),
   },
   outdir: bundleDir,
   bundle: true,
@@ -59,6 +60,17 @@ await build({
   packages: 'external',
   logLevel: 'warning',
 })
+
+const { parseMcpImport } = await import(pathToFileURL(path.join(bundleDir, 'mcpImport.js')).href)
+assert(JSON.stringify(parseMcpImport('npx -y "package with spaces"')[0].args) === JSON.stringify(['-y', 'package with spaces']), 'MCP command import preserves quoted arguments')
+assert(parseMcpImport('https://example.com/mcp')[0].transport === 'http', 'MCP URL import')
+const importedMcp = parseMcpImport(JSON.stringify({mcpServers: {local: {command: 'node', args: ['file.js'], env: {TOKEN: 'test-fixture'}}, remote: {url: 'https://example.com/mcp', type: 'sse'}}}))
+assert(importedMcp.length === 2 && importedMcp[0].env.TOKEN === 'test-fixture' && importedMcp[1].transport === 'sse', 'MCP multi-server JSON import preserves configuration')
+for (const invalid of ['npx foo; echo bad', 'npx "unterminated', 'npx $(echo bad)', '{"mcpServers":{}}', '{"command":"node","args":[1]}', '{"command":"node","env":{"TOKEN":1}}', 'https://example.com/mcp?token=bad']) {
+  let rejected = false
+  try { parseMcpImport(invalid) } catch { rejected = true }
+  assert(rejected, 'MCP invalid import rejected without execution')
+}
 
 const orchestrator = await import(
   pathToFileURL(path.join(bundleDir, 'orchestrator.js')).href
