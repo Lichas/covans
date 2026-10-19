@@ -63,7 +63,7 @@ Covan 是标准 Electron 双进程 + preload 桥接架构。所有 LLM 调用、
 
 ## 3. 数据模型
 
-SQLite 数据库默认位于 `~/.covans/covan.db`，WAL 模式，启动时按版本号顺序执行 migration。首次启动会将旧版 `legacy.db` 及对应 WAL/SHM 原地迁移为 `covan.db`，目标已存在时绝不覆盖。`~/.covans/` 也是头像、聊天图片和 Agent 工作区的统一本机根目录；不存在时创建，若尚未创建且检测到旧 userData 数据库则安全复制旧目录，绝不删除原目录。测试通过 `COVAN_USER_DATA_DIR` 隔离。表结构以 SPEC.md §3 为准，摘要如下：
+SQLite 数据库默认位于 `~/.covans/covan.db`，WAL 模式，启动时按版本号顺序执行 schema migration。`~/.covans/` 也是头像、聊天图片和 Agent 工作区的统一本机根目录，不存在时创建。测试通过 `COVAN_USER_DATA_DIR` 隔离。表结构以 SPEC.md §3 为准，摘要如下：
 
 ```
 providers 1───n bots（provider_id，可空）

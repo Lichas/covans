@@ -53,7 +53,7 @@ shared/
 
 ## 3. 数据模型（SQLite）
 
-数据库文件为 `~/.covans/covan.db`。首次启动发现旧版 `legacy.db` 时，会在打开 SQLite 前原地迁移数据库及其 WAL/SHM 文件；若目标已存在，绝不覆盖。
+数据库文件为 `~/.covans/covan.db`，WAL 模式；目录不存在时自动创建。
 
 ```sql
 CREATE TABLE providers (

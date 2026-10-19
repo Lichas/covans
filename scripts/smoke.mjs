@@ -7,7 +7,6 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { build } from 'esbuild'
-import Database from 'better-sqlite3'
 import { runMemoryRegression } from './memory-regression.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -106,11 +105,7 @@ const decisionStrategy = await import(
 const cli = await import(pathToFileURL(path.join(bundleDir, 'cli.js')).href)
 
 // 2. 初始化（临时目录，WAL）
-const legacyDatabaseFile = 'legacy.db'
 fs.mkdirSync(userData, { recursive: true })
-const oldDb = new Database(path.join(userData, legacyDatabaseFile))
-oldDb.exec('CREATE TABLE migration_probe (id INTEGER PRIMARY KEY)')
-oldDb.close()
 db.initDb(userData)
 observability.initObservability(userData)
 db.setSetting('local_observability', '1')
@@ -157,22 +152,9 @@ workspace.initWorkspace(userData)
 const events = []
 orchestrator.initOrchestrator({ emit: (ev) => events.push(ev) })
 
-console.log('\n[1] 建库 & migration')
+console.log('\n[1] 建库 & schema')
 {
-  assert(
-    fs.existsSync(path.join(userData, 'covan.db')) &&
-      !fs.existsSync(path.join(userData, legacyDatabaseFile)),
-    '旧数据库文件已迁移为 covan.db',
-  )
-  assert(
-    Boolean(
-      db
-        .getDb()
-        .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='migration_probe'")
-        .get(),
-    ),
-    '数据库文件名迁移保留已有数据',
-  )
+  assert(fs.existsSync(path.join(userData, 'covan.db')), '数据库文件为 covan.db')
   const tables = db
     .getDb()
     .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")

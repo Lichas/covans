@@ -48,7 +48,6 @@ const DEFAULT_MAX_TOKENS = 8192
 const DEFAULT_REASONING_EFFORT: Bot['reasoning_effort'] = 'medium'
 const RESPONSE_DECISION_AUTO_MIGRATION = 'response_decision_auto_migrated_v1'
 const DATABASE_FILE = 'covan.db'
-const LEGACY_DATABASE_FILE = 'legacy.db'
 
 const MIGRATION = `
 CREATE TABLE IF NOT EXISTS providers (
@@ -236,7 +235,6 @@ CREATE TABLE IF NOT EXISTS bot_skills (
 /** 打开（必要时创建）数据库并执行 migration。dir 为 userData 目录。 */
 export function initDb(dir: string): Db {
   fs.mkdirSync(dir, { recursive: true })
-  migrateDatabaseFilename(dir)
   const file = path.join(dir, DATABASE_FILE)
   const d = new Database(file)
   d.pragma('journal_mode = WAL')
@@ -312,44 +310,6 @@ export function initDb(dir: string): Db {
   seedMissingGroupBackgrounds()
   migrateMemories()
   return d
-}
-
-/**
- * 将旧文件名原地改为 Covan 的数据库名。迁移发生在首次打开 SQLite 前，
- * 并连同 WAL/SHM 一起处理；目标已存在时绝不覆盖。
- */
-function migrateDatabaseFilename(dir: string): void {
-  const destination = path.join(dir, DATABASE_FILE)
-  const source = path.join(dir, LEGACY_DATABASE_FILE)
-  if (!fs.existsSync(source) || fs.existsSync(destination)) return
-
-  const suffixes = ['', '-wal', '-shm']
-  const files = suffixes
-    .map((suffix) => ({
-      source: `${source}${suffix}`,
-      destination: `${destination}${suffix}`,
-    }))
-    .filter(({ source: candidate }) => fs.existsSync(candidate))
-
-  if (files.some(({ destination: candidate }) => fs.existsSync(candidate)))
-    throw new Error('无法迁移旧数据库：Covan 数据库文件已存在')
-
-  const moved: typeof files = []
-  try {
-    for (const entry of files) {
-      fs.renameSync(entry.source, entry.destination)
-      moved.push(entry)
-    }
-  } catch (error) {
-    for (const entry of moved.reverse()) {
-      try {
-        fs.renameSync(entry.destination, entry.source)
-      } catch {
-        // 保留原始错误，避免掩盖无法继续启动的迁移失败。
-      }
-    }
-    throw new Error('无法迁移旧数据库文件', { cause: error })
-  }
 }
 
 export function getDb(): Db {

@@ -28,52 +28,14 @@ import { closeMcpSessions, configureMcpFetch } from './extensions/mcp'
 import { initResponseDecisionEngine } from './decisionStrategy'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const legacyUserData = app.getPath('userData')
 const configuredUserData = process.env.COVAN_USER_DATA_DIR
 const defaultUserData = path.join(os.homedir(), '.covans')
-const legacyDatabaseFile = 'legacy.db'
 
 // 测试可覆盖为临时目录；正常运行时应用数据和 Agent 工作区统一位于 ~/.covans。
 app.setPath('userData', configuredUserData || defaultUserData)
 
-/**
- * 首次切换到 ~/.covans 时，安全复制旧应用数据，绝不删除旧目录。
- * 只迁移数据库、头像、聊天图片和工作区；不复制 Electron 缓存或其他应用文件。
- * 只有目标目录尚不存在且旧目录中确有数据库时才迁移，避免覆盖用户新建的数据目录。
- */
+/** 应用数据统一放在 ~/.covans（测试可覆盖为临时目录），不存在时创建。 */
 function prepareUserDataDir(userData: string): void {
-  if (
-    !configuredUserData &&
-    legacyUserData !== userData &&
-    !fs.existsSync(path.join(userData, 'covan.db')) &&
-    (fs.existsSync(path.join(legacyUserData, 'covan.db')) ||
-      fs.existsSync(path.join(legacyUserData, legacyDatabaseFile)))
-  ) {
-    try {
-      fs.mkdirSync(userData, { recursive: true })
-      const sourceDatabaseFile = fs.existsSync(
-        path.join(legacyUserData, 'covan.db'),
-      )
-        ? 'covan.db'
-        : legacyDatabaseFile
-      for (const name of [
-        sourceDatabaseFile,
-        `${sourceDatabaseFile}-wal`,
-        `${sourceDatabaseFile}-shm`,
-        'avatars',
-        'chat-images',
-        'workspaces',
-      ]) {
-        const source = path.join(legacyUserData, name)
-        if (fs.existsSync(source))
-          fs.cpSync(source, path.join(userData, name), { recursive: true })
-      }
-      console.info(`已将已有本地数据复制到 ${userData}`)
-      return
-    } catch (error) {
-      console.warn('复制旧本地数据失败，将创建新的 Covan 数据目录', error)
-    }
-  }
   fs.mkdirSync(userData, { recursive: true })
 }
 
