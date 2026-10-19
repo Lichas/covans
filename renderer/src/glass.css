@@ -19,20 +19,23 @@ html[data-native-glass='true'] .app-shell { background: transparent; }
   margin: 12px 12px 12px 12px;
   overflow: hidden;
   isolation: isolate;
-  border: 1px solid var(--pane-divider);
+  /* 边缘用一条清楚的中性线定形；大阴影带负 spread，收在卡片脚下而不是糊到缝里。 */
+  border: 1px solid rgb(24 24 27 / 0.14);
   border-radius: 18px;
   background: var(--canvas);
-  /* 近处贴地阴影负责「边缘锐利」，远处大阴影负责「浮起来」；顶部内高光让卡片有厚度。 */
   box-shadow:
-    0 1px 2px rgb(24 24 27 / 0.12),
-    0 12px 32px rgb(24 24 27 / 0.16),
-    inset 0 1px 0 rgb(255 255 255 / 0.6);
+    0 0 0 1px rgb(24 24 27 / 0.04),
+    0 2px 6px rgb(24 24 27 / 0.08),
+    0 18px 40px -12px rgb(24 24 27 / 0.24),
+    inset 0 1px 0 rgb(255 255 255 / 0.7);
 }
 .dark .app-content-card {
+  border-color: rgb(255 255 255 / 0.12);
   box-shadow:
-    0 1px 2px rgb(0 0 0 / 0.45),
-    0 14px 38px rgb(0 0 0 / 0.5),
-    inset 0 1px 0 rgb(255 255 255 / 0.06);
+    0 0 0 1px rgb(0 0 0 / 0.35),
+    0 2px 8px rgb(0 0 0 / 0.4),
+    0 20px 44px -12px rgb(0 0 0 / 0.5),
+    inset 0 1px 0 rgb(255 255 255 / 0.07);
 }
 .app-sidebar {
   display: flex;
@@ -136,8 +139,7 @@ html[data-native-glass='true'].dark[data-glass='ultra'] .app-sidebar { backgroun
 .sidebar-footnote { display: flex; align-items: center; gap: 7px; padding: 13px 6px 0; font-size: 10px; letter-spacing: 0.6px; color: var(--muted); }
 .sidebar-footnote > span { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); }
 .theme-dock { display: flex; align-items: center; gap: 4px; padding: 4px; border: 1px solid var(--line); border-radius: 999px; background: var(--glass); box-shadow: inset 0 1px 0 var(--glass-edge); }
-.theme-dock-label { flex: 1; padding-left: 10px; font-size: 11px; color: var(--muted); }
-.theme-dock button { display: grid; place-items: center; width: 38px; height: 31px; border-radius: 9px; color: var(--muted); }
+.theme-dock button { display: grid; flex: 1; place-items: center; height: 31px; border-radius: 9px; color: var(--muted); }
 .theme-dock button:hover { color: var(--text); background: var(--soft); }
 .theme-dock button[aria-pressed='true'] { background: var(--soft); color: var(--accent); box-shadow: 0 1px 5px rgb(0 0 0 / 0.06), inset 0 1px 0 var(--glass-edge); }
 .theme-picker { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }

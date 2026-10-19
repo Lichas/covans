@@ -423,7 +423,7 @@ try {
   })
   assert.ok(cardGap.left >= 10, `内容卡片与左栏之间应留出可见缝隙（实际 ${cardGap.left}px）`)
   assert.ok(cardGap.top >= 10, `内容卡片上方应留出缝隙（实际 ${cardGap.top}px）`)
-  await expect(page.locator('.app-content-card')).toHaveCSS('border-top-color', 'rgba(24, 24, 27, 0.1)')
+  await expect(page.locator('.app-content-card')).toHaveCSS('border-top-color', 'rgba(24, 24, 27, 0.14)')
   const cardShadow = await page.locator('.app-content-card').evaluate((el) => getComputedStyle(el).boxShadow)
   assert.ok(cardShadow !== 'none', '内容卡片应有外阴影，与毛玻璃左栏分层')
   await expect(page.locator('.app-sidebar')).toHaveCSS('border-right-width', '0px')

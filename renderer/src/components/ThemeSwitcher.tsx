@@ -28,7 +28,6 @@ export function ThemeSwitcher({ compact = false }: { compact?: boolean }) {
   return (
     <div className={compact ? 'theme-dock-wrap' : 'theme-picker-wrap'}>
       <div className={compact ? 'theme-dock' : 'theme-picker'} role="group" aria-label="外观主题">
-        {compact && <span className="theme-dock-label">外观</span>}
         {themes.map(({ value, label, icon: Icon, description }) => (
           <button
             key={value}
