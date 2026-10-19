@@ -16,15 +16,24 @@ html[data-native-glass='true'] .app-shell { background: transparent; }
   flex: 1;
   min-width: 0;
   min-height: 0;
-  margin: 8px 10px 10px 8px;
+  margin: 12px 12px 12px 12px;
   overflow: hidden;
   isolation: isolate;
   border: 1px solid var(--pane-divider);
-  border-radius: 16px;
+  border-radius: 18px;
   background: var(--canvas);
-  box-shadow: 0 8px 28px rgb(0 0 0 / 0.14), 0 1px 3px rgb(0 0 0 / 0.08);
+  /* 近处贴地阴影负责「边缘锐利」，远处大阴影负责「浮起来」；顶部内高光让卡片有厚度。 */
+  box-shadow:
+    0 1px 2px rgb(24 24 27 / 0.12),
+    0 12px 32px rgb(24 24 27 / 0.16),
+    inset 0 1px 0 rgb(255 255 255 / 0.6);
 }
-.dark .app-content-card { box-shadow: 0 8px 32px rgb(0 0 0 / 0.45), 0 1px 3px rgb(0 0 0 / 0.25); }
+.dark .app-content-card {
+  box-shadow:
+    0 1px 2px rgb(0 0 0 / 0.45),
+    0 14px 38px rgb(0 0 0 / 0.5),
+    inset 0 1px 0 rgb(255 255 255 / 0.06);
+}
 .app-sidebar {
   display: flex;
   flex-direction: column;
@@ -223,7 +232,7 @@ html[data-native-glass='true'].dark[data-glass='ultra'] .app-sidebar { backgroun
 .dark .chat-view.group-background .date-divider span { background: var(--glass-strong); border-color: var(--glass-edge); }
 /* 胶囊按钮规则统一放在 ui.css（最后加载），避免两处 !important 互相覆盖。 */
 @media (max-width: 1100px) {
-  .app-content-card { margin: 6px 6px 6px 0; border-radius: 14px; }
+  .app-content-card { margin: 8px 8px 8px 8px; border-radius: 16px; }
   .welcome-content { padding-inline: 35px; }
   .chat-header { padding-inline: 20px; }
   .composer-box { padding: 13px; border-radius: 19px; }

@@ -415,7 +415,14 @@ try {
   // 分界由卡片自己的边和阴影表达，左栏不再画右边框。
   await expect(page.locator('html')).toHaveAttribute('data-native-glass', 'true')
   await expect(page.locator('.app-shell')).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)')
-  await expect(page.locator('.app-content-card')).toHaveCSS('border-top-left-radius', '16px')
+  await expect(page.locator('.app-content-card')).toHaveCSS('border-top-left-radius', '18px')
+  const cardGap = await page.evaluate(() => {
+    const sidebar = document.querySelector('.app-sidebar').getBoundingClientRect()
+    const card = document.querySelector('.app-content-card').getBoundingClientRect()
+    return { left: Math.round(card.left - sidebar.right), top: Math.round(card.top) }
+  })
+  assert.ok(cardGap.left >= 10, `内容卡片与左栏之间应留出可见缝隙（实际 ${cardGap.left}px）`)
+  assert.ok(cardGap.top >= 10, `内容卡片上方应留出缝隙（实际 ${cardGap.top}px）`)
   await expect(page.locator('.app-content-card')).toHaveCSS('border-top-color', 'rgba(24, 24, 27, 0.1)')
   const cardShadow = await page.locator('.app-content-card').evaluate((el) => getComputedStyle(el).boxShadow)
   assert.ok(cardShadow !== 'none', '内容卡片应有外阴影，与毛玻璃左栏分层')
