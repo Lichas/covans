@@ -16,6 +16,7 @@ import { useDraftsStore } from '../stores/draftsStore'
 import { api } from '../lib/api'
 import { formatMessageDay, messageDay } from '../lib/format'
 import { groupBackgroundUrl } from '../lib/groupBackground'
+import { stageUiReply } from '../lib/generativeUi'
 import { Composer } from './Composer'
 import { MessageBubble } from './MessageBubble'
 import { GroupAvatar, chatDisplayName } from './Sidebar'
@@ -435,6 +436,11 @@ export function ChatView({
                   onInspectBot={inspectBot}
                   onRetry={(msg) => void retry(chat.id, msg)}
                   onQuote={quote}
+                  onUiReply={chat.member_bots.some((member) => member.id === m.sender_bot_id) ? (message, text) => {
+                    const source = message.sender_bot_id && botMap.get(message.sender_bot_id)
+                    if (source) stageUiReply(chat, message, source, text)
+                    requestAnimationFrame(() => document.getElementById('message-composer')?.focus())
+                  } : undefined}
                 />
                 {privateThreads
                   .filter((t) => t.origin_message_id === m.id)

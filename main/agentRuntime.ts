@@ -33,6 +33,7 @@ import { mockComplete, mockStream } from './mockProvider'
 import { appendToolGuidance, createAgentToolset } from './tools/toolset'
 import { prepareBotExtensions } from './extensions/runtime'
 import { isCliBot, runCliAgent } from './cli'
+import { appendGenerativeUiPrompt } from './generativeUi'
 import { describeWorkspaceArtifact } from './workspace'
 import {
   classifyObservationError,
@@ -434,6 +435,9 @@ export async function runAgent(
   opts: RunAgentOptions = {},
 ): Promise<void> {
   const ctrl = new AbortController()
+  if (!opts.privateConversation) {
+    opts = { ...opts, systemPrompt: appendGenerativeUiPrompt(opts.systemPrompt ?? bot.system_prompt) }
+  }
   const dispatchStartedAt = Date.now()
   const onParentAbort = () => ctrl.abort()
   register(chatId, ctrl)
@@ -874,12 +878,32 @@ export interface CompleteOnceOptions {
   }
 }
 
+/** CLI 的内部 Provider 调用共用来源规则；普通 API Bot 始终使用自己的配置。 */
+export function completionProviderFor(bot: Bot): Provider | null {
+  const explicit = bot.provider_id ? db.getProvider(bot.provider_id) : null
+  if (explicit) return explicit
+  if (!isCliBot(bot)) return null
+  return (
+    db.listProviders().find(
+      (provider) => provider.kind !== 'mock' && provider.api_key.trim(),
+    ) ?? null
+  )
+}
+
+/** CLI 模型属于另一套目录；借用 Provider 时只用其默认模型，不改写 Bot。 */
+export function completionBot(bot: Bot, provider: Provider | null): Bot {
+  if (!isCliBot(bot) || !provider) return bot
+  return { ...bot, provider_id: provider.id, model: '' }
+}
+
 export async function completeOnce(
   bot: Bot,
   systemPrompt: string,
   userText: string,
   options: CompleteOnceOptions = {},
 ): Promise<string> {
+  // 在共享入口处理，避免上下文/记忆摘要等调用遗漏 CLI 与 Provider 的模型隔离。
+  bot = completionBot(bot, completionProviderFor(bot))
   const effort = options.reasoning ?? bot.reasoning_effort
   const callId = randomUUID()
   const configuredProvider = bot.provider_id ? db.getProvider(bot.provider_id) : null

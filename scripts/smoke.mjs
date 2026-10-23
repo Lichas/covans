@@ -5,9 +5,11 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import http from 'node:http'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { build } from 'esbuild'
 import { runMemoryRegression } from './memory-regression.mjs'
+import { runOpenUiRegression } from './openui-regression.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'covan-smoke-'))
@@ -36,6 +38,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 await build({
   entryPoints: {
     orchestrator: path.join(root, 'main/orchestrator.ts'),
+    openui: path.join(root, 'shared/openui.ts'),
+    generativeUi: path.join(root, 'main/generativeUi.ts'),
+    agentRuntime: path.join(root, 'main/agentRuntime.ts'),
     db: path.join(root, 'main/db.ts'),
     workspace: path.join(root, 'main/workspace.ts'),
     memory: path.join(root, 'main/memory.ts'),
@@ -73,6 +78,14 @@ for (const invalid of ['npx foo; echo bad', 'npx "unterminated', 'npx $(echo bad
 
 const orchestrator = await import(
   pathToFileURL(path.join(bundleDir, 'orchestrator.js')).href
+)
+const agentRuntime = await import(
+  pathToFileURL(path.join(bundleDir, 'agentRuntime.js')).href
+)
+runOpenUiRegression(
+  await import(pathToFileURL(path.join(bundleDir, 'openui.js')).href),
+  await import(pathToFileURL(path.join(bundleDir, 'generativeUi.js')).href),
+  assert,
 )
 const db = await import(pathToFileURL(path.join(bundleDir, 'db.js')).href)
 const workspace = await import(
@@ -942,6 +955,81 @@ console.log('\n[4a] 新话题：保留历史、压缩摘要并切断原文上下
     '摘要模型失败时不写入半成品话题或系统分界',
   )
   db.deleteBot(unconfigured.id)
+}
+
+console.log('\n[4a-cli] CLI Bot 压缩摘要使用 Provider 默认模型')
+{
+  const requests = []
+  const server = http.createServer(async (req, res) => {
+    let raw = ''
+    for await (const chunk of req) raw += chunk
+    const body = JSON.parse(raw)
+    requests.push(body)
+    res.setHeader('Content-Type', 'application/json')
+    if (!['deepseek-v4-flash', 'api-custom-model'].includes(body.model)) {
+      res.statusCode = 400
+      res.end(JSON.stringify({ error: { message: 'CLI model sent to Provider' } }))
+      return
+    }
+    res.setHeader('Content-Type', 'text/event-stream')
+    res.end(`data: ${JSON.stringify({
+      id: 'topic-summary', object: 'chat.completion.chunk', model: body.model,
+      choices: [{ index: 0, delta: { role: 'assistant', content: '目标已确认，下一步继续验证。' }, finish_reason: 'stop' }],
+      usage: { prompt_tokens: 20, completion_tokens: 10 },
+    })}\n\ndata: [DONE]\n\n`)
+  })
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const provider = db.saveProvider({
+    name: '摘要模型 loopback', kind: 'openai-compatible', api_key: 'smoke-only',
+    base_url: `http://127.0.0.1:${server.address().port}/v1`,
+    default_model: 'deepseek-v4-flash',
+  })
+  const bots = []
+  try {
+    for (const [backend, explicit] of [['codex-cli', true], ['claude-cli', false]]) {
+      const bot = db.createBot({
+        name: `摘要 ${backend}`, backend,
+        provider_id: explicit ? provider.id : undefined,
+        model: backend === 'codex-cli' ? 'gpt-5.6-luna' : 'sonnet',
+      })
+      bots.push(bot)
+      const chat = explicit ? db.createGroup('CLI 摘要回归', [bot.id]) : db.createDm(bot.id)
+      const source = db.insertMessage({ chat_id: chat.id, sender_type: 'user', content: '保留这一条原始目标' })
+      const result = await orchestrator.startChatTopic(chat.id)
+      assert(
+        result.topic.summary.includes('目标已确认') && requests.at(-1).model === provider.default_model,
+        `${backend} ${explicit ? '显式' : '默认'} Provider 压缩上下文时不发送 CLI 模型名`,
+      )
+      assert(
+        db.getBot(bot.id).model === bot.model &&
+          db.getBot(bot.id).provider_id === bot.provider_id &&
+          db.listMessages(chat.id).some((message) => message.id === source.id),
+        '摘要只改变调用视图，保留 CLI 配置与完整历史',
+      )
+    }
+    const apiBot = db.createBot({ name: 'API 自选摘要模型', provider_id: provider.id, model: 'api-custom-model' })
+    bots.push(apiBot)
+    await agentRuntime.completeOnce(apiBot, '概括目标', '目标已确认', { reasoning: 'off' })
+    assert(requests.at(-1).model === 'api-custom-model', 'API Bot 的自选模型不被 Provider 默认模型覆盖')
+    const cliBot = bots[0]
+    db.saveProvider({ ...provider, default_model: '' })
+    const failedChat = db.createDm(cliBot.id)
+    db.insertMessage({ chat_id: failedChat.id, sender_type: 'user', content: '默认摘要模型缺失时保留原状' })
+    const before = requests.length
+    let failed = false
+    try { await orchestrator.startChatTopic(failedChat.id) } catch (error) {
+      failed = error.message.includes('未配置模型')
+    }
+    assert(
+      failed && requests.length === before && db.getLatestChatTopic(failedChat.id) === null &&
+        db.listMessages(failedChat.id).length === 1 && db.getBot(cliBot.id).model === cliBot.model,
+      'Provider 缺少默认模型时不借用 CLI 模型、不发请求、不写入话题边界',
+    )
+  } finally {
+    for (const bot of bots) db.deleteBot(bot.id)
+    db.deleteProvider(provider.id)
+    await new Promise((resolve) => server.close(resolve))
+  }
 }
 
 console.log('\n[4b] 定时 Agent 任务：持久化、工具与消息投递')

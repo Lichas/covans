@@ -160,6 +160,8 @@ Jev 使用固定官方 HTTPS endpoint 和 Electron `net.fetch`，继承系统代
 
 `cli/index.ts` 与 `agentRuntime.runAgent` 的分派点平级：mock、`cli`、pi 三条分支互斥，`runCliAgent` 复用同一套 `AgentCallbacks`（正文增量、失败、工作区产物），因此编排器、定时任务和 Agent 私聊不需要知道正文来自 API 还是 CLI。
 
+内部 Provider 调用在 `agentRuntime.completeOnce` 入口统一隔离模型命名空间：CLI Bot 优先使用显式判断用 Provider，否则选第一个带 Key 的非 mock Provider；只在调用副本中清空 CLI 模型，解析 Provider 默认模型。群聊判断复用同一来源解析器，上下文压缩、群滚动摘要、记忆摘要与诊断等调用无需各自适配。API Bot 保留自选模型；没有可用 Provider 或默认模型时返回配置错误，不启动 CLI 或更改持久配置。
+
 **为什么不是 t3code 的 `codex app-server`。** 参考实现 t3code 为每个会话常驻一个 `codex app-server` 子进程并自实现的 JSON-RPC 协议，协议类型由上游 `codex-rs/app-server-protocol` 的固定提交生成，随 CLI 版本漂移；它还必须应答审批请求、用户输入请求与 MCP 相关通知。Covan 选择 `codex exec --json`：一次性进程、官方自动化接口、事件词表更小，且不需要在聊天界面里再造一套审批流。代价是 CLI 的会话由 `exec resume` 承载，沙箱与工作目录在首次会话确定后不可按轮次更改（已在 SPEC 记录）。
 
 **会话归属。** Covan 数据库仍是聊天记录的唯一事实来源。`bot_cli_sessions` 只保存「这个 Bot 在这个会话中对应哪个 CLI 会话」，并以 `运行方式|可执行文件|权限|工作区` 的指纹约束复用；清空聊天记录、开始新话题、删除会话或修改上述任一配置都会让指纹失配并重新建立会话。这样 CLI 侧的上下文永远无法超出 Covan 当前的上下文边界。
@@ -264,7 +266,23 @@ Jev 使用固定官方 HTTPS endpoint 和 Electron `net.fetch`，继承系统代
 - 分发产物：macOS dmg（arm64/x64）、Windows nsis、Linux AppImage；asar 打包时将 better-sqlite3 原生模块列入 asarUnpack。
 - 首启初始化：创建 `~/.covans/`、建库、跑 migration、建 workspaces/ 与 avatars/ 根目录、写入默认设置；旧 userData 仅在目标不存在时复制，不做删除。
 
-## 11. 风险与缓解
+## 11. 生成式 UI 实施方案（2026-10-20）
+
+**目标与场景。** 在现有 Agent 单聊、群聊中，把适合比较、选择和收集信息的回复变为原生交互界面：日常陪伴给出可选择的活动建议，研究 Bot 给出指标/图表与对比表，工作群成员给出方案选择和需求表单。普通闲聊继续使用 Markdown。每块 UI 随所属 Bot 消息呈现，互不覆盖其他成员的界面。
+
+**调研结论。** [OpenUI](https://www.openui.com/) 的核心是组件白名单、组件规格生成的模型提示、OpenUI Lang 和流式 Renderer；[接入文档](https://www.openui.com/docs/getting-started)明确支持嵌入已有聊天 UI。[自定义组件](https://www.openui.com/docs/openui-lang/defining-components)可适配现有视觉，[Renderer](https://www.openui.com/docs/openui-lang/renderer)接收累计文本和流式状态。采用开源 `@openuidev/react-lang` 与 `@openuidev/lang-core`，沿用 pi / 本地 CLI 和用户自己的 Provider；不接入托管 Gateway、自动纠错服务或云端观测。官网的 Token/速度数字是其基准结果，不作为 Covan 的性能承诺。
+
+**第一阶段实现。**
+
+1. 用共享组件 schema 定义 Card、Text、Metric、Callout、Tag、List、Separator、Table、BarChart、LineChart、AreaChart、PieChart、RadarChart、RadialChart、ScatterChart、Steps/StepsItem、Stack、Tabs/TabItem、Accordion/AccordionItem、Choices、Form；主进程据此生成提示，renderer 绑定本地 React 组件。同一规格约束生成与呈现。容器组件（Card/Stack/Tabs/Accordion/Steps）先递归还原子组件的 props 再交给 Zod；子组件类型按显式白名单校验，避免嵌套 Card 被同名 `children` schema 误判为 Stack。
+2. 通过消息内 `openui-lang` 代码围栏承载 OpenUI Lang，可与 Markdown 混排；解析器同时兼容历史消息的 `openui` 标签。复用现有正文增量、SQLite、历史分页、复制、导出及新话题流程，不新增第二套消息或改写群聊编排。API 与 CLI 正式回复都获得生成提示；后台摘要/判断不注入 UI 规格。
+3. 文本和只读数据随流呈现，按钮/表单在消息完整且成功后启用；每个消息块独立维护表单输入。选项/表单仅生成可编辑的回复草稿，附来源引用；群聊同时 @ 来源 Bot。保留已有草稿与附件，用户用既有发送动作确认，其他 Bot 按原群聊规则决定是否回应。
+4. 仅渲染本地注册组件，不生成执行 HTML/JS，不给 Renderer 连接工具、网络或 Electron 桥接；限制源码、节点与数据规模。无效/未知组件、循环引用与解析失败降级为可展开源码，不能导致整个聊天白屏。用户消息及 Bot 间咨询记录不启用可执行交互。
+5. 完整 UI 源码作为消息正文持久化；未提交的表单输入为临时本地状态，提交生成的草稿沿用现有持久草稿。重载恢复界面和已生成草稿，不自动恢复或重新提交未提交的表单，不自动执行任务。
+
+**验收与顺序。** 先更新 SPEC / PRD / Design，再安装依赖、实现共享规格与分块解析、接通生成提示和 React 渲染及草稿回填。使用本地模拟 Provider 的真实 Electron 回归覆盖单聊、群聊两位 Bot 的独立界面、流式未完成/停止、选项/表单回填与 @归属、重载恢复、恶意/超限输出和普通 Markdown。至少通过 typecheck、smoke 与相关 Electron 回归。多消息实时共编、任意工具直连、跨 Bot 共享表单状态及通用应用生成不在本阶段范围内。
+
+## 12. 风险与缓解
 
 | 风险 | 影响 | 缓解 |
 | --- | --- | --- |

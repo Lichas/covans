@@ -7,6 +7,7 @@ import { MarkdownContent } from './MarkdownContent'
 import { ChatImage, attachmentUrl } from './ChatImage'
 import { formatFullTime, formatMessageTime } from '../lib/format'
 import { ArtifactCard } from './ArtifactCard'
+import { GenerativeMessage } from './GenerativeMessage'
 
 interface Props {
   message: Message
@@ -17,6 +18,7 @@ interface Props {
   onInspectBot?: (botId: string) => void
   onRetry?: (message: Message) => void
   onQuote?: (message: Message) => void
+  onUiReply?: (message: Message, text: string) => void
 }
 
 export const MessageBubble = memo(function MessageBubble({
@@ -28,6 +30,7 @@ export const MessageBubble = memo(function MessageBubble({
   onInspectBot,
   onRetry,
   onQuote,
+  onUiReply,
 }: Props) {
   if (message.sender_type === 'system') {
     if (!message.content) return null
@@ -99,7 +102,7 @@ export const MessageBubble = memo(function MessageBubble({
           {isUser ? (
             message.content.startsWith('> ') ? <MarkdownContent content={message.content} /> : <div className="selectable msg-content">{message.content}</div>
           ) : message.content ? (
-            <MarkdownContent content={message.content} />
+            <GenerativeMessage content={message.content} streaming={!!streaming} interactive={message.status === 'done' && !streaming && !busy} onReply={onUiReply ? (text) => onUiReply(message, text) : undefined} />
           ) : streaming && !message.attachments.length ? (
             <div className="thinking-indicator" role="status">
               <span />

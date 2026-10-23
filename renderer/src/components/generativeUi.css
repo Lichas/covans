@@ -1,0 +1,974 @@
+/* Generative UI uses the application's light/dark theme tokens: neutral
+ * surfaces, a single blue accent, 1px lines, and the same glass edge as the
+ * surrounding message bubble. No standalone palette. */
+.genui-block,
+.genui-fallback {
+  --genui-panel: color-mix(in srgb, var(--surface) 55%, transparent);
+  --genui-panel-strong: color-mix(in srgb, var(--surface) 78%, transparent);
+  --genui-edge: var(--line);
+  --genui-inset: inset 0 1px 0 var(--glass-edge);
+  --genui-soft: color-mix(in srgb, var(--accent) 7%, transparent);
+  --genui-soft-hover: color-mix(in srgb, var(--accent) 12%, transparent);
+  --genui-accent-edge: color-mix(in srgb, var(--accent) 28%, var(--line));
+  --genui-table-head: color-mix(in srgb, var(--text) 4%, transparent);
+  --genui-hover: color-mix(in srgb, var(--accent) 4%, transparent);
+}
+.dark .genui-block,
+.dark .genui-fallback {
+  --genui-panel: color-mix(in srgb, var(--soft) 55%, transparent);
+  --genui-panel-strong: color-mix(in srgb, var(--soft) 78%, transparent);
+}
+
+.genui-block,
+.genui-fallback {
+  margin: 8px 0 2px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.genui-card {
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--genui-edge);
+  border-radius: 14px;
+  background: var(--genui-panel);
+  box-shadow: var(--genui-inset);
+}
+
+.genui-card h3 {
+  margin: 0 0 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--genui-edge);
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.35;
+  letter-spacing: -0.01em;
+  overflow-wrap: anywhere;
+}
+
+.genui-card-content {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
+.genui-text {
+  margin: 0;
+  color: var(--text);
+  font-size: 13.5px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.genui-metric {
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--accent) 12%, transparent);
+  border-radius: 10px;
+  background: var(--genui-soft);
+}
+
+.genui-metric > span,
+.genui-metric small {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.genui-metric > strong {
+  color: var(--text);
+  font-size: 26px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+  overflow-wrap: anywhere;
+}
+
+.genui-table {
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--genui-edge);
+  border-radius: 12px;
+  background: var(--genui-panel-strong);
+}
+
+.genui-table table {
+  width: 100%;
+  border-collapse: collapse;
+  color: var(--text);
+  font-size: 12.5px;
+  text-align: left;
+}
+
+.genui-table th,
+.genui-table td {
+  min-width: 75px;
+  max-width: 280px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--genui-edge);
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+
+.genui-table th {
+  background: var(--genui-table-head);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+
+.genui-table td {
+  font-variant-numeric: tabular-nums;
+}
+
+.genui-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.genui-table tbody tr:hover {
+  background: var(--genui-hover);
+}
+
+.genui-chart {
+  margin: 0;
+}
+
+.genui-chart figcaption {
+  margin-bottom: 10px;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.genui-bar-row {
+  display: grid;
+  grid-template-columns: minmax(48px, 1fr) 3fr minmax(32px, auto);
+  gap: 10px;
+  align-items: center;
+  margin: 8px 0;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.genui-bar-row > span {
+  overflow-wrap: anywhere;
+}
+
+.genui-bar-row strong {
+  color: var(--text);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.genui-bar-track {
+  height: 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  overflow: hidden;
+}
+
+.genui-bar-track i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+}
+
+.genui-line-chart {
+  margin: 0;
+}
+
+.genui-line-chart figcaption {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 6px;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.genui-line-chart figcaption > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.genui-line-meta {
+  flex-shrink: 0;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.genui-line-plot {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+
+.genui-line-grid {
+  stroke: var(--line);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.genui-line-axis {
+  fill: var(--muted);
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+}
+
+.genui-line-area {
+  fill: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.genui-line-stroke {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.genui-line-point {
+  fill: var(--surface);
+  stroke: var(--accent);
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+
+.genui-line-labels {
+  display: flex;
+  justify-content: space-between;
+  gap: 4px;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 9.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.genui-line-labels span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.genui-choices,
+.genui-form fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.genui-choices legend,
+.genui-form legend {
+  margin-bottom: 9px;
+  padding: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.genui-choices > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.genui-choices button,
+.genui-form button {
+  padding: 7px 14px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1.4;
+  cursor: pointer;
+  transition: background 140ms, border-color 140ms, box-shadow 140ms, transform 140ms;
+  overflow-wrap: anywhere;
+}
+
+/* Choices are actions, not tags: accent text, a chevron, a raised edge and a
+ * hover lift make the affordance explicit without turning every option into a
+ * primary button. */
+.genui-choices button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 8px 11px 8px 15px;
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--line));
+  background: color-mix(in srgb, var(--accent) 9%, var(--surface));
+  color: color-mix(in srgb, var(--accent) 78%, var(--text));
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.05), inset 0 1px 0 var(--glass-edge);
+}
+
+.genui-choice-arrow {
+  display: inline-grid;
+  place-items: center;
+  color: var(--accent);
+  opacity: 0.8;
+}
+
+.genui-choices button:enabled:hover {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface));
+  box-shadow: 0 4px 12px color-mix(in srgb, var(--accent) 14%, transparent), inset 0 1px 0 var(--glass-edge);
+  transform: translateY(-1px);
+}
+
+.genui-choices button:enabled:active {
+  transform: translateY(0);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.06), inset 0 1px 0 var(--glass-edge);
+}
+
+.genui-choices button:disabled,
+.genui-form fieldset:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.genui-form label {
+  display: grid;
+  grid-template-columns: minmax(70px, 120px) 1fr;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+  font-size: 12.5px;
+}
+
+.genui-form label span {
+  color: var(--muted);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.genui-form input {
+  width: 100%;
+  min-width: 0;
+  padding: 8px 11px;
+  border: 1px solid var(--genui-edge);
+  border-radius: 9px;
+  background: var(--genui-panel-strong);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  outline: none;
+}
+
+.genui-form input::placeholder {
+  color: var(--muted);
+  opacity: 0.72;
+}
+
+.genui-form input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.genui-form button[type='submit'] {
+  margin-top: 2px;
+  border-color: transparent;
+  background: var(--accent);
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.dark .genui-form button[type='submit'] {
+  color: #0b0b0c;
+}
+
+.genui-form button[type='submit']:enabled:hover {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--accent) 86%, var(--text));
+}
+
+.genui-choices button:focus-visible,
+.genui-form button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.genui-notice,
+.genui-fallback > p {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.genui-fallback {
+  padding: 12px 14px;
+  border: 1px solid var(--genui-edge);
+  border-radius: 12px;
+  background: var(--genui-panel);
+}
+
+.genui-fallback details {
+  font-size: 11.5px;
+}
+
+.genui-fallback summary {
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.genui-fallback pre {
+  max-height: 240px;
+  margin-top: 8px;
+  padding: 10px;
+  border: 1px solid var(--genui-edge);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+  white-space: pre-wrap;
+  overflow: auto;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 760px) {
+  .genui-card {
+    padding: 13px;
+  }
+
+  .genui-form label {
+    grid-template-columns: 1fr;
+    gap: 5px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .genui-choices button,
+  .genui-form button {
+    transition: none;
+  }
+}
+
+/* ── Extended OpenUI display set ───────────────────────────────────────── */
+.genui-block,
+.genui-fallback {
+  --genui-chart-1: var(--accent);
+  --genui-chart-2: color-mix(in srgb, var(--accent) 68%, var(--muted));
+  --genui-chart-3: color-mix(in srgb, var(--accent) 42%, var(--muted));
+  --genui-chart-4: color-mix(in srgb, var(--accent) 22%, var(--muted));
+  --genui-chart-5: color-mix(in srgb, var(--muted) 65%, var(--surface));
+  --genui-chart-6: color-mix(in srgb, var(--muted) 35%, var(--surface));
+}
+
+.genui-line-chart.is-area .genui-line-area {
+  fill: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+.genui-stack {
+  display: flex;
+  min-width: 0;
+}
+
+.genui-stack-column {
+  flex-direction: column;
+}
+
+.genui-stack-row {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+
+.genui-gap-s { gap: 8px; }
+.genui-gap-m { gap: 12px; }
+.genui-gap-l { gap: 16px; }
+
+.genui-tabs,
+.genui-accordion {
+  min-width: 0;
+}
+
+.genui-tab-list {
+  display: flex;
+  width: fit-content;
+  max-width: 100%;
+  flex-wrap: wrap;
+  gap: 3px;
+  padding: 3px;
+  border: 1px solid var(--genui-edge);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--soft) 72%, transparent);
+}
+
+.genui-tab-list button {
+  flex: 0 1 auto;
+  padding: 6px 11px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.genui-tab-list button[aria-selected='true'] {
+  background: var(--genui-soft);
+  color: var(--accent);
+  box-shadow: inset 0 1px 0 var(--glass-edge);
+}
+
+.genui-tab-list button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.genui-tab-panel {
+  padding-top: 10px;
+}
+
+.genui-accordion {
+  overflow: hidden;
+  border: 1px solid var(--genui-edge);
+  border-radius: 10px;
+  background: var(--genui-panel-strong);
+}
+
+.genui-accordion-item + .genui-accordion-item {
+  border-top: 1px solid var(--genui-edge);
+}
+
+.genui-accordion-trigger {
+  display: flex;
+  border-radius: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 12px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.4;
+  text-align: left;
+  cursor: pointer;
+}
+
+.genui-accordion-trigger:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.genui-accordion-chevron {
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.genui-accordion-panel {
+  padding: 0 12px 12px;
+}
+
+.genui-steps {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.genui-step {
+  position: relative;
+  display: grid;
+  grid-template-columns: 22px 1fr;
+  gap: 10px;
+}
+
+.genui-step:not(:last-child)::before {
+  content: '';
+  position: absolute;
+  top: 24px;
+  bottom: -10px;
+  left: 10px;
+  width: 1px;
+  background: var(--genui-edge);
+}
+
+.genui-step-marker {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--genui-edge);
+  border-radius: 50%;
+  background: var(--genui-panel-strong);
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+.genui-step.is-done .genui-step-marker {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #ffffff;
+}
+
+.dark .genui-step.is-done .genui-step-marker {
+  color: #0b0b0c;
+}
+
+.genui-step.is-current .genui-step-marker {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.genui-step strong {
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.45;
+}
+
+.genui-step p {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.genui-callout {
+  --callout: var(--accent);
+  display: grid;
+  gap: 3px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--callout) 22%, var(--line));
+  border-left: 3px solid var(--callout);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--callout) 7%, transparent);
+}
+
+.genui-callout-success { --callout: #16a34a; }
+.genui-callout-warning { --callout: #d97706; }
+.genui-callout-error { --callout: #dc2626; }
+.dark .genui-callout-success { --callout: #4ade80; }
+.dark .genui-callout-warning { --callout: #fbbf24; }
+.dark .genui-callout-error { --callout: #f87171; }
+
+.genui-callout strong {
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.45;
+}
+
+.genui-callout p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.genui-tag {
+  display: inline-flex;
+  justify-self: start;
+  width: fit-content;
+  align-items: center;
+  max-width: 100%;
+  padding: 3px 9px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--soft);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.genui-tag-accent {
+  border-color: var(--genui-accent-edge);
+  background: var(--genui-soft);
+  color: var(--accent);
+}
+
+.genui-tag-success {
+  border-color: color-mix(in srgb, #16a34a 30%, var(--line));
+  background: color-mix(in srgb, #16a34a 9%, transparent);
+  color: #15803d;
+}
+
+.genui-tag-warning {
+  border-color: color-mix(in srgb, #d97706 30%, var(--line));
+  background: color-mix(in srgb, #d97706 9%, transparent);
+  color: #b45309;
+}
+
+.genui-tag-danger {
+  border-color: color-mix(in srgb, #dc2626 30%, var(--line));
+  background: color-mix(in srgb, #dc2626 9%, transparent);
+  color: #b91c1c;
+}
+
+.dark .genui-tag-success { color: #86efac; }
+.dark .genui-tag-warning { color: #fcd34d; }
+.dark .genui-tag-danger { color: #fca5a5; }
+
+.genui-list {
+  display: grid;
+  list-style-position: outside;
+  gap: 4px;
+  margin: 0;
+  padding-left: 18px;
+  color: var(--text);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
+ol.genui-list { list-style: decimal; }
+ul.genui-list { list-style: disc; }
+
+.genui-list li::marker {
+  color: var(--muted);
+}
+
+.genui-separator {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 10.5px;
+  line-height: 1.4;
+}
+
+.genui-separator::before,
+.genui-separator::after {
+  content: '';
+  height: 1px;
+  flex: 1;
+  background: var(--genui-edge);
+}
+
+.genui-pie-chart figcaption,
+.genui-radar-chart figcaption,
+.genui-radial-chart figcaption,
+.genui-scatter-chart figcaption {
+  margin-bottom: 8px;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.genui-scatter-chart figcaption {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.genui-scatter-chart figcaption > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.genui-pie-body {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 16px;
+}
+
+.genui-pie {
+  position: relative;
+  flex-shrink: 0;
+  width: 120px;
+  height: 120px;
+  border-radius: 50%;
+}
+
+.genui-pie.is-donut::after {
+  content: '';
+  position: absolute;
+  inset: 30%;
+  border-radius: 50%;
+  background: var(--genui-panel-strong);
+}
+
+.genui-pie-legend {
+  display: grid;
+  flex: 1;
+  gap: 6px;
+  min-width: 140px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.genui-pie-legend li {
+  display: grid;
+  grid-template-columns: 8px 1fr auto;
+  gap: 8px;
+  align-items: center;
+  font-size: 11.5px;
+}
+
+.genui-pie-legend i {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+}
+
+.genui-pie-legend span {
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.genui-pie-legend strong {
+  color: var(--text);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.genui-pie-legend small {
+  margin-left: 4px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 400;
+}
+
+.genui-radar-plot,
+.genui-scatter-plot {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.genui-radar-plot {
+  max-width: 260px;
+  margin: 0 auto;
+}
+
+.genui-radar-grid,
+.genui-radar-axis {
+  fill: none;
+  stroke: var(--line);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.genui-radar-area {
+  fill: color-mix(in srgb, var(--accent) 16%, transparent);
+  stroke: var(--accent);
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+
+.genui-radar-point {
+  fill: var(--surface);
+  stroke: var(--accent);
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+
+.genui-radar-label {
+  fill: var(--muted);
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+}
+
+.genui-radial-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(76px, 1fr));
+  gap: 8px;
+}
+
+.genui-radial-item {
+  display: grid;
+  justify-items: center;
+  gap: 2px;
+  padding: 8px 4px;
+  border: 1px solid var(--genui-edge);
+  border-radius: 10px;
+  background: var(--genui-panel-strong);
+}
+
+.genui-radial-item svg {
+  width: 56px;
+  height: 56px;
+}
+
+.genui-radial-track {
+  fill: none;
+  stroke: var(--line);
+  stroke-width: 5;
+}
+
+.genui-radial-value {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 5;
+  stroke-linecap: round;
+}
+
+.genui-radial-item strong {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.3;
+}
+
+.genui-radial-item span {
+  max-width: 100%;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.4;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+.genui-scatter-point {
+  fill: var(--accent);
+  opacity: 0.8;
+}
+
+@media (max-width: 760px) {
+  .genui-pie-body {
+    gap: 12px;
+  }
+
+  .genui-pie {
+    width: 104px;
+    height: 104px;
+  }
+
+  .genui-radial-grid {
+    grid-template-columns: repeat(auto-fill, minmax(68px, 1fr));
+  }
+}

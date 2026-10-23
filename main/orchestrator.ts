@@ -11,13 +11,19 @@ import type {
   CovanEvent,
   ChatTopicState,
   Message,
-  Provider,
   ScheduledTask,
   StartChatTopicResult,
 } from '../shared/types'
 import { imageContent, validateChatImages } from './chatImages'
 import * as db from './db'
-import { abortChat, completeOnce, runAgent } from './agentRuntime'
+import {
+  abortChat,
+  completeOnce,
+  completionBot,
+  completionProviderFor as judgeProviderFor,
+  runAgent,
+} from './agentRuntime'
+export { completionBot, completionProviderFor as judgeProviderFor } from './agentRuntime'
 import { buildSystemPrompt, noteNewMessages, recallChatMemories, type GroupContext } from './memory'
 import { emitEvent as emit, setEventEmitter } from './events'
 import { classifyObservationError, observationErrorStatus, observe } from './observability'
@@ -638,32 +644,6 @@ function decisionState(
       : {}),
     ...extra,
   }
-}
-
-/**
- * CLI Bot 的判断用 Provider：显式配置优先；否则回退到第一个配了 API Key 的
- * 非 mock Provider（用户真实配置的云端来源）；都没有就交给 CLI 自身判断。
- * 只认带 Key 的 Provider，避免把本地未启动的 LM Studio 之类当成默认判断引擎。
- */
-export function judgeProviderFor(bot: Bot): Provider | null {
-  const explicit = bot.provider_id ? db.getProvider(bot.provider_id) : null
-  if (explicit) return explicit
-  if (!isCliBot(bot)) return null
-  return (
-    db
-      .listProviders()
-      .find((provider) => provider.kind !== 'mock' && provider.api_key.trim()) ??
-    null
-  )
-}
-
-/**
- * 内部判断/起草用的 Bot 视图：CLI Bot 的 `model` 是 CLI 的模型名，不能拿去请求
- * Provider，所以借用判断用 Provider 时留空，使用该 Provider 的默认模型。
- */
-export function completionBot(bot: Bot, provider: Provider | null): Bot {
-  if (!isCliBot(bot) || !provider) return bot
-  return { ...bot, provider_id: provider.id, model: '' }
 }
 
 /** CLI Bot 选了 Jev 但没配置 Key 时按 auto 处理，避免判断直接抛错。 */

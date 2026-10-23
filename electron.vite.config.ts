@@ -1,5 +1,8 @@
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
 import react from '@vitejs/plugin-react'
+import { fileURLToPath } from 'node:url'
+
+const shared = fileURLToPath(new URL('./shared', import.meta.url))
 
 export default defineConfig({
   main: {
@@ -19,6 +22,7 @@ export default defineConfig({
   renderer: {
     plugins: [react()],
     root: 'renderer',
+    resolve: { alias: { '@shared': shared } },
     build: {
       outDir: 'out/renderer',
       rollupOptions: { input: 'renderer/index.html' }

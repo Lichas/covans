@@ -2,6 +2,48 @@
 
 这里只记录值得长期保留的缺陷知识：症状、根因、修复和防回归方式。面向用户的变化写入根目录 `CHANGELOG.md`，不在这里重复发布说明。
 
+## 2026-10-20 · 生成式 UI 的提示词与解析器使用了两套围栏名
+
+- **症状**：Agent 能正常返回 OpenUI 源码，但聊天里只显示 Markdown 或原始代码围栏，交互界面不出现。
+- **根因**：OpenUI SDK 在 `inlineMode: true` 时自动生成的说明与示例使用 `openui-lang`；Covan 追加的规则要求 `openui`，共享解析器也只识别 `openui`。两套协议同时存在，Agent 跟随 SDK 示例输出后无法被 Covan 识别。
+- **修复**：以 SDK 的 `openui-lang` 为唯一生成协议，主进程追加规则不再要求旧标签；`splitUiMessage` 同时接受 `openui-lang` 与历史消息的 `openui`，保证升级前保存的界面仍可渲染。围栏名仍要求精确匹配，`openui-lang-extra` 等不会误判。
+- **回归**：`smoke` 覆盖新围栏、历史围栏、同消息混用、未闭合流式、嵌套代码块、相似标签和提示词断言；`test:openui` 用真实 Electron + loopback Provider 覆盖 SDK 提示、规范/历史围栏渲染、选项草稿、重载恢复和局部降级。
+
+## 2026-10-20 · 生成式 UI 的 Card 校验把子组件引用当成属性 schema
+
+- **症状**：即使围栏名正确，合法的 `root = Card(...)` 也被判为「界面字段格式无效或超过限制」，所有界面进入降级态。
+- **根因**：`defineComponent().ref` 是生成提示签名用的子组件属性 schema，不是运行时 `ElementNode` schema；校验器把已求值的子组件节点直接交给 `Card.props.safeParse`。
+- **修复**：先确认 `children` 都是 `ElementNode`，再把子组件的 props 交给 Card 的 schema，复用同一份数量与类型约束；嵌套 Card 因不在子组件白名单中被拒绝。
+- **回归**：`smoke` 接受合法卡片，并拒绝未知组件、嵌套 Card、循环引用、重复声明、超限和非法动作。
+
+## 2026-10-20 · 生成式 UI 卡片没有接入应用主题
+
+- **症状**：生成式 UI 在消息气泡里像一张灰蓝色通用卡片，浅色下发闷、深色下边框过亮，与应用的液态玻璃和中性灰主题不一致。
+- **根因**：样式使用了未定义的 `--border`，实际落到 `#b7c8dd`；指标、图表和按钮硬编码 `#739deb` / `#638be3`，形成第二套蓝色；卡片用 `--panel` 82% 叠在 `--bubble-bot-bg` 上，层级几乎不可见。
+- **修复**：全部改用 `--surface` / `--soft` / `--line` / `--accent` / `--glass-edge` 等现有 token，浅色和深色分别定义内容面；重做标题分隔、表格表头、指标层级、胶囊选项和表单主按钮，统一圆角与间距。选项改为 accent 文字 + 右侧 chevron + 抬高边缘，避免看起来像标签。
+- **回归**：`test:openui` 的真实 Electron 用例现覆盖全部组件，并分别截取浅色与深色界面；选项草稿、历史围栏和局部降级继续通过。
+
+## 2026-10-22 · 监控面板被“界面结构超过限制”误判
+
+- **症状**：包含 4 个 Metric、3 个 Tab、24 点折线图、Table 和 Accordion 的服务器监控卡片没有渲染，显示降级源码和「界面结构超过限制」。
+- **根因**：校验器把递归求值次数（数组元素、引用展开）与“120 个语法节点”混在一起计数；3 条 24 点曲线加表格后展开次数超过 120，但语句数仍在限制内。
+- **修复**：保留 120 条语句/语法节点、24,000 字符和 12 层深度限制，把内部引用展开预算单独放宽到 800 次；组件和字段校验不变。
+- **回归**：`smoke` 新增同构的 4 Metric + 3 Tab（各 24 点 LineChart）+ Table + Accordion 监控面板，验证通过；既有恶意/超限输入仍被拒绝。
+
+## 2026-10-21 · 容器校验把嵌套 Card 误判为 Stack
+
+- **症状**：扩展 Stack/Tabs/Accordion 后，`root = Card(... [inner])` 里的嵌套 Card 能通过校验；Tabs 的 items 也能塞入非 TabItem 组件。
+- **根因**：Zod object 默认剥离未知键，Card 和 Stack 都有 `children`，嵌套 Card 的 props 会被 Stack schema 接受；仅靠联合 schema 无法表达“子组件类型必须精确匹配”。
+- **修复**：容器校验增加显式允许类型集合（Card/Stack/Tabs/Accordion/TabItem/AccordionItem），并递归把 ElementNode 还原为 props 再交给 Zod；嵌套 Card、错误 TabItem、空 Stack 等被拒绝。
+- **回归**：`smoke` 覆盖合法 Card/Stack/Tabs/Accordion/Steps 与扩展图表，并拒绝嵌套 Card、错误容器子项、空列表、图表长度不一致和超限输入。
+
+## 2026-10-20 · 压缩上下文把 CLI 模型名交给 DeepSeek
+
+- **症状**：CLI Bot 正常聊天，但「压缩并开始」提示 DeepSeek 下找不到 `gpt-5.6-luna`；失败时不创建话题边界，原聊天仍保留。
+- **根因**：CLI 与 API 共用 `bot.model` 字段。先前只在群聊判断/续发调用处通过 `completionBot()` 清除 CLI 模型名，而话题摘要、群滚动摘要、记忆等直接调用 `completeOnce(bot, …)`，仍把 CLI 模型优先交给 Provider 解析。
+- **修复**：把内部调用的 Provider 选择与调用副本构造移入 `agentRuntime`，由 `completeOnce()` 统一执行；CLI Bot 使用显式或默认判断用 Provider 的默认模型，普通 API Bot 保留自选模型。正文仍走 CLI，持久配置不变。
+- **回归**：`smoke` 用拒绝 CLI 模型名的 loopback API 先复现旧代码失败，再验证 Codex 群聊显式 Provider、Claude 单聊默认 Provider 都能生成摘要；检查原记录和 CLI 配置保留、API 自选模型不被覆盖，以及 Provider 缺少默认模型时不请求、不写入边界。既有 Electron UI 回归覆盖确认压缩与话题分界显示。
+
 ## 2026-10-17 · 设置主题预览卡被裁成胶囊
 
 - **症状与根因**：全局按钮胶囊规则以 `!important` 覆盖主题卡片的 14px 圆角，导致预览图与椭圆外框不协调。

@@ -290,6 +290,7 @@ type CovanEvent =
 ### 5.0 新话题与上下文边界
 
 - 单聊和群聊顶部都提供「开始新话题」。用户确认后，主进程先用该会话 Bot（群聊优先协调者，否则首位成员）把更早话题摘要、当前群滚动摘要和当前话题原文压缩成累计摘要；摘要成功后才在同一事务中写入 `chat_topics` 和 `system_kind='topic_boundary'` 的可见系统分界消息。摘要失败不得创建半成品边界。
+- 摘要通过内部 Provider completion 执行：API Bot 使用自己的 Provider/模型；CLI Bot 优先使用显式判断用 Provider，否则使用第一个带 API Key 的非 mock Provider，并使用该 Provider 的默认模型，绝不传入 CLI 模型名。不启动或续接 CLI 来生成摘要；缺少 Provider 或默认模型时保留原上下文并报配置错误，不改写 Bot 的运行方式、Provider 或 CLI 模型配置。
 - `listMessages`、导出和 UI 分页继续返回完整历史；模型历史、群聊判断、自然续发、定时任务和记忆检索查询只读取最新边界之后的原文，并把最新 `chat_topics.summary` 作为只读旧话题资料注入 system prompt。群聊 `context_summary` 在分界成功后清空，从新话题重新滚动。
 - 当前话题达到 40 条 user/bot 消息，或至少 12 条消息且连续 24 小时未活动时，UI 提醒开始新话题；阈值只触发提示，未经用户确认不得调用摘要模型或改变上下文。
 - 边界按 SQLite `rowid` 截断而非只按时间戳，避免同一毫秒消息越界。正在生成或已经执行摘要时，UI 禁用入口；主进程还必须拒绝与普通会话轮次并发创建边界。
@@ -337,9 +338,18 @@ type CovanEvent =
 - 点击引用时，草稿保存 `{messageId, author, content}`，在输入框内部上方显示左侧色条、作者和可滚动引用摘录，并可单独取消；正文输入不混入 `>` 原始标记。每个会话独立持久保存引用与正文，重载后恢复。
 - 发送时将作者与原文序列化为 Markdown 引用，再拼接用户正文，经既有发送接口进入模型上下文；仅引用也可发送。输入区和引用区隐藏滚动条但保留滚动、文本选择和中文输入法行为。
 
+### 5.4a 消息内生成式 UI（OpenUI）
+
+- Agent 单聊、群聊的正式 Bot 回复可混排 Markdown 和 `openui-lang` 围栏。运行时注入共享组件规格生成的 UI 提示；普通交流默认 Markdown，比较、可视化、选项与信息收集时按需生成 UI。API 和本地 CLI 均支持，后台判断/摘要不注入这段提示。新生成只使用 SDK inlineMode 认可的 `openui-lang` 标签；解析器同时接受历史消息中的 `openui` 标签，升级前已保存的界面继续渲染。每条消息的界面独立完整，从 Card 根开始，不接受只输出变更语句的增量写法。
+- `openui-lang` 围栏使用开源 OpenUI Lang，由 renderer 的本地白名单组件渲染：Card、Text、Metric、Callout、Tag、List、Separator、Table、BarChart、LineChart、AreaChart、PieChart、RadarChart、RadialChart、ScatterChart、Steps/StepsItem、Stack、Tabs/TabItem、Accordion/AccordionItem、Choices、Form。复用 `messages.content` 和现有 IPC 增量，复制/导出保留原始内容，重启及新话题不破坏旧消息。用户消息和 Agent 间咨询记录保持普通 Markdown。
+- 围栏未闭合时保持流式预览，正式回复未完成、失败或停止时全部交互禁用。源码超限、未知组件、非法属性、循环引用、解析/渲染失败时显示局部降级提示和可展开源码，不能拖垮聊天。限制每消息最多 3 块 UI、每块 24,000 字符、120 个语法节点及 12 层引用深度；表格最多 50 行、8 列，柱状图最多 50 项，折线图/面积图最多 24 个点，饼图 2–12 项，雷达图 3–10 项，进度环 1–8 项（values 为 0–100），散点图 2–100 个点；Stack 子项最多 16，Tabs/Accordion 最多 8 组，Steps 最多 8 项，表单/选项最多 8 项。
+- 组件仅支持本地受控渲染；不接入 Gateway、云端观测、远程纠错或 Renderer toolProvider，不渲染任意 HTML/JS，不支持 Query/Mutation/自定义函数或模型声明的动作执行。官方默认库中依赖动作/查询/可编辑表格、外部图片 URL 和复杂表单控件的组件不在白名单内；需要时先扩展 SPEC 与校验，不能由模型直接启用。数据只来自当前 Bot 消息，不把显示为卡片等同于事实验证。
+- Choices 按钮与 Form 提交把人类可读内容追加至所属会话的输入草稿，并附来源消息引用；群聊同时记录并插入 @来源 Bot。保留已有正文、附件、提及，不直接发送或执行工具/定时任务。用户通过正常发送操作确认，沿用现有群聊规则。群成员离开后不再提供该消息的交互入口。
+- 未提交表单状态仅在当前界面内维护；重载后从组件初值重新填写。生成的回复草稿沿用现有持久化，重载不会重复提交或调用模型；不同消息/围栏/群成员的表单互不共享。
+
 ### 5.4 本地 CLI 运行后端（main/cli/）
 
-- 每个 Bot 有一种运行方式 `backend`：`api`（默认，走 Provider）或 `codex-cli` / `claude-cli`（正文由本机已登录的 CLI 生成）。CLI Bot 仍可配置 Provider，仅用于「是否发言 / 是否续发」判断，不影响正文生成。`cli_access` 为 `read-only`（默认）或 `workspace-write`；`cli_path` 为空时在 PATH 中按命令名查找。
+- 每个 Bot 有一种运行方式 `backend`：`api`（默认，走 Provider）或 `codex-cli` / `claude-cli`（正文由本机已登录的 CLI 生成）。CLI Bot 仍可配置 Provider，用于「是否发言 / 是否续发」判断以及上下文、记忆等内部摘要，不影响正文生成。所有内部 Provider completion 统一使用显式或默认判断用 Provider 的默认模型，不透传 CLI 模型名，也不修改持久配置。`cli_access` 为 `read-only`（默认）或 `workspace-write`；`cli_path` 为空时在 PATH 中按命令名查找。
 - 运行方式、可执行文件路径、模型、文件权限与工作区组成会话指纹。首次发言以 `cli_path` 启动一次 CLI，把系统提示（人设、记忆、审核规则）、既有转录与当前用户消息合并为起始提示词，并记录 CLI 返回的会话 ID；同一 Bot 在同一会话中后续轮次改为续接，只发送最新一条用户消息。指纹变化、清空聊天记录、开始新话题或删除会话都会丢弃映射并重新建立会话。会话映射存 `bot_cli_sessions`，CLI 自身的会话与登录状态仍由 CLI 管理。
 - 新建 Bot 与已有 Bot 的模型页共用同一个模型选择器：左轨是 Provider / 本地 CLI 来源，右轨是模型列表。支持来源默认（保存空 `model`）、Provider 模型目录（`listProviderModels`）、CLI 返回的模型目录和自定义 ID。左轨只切换浏览来源，点轨道不写入保存；新建 Bot 没有已保存状态，点轨道即切换运行方式。列表把 Provider 默认模型置顶标「默认」、CLI 推荐模型置顶标「CLI 推荐」、Bot 已保存模型标「(Bot 的模型)」，同一行只保留后者；底部「恢复默认」把 `model` 存为空，tooltip 解释当前浏览来源的默认规则。选择器顶部始终显示「本次将使用」与当前已提交的来源和模型；浏览其他来源不改此摘要，右侧来源标题仅在浏览其他来源时显示，避免重复。模型器保留外框与左右分栏线，摘要、运行配置和默认操作之间用留白代替横线。CLI 检测状态与失败原因直接显示，路径、版本和长说明默认折叠到「运行详情」；路径仍可展开编辑，检测成功不代表登录或模型权限验证。Provider 默认能解析时显示具体模型名；CLI 未指定模型时明确标注具体模型由 CLI 自身配置决定、目录推荐不会自动生效，不把推荐值冒充实际默认。来源不可用（Provider 未填 API Key，本机未检测到 CLI）时轨道项置灰并在名称下写原因，但仍可点开查看与修复。Provider 目录读取失败时就地显示原因与刷新入口，不回退猜测列表。Codex 不再使用写死模型列表；Claude 仍提供 `sonnet` / `opus` / `haiku` 稳定别名并明确标注。Codex 目录可能来自 CLI 缓存，不视作账号权限验证，实际可用性以回复结果为准；空 `model` 沿用 CLI 自己的配置，不等于目录推荐模型。已保存模型不在目录时保留原值、显示提示并提供明确选择 CLI 推荐模型的按钮；不静默替换用户选择。切换运行方式清空旧模型，避免把 API 或另一种 CLI 的模型带入；修改判断用 Provider 不清空已选择的 CLI 模型。自定义 ID 在失焦或 Enter 时提交，新建时随 Bot 保存，模型页即时保存，重载后回显。CLI 路径和权限分别以 `cli_path` / `cli_access` 保存。
 - 模型（Bot 的 `model` 字段）在新建与续接调用中都必须下发：`codex exec resume` 不带 `-m`、`claude --resume` 不带 `--model` 时会回退 CLI 自己的默认模型，与建会话时不一致会触发 CLI 警告，默认模型不可用时整轮直接失败。为空时才使用 CLI 默认模型。
