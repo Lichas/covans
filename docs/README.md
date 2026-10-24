@@ -2,6 +2,8 @@
 
 这里是 Covan 的唯一文档入口。项目采用 **Spec-driven AI development**：先明确行为契约，再修改实现和测试。
 
+产品介绍、三张真实应用演示截图与快速上手见[项目 README](../README.md)；运行 `npm run screenshots:readme` 可使用隔离临时 profile 和本地 Mock 服务重新生成截图。
+
 ## 文档分工
 
 | 文档 | 回答的问题 | 权威性 |

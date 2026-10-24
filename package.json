@@ -42,6 +42,7 @@
     "test:avatars": "npm run build && node scripts/avatar-ui.mjs",
     "test:context": "npm run build && node scripts/context-ui.mjs",
     "test:openui": "npm run build && node scripts/openui-ui.mjs",
+    "screenshots:readme": "npm run build && node scripts/readme-screenshots.mjs",
     "test:extensions": "npm run build && node scripts/extensions-ui.mjs",
     "test:local-llm": "npm run build && node scripts/local-llm-smoke.mjs",
     "test:multimodal": "npm run build && node scripts/multimodal-ui.mjs",
