@@ -135,6 +135,9 @@ const api: CovanApi = {
     ipcRenderer.invoke(CH.revealWorkspaceFile, botId, relPath),
   readWorkspaceFile: (botId: string, relPath: string) =>
     ipcRenderer.invoke(CH.readWorkspaceFile, botId, relPath),
+  printWorkspaceFile: (botId, relPath) =>
+    ipcRenderer.invoke(CH.printWorkspaceFile, botId, relPath),
+  pickAndPrintDocument: () => ipcRenderer.invoke(CH.pickAndPrintDocument),
 
   // settings
   getSetting: (key: string) => ipcRenderer.invoke(CH.getSetting, key),

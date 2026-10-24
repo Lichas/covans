@@ -243,6 +243,18 @@ Jev 使用固定官方 HTTPS endpoint 和 Electron `net.fetch`，继承系统代
 - 工具执行层在 `workspace_write` / `workspace_edit` 成功事件中生成 `WorkspaceArtifact`，编排器将其去重写入当前消息的 `artifacts` JSON 列并广播工作区刷新事件；因此交付 UI 有可靠来源且可跨重启恢复，不解析模型正文。renderer 的交付卡只负责选择目标文件，右侧产物预览面板按扩展名展示 Markdown、HTML、TXT、代码、图片和 PDF，并在 UI store 中保存当前拖拽宽度。
 - UI 侧：`listWorkspaceFiles`（深度 2）、`readWorkspaceFile`（≤200KB 文本）、`openWorkspace`（`shell.openPath`）、`revealWorkspaceFile`（`shell.showItemInFolder`）。
 
+### 8.1 文档打印（printing/）
+
+打印入口位于产物预览和工作区，经 `printing:workspace` / `printing:pick` typed IPC 进入主进程；不装配为模型工具。`printing/document.ts` 负责格式判定、大小和边界校验、资源读取与纯文档 HTML 排版；Markdown 复用项目已有 React Markdown、GFM、数学与 KaTeX 依赖，格式清单由 `shared/documentFormats.ts` 同时供预览和打印使用。
+
+`printing/index.ts` 负责选择器授权、全局单任务互斥、隔离 session / BrowserWindow 生命周期和原生打印回调。串行任务复用一个无持久化的打印 session，每次结束后注销协议处理器、清理缓存与存储，避免每次点击都留住新 session。打印窗口无 preload、无 Node，`covan-print` 临时只读协议按任务随机 ID 映射已授权文档及边界内图片、样式和字体；CSP 与网络拦截阻止文档脚本、嵌套页面和远程访问。工作区打印复用原有 realpath 校验，本地文档以选择器选中文件的真实父目录为资源边界。
+
+PDF 渲染由 `printing/pdf.ts` 封装 [Mozilla PDF.js](https://github.com/mozilla/pdf.js)，固定版本随应用离线打包，使用带兼容性 polyfill 的 legacy 浏览器构建适配 Electron 38 的 Chromium；只允许应用自己的 module/worker，以 `isEvalSupported: false` 禁用求值，逐页渲染为 144dpi Canvas，保留各页尺寸与方向，再走统一原生打印通道。准备阶段必须收到全部页面渲染完成状态，避免仅凭窗口 load 事件打印空白页；页数、总像素和加载时间均有限制。该层不依赖 Chromium 的内置 PDF 扩展（Playwright 回归默认禁用扩展），代价是 PDF 输出会栅格化。应用内打印脚本用动态 import，避免 electron-vite 2 的正则导入扫描把字符串里的静态 import 误当成主进程模块并注入 Node shim。
+
+采用 [Electron 原生 `webContents.print`](https://www.electronjs.org/docs/latest/api/web-contents#contentsprintoptions-callback)，`silent: false`，将打印机发现、网络连接、驱动、纸张和队列交给系统。已评估 GitHub 的 [unix-print](https://github.com/artiebits/unix-print)（Unix 文件打印）与 [pdf-to-printer](https://github.com/artiebits/pdf-to-printer)（Windows），本阶段不引入跨平台后端分支或直接网络打印。后续需要 IPP 发现或无人值守打印时，可在原生传输层外扩展，不改变来源校验与排版边界。
+
+`test:printing` 在独立临时 profile 启动真实 Electron，替换 native print 调用以捕获选项并用 `printToPDF` 检验排版，不触发纸质打印；验证 UI、取消/失败/重试、单任务门禁、文件权限、HTML 隔离和窗口清理。冒烟覆盖纯文档转换与路径/类型/大小约束。
+
 ## 9. Mock provider 与可测试性
 
 ### 消息可观测与诊断

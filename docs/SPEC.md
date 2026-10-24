@@ -258,6 +258,8 @@ interface CovanApi {
   openWorkspace(botId: string): Promise<void>;         // shell.openPath
   revealWorkspaceFile(botId: string, relPath: string): Promise<void>; // shell.showItemInFolder
   readWorkspaceFile(botId: string, relPath: string): Promise<string>;
+  printWorkspaceFile(botId: string, relPath: string): Promise<PrintResult>;
+  pickAndPrintDocument(): Promise<PrintResult>;
 
   // settings
   getSetting(key: string): Promise<string>;
@@ -417,6 +419,14 @@ type CovanEvent =
 - 面板可列文件（深度 2）、预览文本文件（<=200KB）、`openWorkspace` 打开系统文件夹。
 - `workspace_write` / `workspace_edit` 成功后，把文件元数据结构化记录在当前 Bot 消息的 `artifacts` 中；同一路径在一轮内去重并保留最后操作。聊天内显示独立交付卡，支持在右侧产物预览窗查看 Markdown、HTML、TXT、代码、图片和 PDF，预览窗可拖拽左边缘调整宽度；也可打开工作区、在系统文件夹中定位。记录随消息持久化，重启后仍可见。写入时广播 `workspace-updated`，已打开的右侧工作区即时刷新。
 - 产物预览的文本类内容仍通过 `readWorkspaceFile` 读取，受 200KB 和二进制检测限制；图片与 PDF 通过 `covan-workspace://file/<botId>/<path>` 只读协议加载。主进程必须用 `resolveWorkspaceFile` 校验 Bot 工作区边界后再返回文件流，不向 renderer 暴露任意本机路径。
+
+### 7.1 文档打印
+
+- 产物预览标题栏与工作区文件提供「打印」；工作区另提供「打开文档打印」，通过系统文件选择器选择本地文件。支持当前文档类型：Markdown、HTML、TXT/CSV/TSV/日志、代码、图片、PDF；Office 文件须先导出为 PDF。目录、不支持的类型、含 NUL 的文本、超过 2MB 的文本或超过 32MB 的 PDF/图片返回可见错误。
+- `printWorkspaceFile` 只接受现存 Bot 与其工作区相对路径，沿用词法 + realpath 校验；本地文件只能由主进程系统选择器授权，IPC 不接受任意绝对路径。两入口共用主进程打印服务，不写数据库，也不把文档发送给模型服务。
+- 打印使用独立临时 session、无 preload/Node 能力的打印窗口，输出白底文档与分页样式，不打印聊天界面。Markdown 支持表格、任务列表、代码和公式；HTML 禁用脚本、表单、嵌套页面与网络，允许文档边界内的本地图片、CSS、字体；工作区边界为当前 Bot 工作区，本地文档边界为选中文件所在目录。拒绝资源的绝对路径、符号链接逃逸与网络请求。
+- PDF 使用随应用打包的 PDF.js 离线逐页渲染为 144dpi Canvas，全部完成后才允许打印；保留各页尺寸与方向，最多 100 页、总渲染像素不超过 1.2 亿，超过限制提示拆分。加密或损坏文件返回可读错误，不执行 PDF 内的脚本。PDF 页面只允许应用自己的渲染模块与 worker，不开放文档脚本。所有格式均调用 Electron `webContents.print({ silent: false })`，由用户在系统打印对话框选择打印机、份数、纸张等。局域网打印机须先添加至操作系统；本版本不扫描网络或自行实现 IPP/驱动。
+- 全应用同时只允许一个打印流程，包含文件选择、文档加载和系统对话框；重复请求返回忙碌错误。准备阶段限时 30 秒；关闭窗口、取消系统对话框返回 `cancelled`，错误返回 `failed` 与可读提示，成功只表示 `submitted`（已提交系统打印队列），不承诺设备已出纸。原文不记入日志，临时窗口与 session 处理器在终态清理。打印不是 Agent 工具，不允许模型静默触发。
 
 ## 8. Agent Runtime 集成（agentRuntime.ts）— 基于 pi-mono 调研结论（2026-09，已确认）
 

@@ -16,6 +16,8 @@ Covan 是一款本地优先的 **Personal Agent（个人智能体）桌面应用
 
 成功写入的文件会出现在**交付文件**卡片中。点击即可在右侧预览 Markdown、HTML、文本、代码、图片或 PDF，也能调整预览宽度、定位文件，让每次交流积累成可复用的成果。
 
+需要纸质文档时，点击预览标题栏或工作区文件旁的**打印**图标，在系统对话框选择打印机。局域网打印机请先添加至系统；工作区的**打开文档打印**也支持选择本机文件。支持上述文档格式，Word 等 Office 文件请先导出为 PDF。打印结果表示已提交系统队列，实际出纸由打印机处理。
+
 ![个人 Agent 文件交付：根据用户要求保存 Markdown，右侧直接预览发布执行单](docs/screenshots/workspace-delivery.png)
 
 ## 把回答变成可以操作的结果
@@ -97,6 +99,7 @@ npm run typecheck           # TypeScript 类型检查
 npm run smoke               # Mock Provider 全链路冒烟
 npm run test:ui             # 基础 Electron UI 回归
 npm run test:context        # 记忆、工具、文件交付与预览
+npm run test:printing       # 文档打印与系统对话框契约，不实际出纸
 npm run test:openui         # 交互式回复、草稿与历史恢复
 npm run test:extensions     # MCP、Skills 与定时继承
 npm run test:multimodal     # 本地模拟 API 的多模态回归

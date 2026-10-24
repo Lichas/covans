@@ -458,6 +458,11 @@ export interface DiagnosticReport {
   notes: string[]
 }
 
+export type PrintResult =
+  | { status: 'submitted' }
+  | { status: 'cancelled' }
+  | { status: 'failed'; error: string }
+
 export interface CovanApi {
   /** Platform capability only; native vibrancy is configured by the main window. */
   readonly nativeGlass: boolean
@@ -576,6 +581,8 @@ export interface CovanApi {
   openWorkspace(botId: string): Promise<void>
   revealWorkspaceFile(botId: string, relPath: string): Promise<void>
   readWorkspaceFile(botId: string, relPath: string): Promise<string>
+  printWorkspaceFile(botId: string, relPath: string): Promise<PrintResult>
+  pickAndPrintDocument(): Promise<PrintResult>
 
   getSetting(key: string): Promise<string>
   setSetting(key: string, value: string): Promise<void>

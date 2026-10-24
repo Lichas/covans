@@ -51,6 +51,7 @@ import { observeScheduledTaskChange, refreshScheduledTasks, runScheduledTaskNow 
 import { registerExtensionIpc } from './extensions/ipc'
 import { registerCliIpc } from './cli/ipc'
 import { getJevConfig, saveJevConfig, testJev } from './decisionStrategy'
+import { printWorkspaceFile, pickAndPrintDocument } from './printing'
 
 // ---------- 参数校验 ----------
 
@@ -478,6 +479,18 @@ export function registerIpc(): void {
     assertStr(botId, 'botId')
     assertStr(relPath, 'relPath')
     return readWorkspaceFile(botId, relPath)
+  })
+  handle(CH.printWorkspaceFile, (botId: string, relPath: string) => {
+    assertStr(botId, 'botId')
+    assertStr(relPath, 'relPath')
+    const owner = BrowserWindow.getAllWindows().find((window) => !window.getParentWindow())
+    if (!owner) return { status: 'failed' as const, error: '应用窗口不可用，请重试' }
+    return printWorkspaceFile(owner, botId, relPath)
+  })
+  handle(CH.pickAndPrintDocument, () => {
+    const owner = BrowserWindow.getAllWindows().find((window) => !window.getParentWindow())
+    if (!owner) return { status: 'failed' as const, error: '应用窗口不可用，请重试' }
+    return pickAndPrintDocument(owner)
   })
 
   // settings

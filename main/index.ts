@@ -43,6 +43,10 @@ function prepareUserDataDir(userData: string): void {
 // 必须在 app ready 之前注册特权
 protocol.registerSchemesAsPrivileged([
   {
+    scheme: 'covan-print',
+    privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true },
+  },
+  {
     scheme: 'covan-image',
     privileges: {
       standard: true,

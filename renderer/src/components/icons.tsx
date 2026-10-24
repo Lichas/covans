@@ -22,6 +22,13 @@ import zhipuIcon from '../assets/provider-icons/zhipu.svg'
 
 type P = SVGProps<SVGSVGElement>
 
+export const PrinterIcon = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M6 9V3h12v6M6 17H4a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-2" />
+    <path d="M6 14h12v7H6zM18 12h.01" />
+  </svg>
+)
+
 export const CopyIcon = (p: P) => (
   <svg {...base(p)}>
     <rect x="8" y="8" width="12" height="13" rx="2" />

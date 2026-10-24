@@ -14,8 +14,9 @@ import {
   type ArtifactPreviewKind,
 } from '../lib/workspacePreview'
 import { useUiStore } from '../stores/uiStore'
-import { CloseIcon, FileIcon, FolderIcon } from './icons'
+import { CloseIcon, FileIcon, FolderIcon, PrinterIcon } from './icons'
 import { MarkdownContent } from './MarkdownContent'
+import { useDocumentPrinting } from '../lib/useDocumentPrinting'
 
 type TextState =
   | { status: 'idle'; content: string; error: string }
@@ -70,6 +71,7 @@ export function ArtifactPreviewPanel() {
   })
 
   const artifact = target?.artifact
+  const printing = useDocumentPrinting(`${target?.botId}/${artifact?.relPath}`)
   const kind = useMemo(
     () => (artifact ? artifactPreviewKind(artifact.relPath) : 'unsupported'),
     [artifact],
@@ -174,6 +176,15 @@ export function ArtifactPreviewPanel() {
         </div>
         <button
           className="artifact-preview-panel-button"
+          disabled={printing.busy || kind === 'unsupported'}
+          aria-label="打印文档"
+          onClick={() => void printing.print(() => api.printWorkspaceFile(target.botId, artifact.relPath))}
+          title="打印文档 · 使用系统已添加的打印机"
+        >
+          <PrinterIcon width={17} height={17} />
+        </button>
+        <button
+          className="artifact-preview-panel-button"
           onClick={() => void api.revealWorkspaceFile(target.botId, artifact.relPath)}
           title="在文件夹中显示"
         >
@@ -187,6 +198,11 @@ export function ArtifactPreviewPanel() {
           <CloseIcon width={17} height={17} />
         </button>
       </header>
+      {printing.message && (
+        <p role={printing.failed ? 'alert' : 'status'} className={`px-4 py-2 text-[12px] ${printing.failed ? 'text-red-600' : 'text-stone-500'}`}>
+          {printing.message}
+        </p>
+      )}
 
       <div className="artifact-preview-panel-body scroll-thin">
         {text.status === 'loading' && (

@@ -10,6 +10,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { build } from 'esbuild'
 import { runMemoryRegression } from './memory-regression.mjs'
 import { runOpenUiRegression } from './openui-regression.mjs'
+import { runPrintingRegression } from './printing-regression.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'covan-smoke-'))
@@ -54,6 +55,7 @@ await build({
     decisionStrategy: path.join(root, 'main/decisionStrategy.ts'),
     cli: path.join(root, 'main/cli/index.ts'),
     mcpImport: path.join(root, 'renderer/src/lib/mcpImport.ts'),
+    printDocument: path.join(root, 'main/printing/document.ts'),
   },
   outdir: bundleDir,
   bundle: true,
@@ -85,6 +87,11 @@ const agentRuntime = await import(
 runOpenUiRegression(
   await import(pathToFileURL(path.join(bundleDir, 'openui.js')).href),
   await import(pathToFileURL(path.join(bundleDir, 'generativeUi.js')).href),
+  assert,
+)
+runPrintingRegression(
+  await import(pathToFileURL(path.join(bundleDir, 'printDocument.js')).href),
+  tmp,
   assert,
 )
 const db = await import(pathToFileURL(path.join(bundleDir, 'db.js')).href)
